@@ -1,0 +1,12 @@
+.venv
+venv
+__pycache__
+*.pyc
+.env
+db.sqlite3
+.git
+.pytest_cache
+# Legacy Django files (not needed by the FastAPI image)
+config
+courses
+manage.py

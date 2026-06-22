@@ -1,0 +1,123 @@
+/* ============================================================
+   Responsive — cross-cutting layout shifts only.
+   Surface-specific reflow lives in each component's own file.
+   Breakpoints:
+     <= 1024px  narrow desktop / tablet landscape
+     <=  860px  tablet portrait + mobile  → nav becomes a drawer
+     <=  560px  phones
+   ============================================================ */
+
+/* ---- narrow desktop: slim the sidebar a touch ---- */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 220px;
+  }
+}
+
+/* ---- tablet portrait & mobile: off-canvas nav drawer ---- */
+@media (max-width: 860px) {
+  .mobile-bar {
+    display: flex;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(84vw, 300px);
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-lg);
+    padding-top: max(var(--sp-5), var(--safe-b));
+    padding-left: max(var(--sp-3), var(--safe-l));
+    overflow-y: auto;
+  }
+
+  .sidebar.open {
+    transform: none;
+  }
+
+  .nav-scrim {
+    display: block;
+  }
+
+  .sidebar-close {
+    display: grid;
+  }
+
+  /* Collapse is a desktop-only feature — the mobile drawer is always full. */
+  .nav-collapse {
+    display: none;
+  }
+
+  .sidebar.collapsed {
+    width: min(84vw, 300px);
+    padding: max(var(--sp-5), var(--safe-b)) var(--sp-3) var(--sp-5)
+      max(var(--sp-3), var(--safe-l));
+  }
+
+  .sidebar.collapsed .brand-text,
+  .sidebar.collapsed .nav-section-label,
+  .sidebar.collapsed .nav-item > span:first-of-type,
+  .sidebar.collapsed .soon-pill {
+    display: revert;
+  }
+
+  .sidebar.collapsed .sidebar-brand {
+    justify-content: flex-start;
+  }
+
+  .sidebar.collapsed .nav-item {
+    justify-content: flex-start;
+    padding: 10px 12px;
+  }
+
+  .main {
+    padding: var(--sp-5) clamp(var(--sp-4), 4vw, var(--sp-6));
+    padding-bottom: calc(var(--sp-8) + var(--safe-b));
+  }
+
+  /* page headers stack their actions below the title */
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-3);
+  }
+
+  .topbar-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* ---- phones ---- */
+@media (max-width: 560px) {
+  .main {
+    padding: var(--sp-4) var(--sp-4);
+    padding-bottom: calc(var(--sp-8) + var(--safe-b));
+  }
+
+  /* two-up stat grid reads better than a single tall column */
+  .stats-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--sp-2);
+  }
+
+  .stat-card {
+    padding: var(--sp-3) var(--sp-4);
+  }
+
+  /* full-width search + bulk action stack */
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .search-bar {
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  /* primary actions span the row so they're easy to tap */
+  .topbar-actions .btn {
+    flex: 1;
+  }
+}

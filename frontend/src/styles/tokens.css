@@ -1,0 +1,195 @@
+/* ============================================================
+   Objective Content Studio — design tokens
+   ------------------------------------------------------------
+   Single source of truth for the visual identity. Every color,
+   radius, shadow and type decision in the app derives from a
+   variable defined here.
+
+   Identity: "Refined Violet" — a clean, professional workspace.
+   True-neutral graphite surfaces, a single confident violet
+   primary (focus / active), large radii and soft layered depth.
+   Status colors stay semantic. No decorative accent beyond violet.
+   ============================================================ */
+
+:root {
+  /* ---- type ---- */
+  --font-display: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui,
+    -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  /* fluid type scale — clamp(min, preferred, max) keeps headings
+     readable on phones and confident on desktop */
+  --fs-display: clamp(1.5rem, 1.1rem + 1.8vw, 2rem);
+  --fs-h1: clamp(1.3rem, 1.05rem + 1.1vw, 1.6rem);
+  --fs-h2: clamp(1.05rem, 0.95rem + 0.5vw, 1.2rem);
+  --fs-body: 0.875rem;
+  --fs-sm: 0.8125rem;
+  --fs-xs: 0.6875rem;
+
+  /* ---- spacing scale ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 56px;
+
+  /* ---- radii (large + soft) ---- */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-xl: 26px;
+  --r-full: 999px;
+
+  /* ---- motion ---- */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --t-fast: 150ms var(--ease);
+  --t-med: 260ms var(--ease);
+  --t-slow: 420ms var(--ease);
+
+  /* ---- z-index scale ---- */
+  --z-nav: 40;
+  --z-drawer: 60;
+  --z-overlay: 70;
+  --z-modal: 80;
+  --z-toast: 90;
+  --z-tooltip: 100;
+
+  /* ---- safe-area insets (notched phones) ---- */
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+/* ============================================================
+   DARK THEME (default)
+   ============================================================ */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* surfaces — true-neutral graphite */
+  --bg: #0f1014;
+  --bg-raised: #17181f;
+  --bg-overlay: #1f2129;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg-inset: rgba(0, 0, 0, 0.28);
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --text: #eaebf0;
+  --text-2: #a2a6b4;
+  --text-3: #6b6f7e;
+
+  /* violet primary */
+  --brand: #7b7bf5;
+  --brand-strong: #9090f8;
+  --brand-soft: rgba(123, 123, 245, 0.16);
+  --brand-ring: rgba(123, 123, 245, 0.3);
+  --accent-contrast: #101119; /* dark ink that sits on a violet fill */
+
+  /* semantic / status */
+  --green: #4cc591;
+  --green-soft: rgba(76, 197, 145, 0.15);
+  --amber: #e0a53c;
+  --amber-soft: rgba(224, 165, 60, 0.16);
+  --red: #ea7468;
+  --red-soft: rgba(234, 116, 104, 0.15);
+  --cyan: #54c4d6;
+  --cyan-soft: rgba(84, 196, 214, 0.15);
+  --violet: #9b7cf0;
+  --violet-soft: rgba(155, 124, 240, 0.16);
+  --pink: #e48ac0;
+  --pink-soft: rgba(228, 138, 192, 0.15);
+  --blue: #5b92f0;
+  --blue-soft: rgba(91, 146, 240, 0.15);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.42);
+  --shadow-lg: 0 26px 64px rgba(0, 0, 0, 0.58);
+  --shadow-accent: 0 8px 24px rgba(123, 123, 245, 0.35);
+
+  --backdrop: rgba(6, 7, 10, 0.66);
+
+  /* ambient atmosphere — soft violet light source */
+  --glow: radial-gradient(
+      1100px 520px at 80% -12%,
+      rgba(123, 123, 245, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(
+      820px 460px at 4% 8%,
+      rgba(123, 123, 245, 0.04),
+      transparent 55%
+    );
+}
+
+/* ============================================================
+   LIGHT THEME — cool neutral
+   ============================================================ */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f4f5f8;
+  --bg-raised: #ffffff;
+  --bg-overlay: #ffffff;
+  --bg-hover: rgba(16, 18, 27, 0.045);
+  --bg-active: rgba(16, 18, 27, 0.08);
+  --bg-inset: rgba(16, 18, 27, 0.04);
+
+  --border: rgba(16, 18, 27, 0.1);
+  --border-strong: rgba(16, 18, 27, 0.18);
+
+  --text: #15161d;
+  --text-2: #565a68;
+  --text-3: #8a8e9c;
+
+  /* violet deepened so it stays legible on white, white ink on the fill */
+  --brand: #5b57e0;
+  --brand-strong: #4a45d0;
+  --brand-soft: rgba(91, 87, 224, 0.12);
+  --brand-ring: rgba(91, 87, 224, 0.22);
+  --accent-contrast: #ffffff;
+
+  --green: #1f9d6b;
+  --green-soft: rgba(31, 157, 107, 0.12);
+  --amber: #b6791e;
+  --amber-soft: rgba(182, 121, 30, 0.14);
+  --red: #d9544a;
+  --red-soft: rgba(217, 84, 74, 0.12);
+  --cyan: #1196a8;
+  --cyan-soft: rgba(17, 150, 168, 0.12);
+  --violet: #6d4dd0;
+  --violet-soft: rgba(109, 77, 208, 0.12);
+  --pink: #c8519a;
+  --pink-soft: rgba(200, 81, 154, 0.12);
+  --blue: #3f74d6;
+  --blue-soft: rgba(63, 116, 214, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(16, 18, 27, 0.06);
+  --shadow-md: 0 10px 30px rgba(16, 18, 27, 0.1);
+  --shadow-lg: 0 26px 64px rgba(16, 18, 27, 0.16);
+  --shadow-accent: 0 8px 24px rgba(91, 87, 224, 0.28);
+
+  --backdrop: rgba(16, 18, 27, 0.34);
+
+  --glow: radial-gradient(
+      1100px 520px at 80% -12%,
+      rgba(91, 87, 224, 0.07),
+      transparent 60%
+    ),
+    radial-gradient(
+      820px 460px at 4% 8%,
+      rgba(91, 87, 224, 0.035),
+      transparent 55%
+    );
+}

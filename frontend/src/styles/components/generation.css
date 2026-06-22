@@ -1,0 +1,118 @@
+/* Generation studio */
+
+/* ---------- generation studio ---------- */
+.studio-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.studio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--sp-4);
+}
+
+.studio-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  text-align: left;
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: border-color var(--t-fast), transform var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.studio-card:not(.soon):hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.studio-card.soon {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.studio-card-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-md);
+  flex-shrink: 0;
+}
+
+.studio-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.studio-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.studio-card-desc {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.studio-card-arrow {
+  margin-left: auto;
+  align-self: center;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   RESPONSIVE — generation studio launcher
+   ============================================================ */
+
+/* Tablet / small laptop: tighten the auto-fill so cards don't
+   stretch awkwardly wide before the single-column collapse. */
+@media (max-width: 860px) {
+  .studio-grid {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--sp-3);
+  }
+}
+
+/* Phones: single column, touch-friendly cards. */
+@media (max-width: 560px) {
+  .studio-grid {
+    grid-template-columns: 1fr;
+    gap: var(--sp-3);
+  }
+
+  /* Comfortable tap target with generous padding; the whole card
+     is the button, so keep it tall and easy to hit. */
+  .studio-card {
+    padding: var(--sp-4);
+    min-height: 64px;
+    align-items: center;
+  }
+
+  .studio-card-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* Pull the chevron toward the edge so the affordance reads
+     clearly on a full-width row. */
+  .studio-card-arrow {
+    align-self: center;
+  }
+}
+

@@ -1,0 +1,44 @@
+name: objective_content
+
+services:
+  db:
+    # pgvector/pgvector = postgres:16 with the `vector` extension preinstalled.
+    image: pgvector/pgvector:pg16
+    container_name: objective_pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: objective_content
+    ports:
+      # Host port 5545 avoids colliding with the other project's Postgres (5544)
+      # and any default local instance (5432).
+      - "5545:5432"
+    volumes:
+      - objective_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: objective_api
+    depends_on:
+      db:
+        condition: service_healthy
+    # Pulls OPENROUTER_API_KEY (and any PORTAL_* overrides) from the shell or
+    # ./.env, which compose auto-loads. Portal credentials are NOT restated here —
+    # the container falls back to the defaults baked into portal/constants.py
+    # unless you set PORTAL_* in your .env.
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network the DB is reached as host `db` on 5432.
+      # This overrides whatever DATABASE_URL is in .env (which targets host:5545).
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/objective_content
+    ports:
+      - "8000:8000"
+
+volumes:
+  objective_pg_data:

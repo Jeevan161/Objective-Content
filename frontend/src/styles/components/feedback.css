@@ -1,0 +1,221 @@
+/* Feedback — empty state, skeleton, tooltips, animation */
+
+/* ---------- empty state & skeleton ---------- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  text-align: center;
+  padding: var(--sp-8) var(--sp-5);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+}
+
+.empty-state-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--r-lg);
+  background: var(--brand-soft);
+  color: var(--brand);
+  margin-bottom: var(--sp-2);
+  animation: float 3.2s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.empty-state h3 {
+  font-size: var(--fs-body);
+  font-family: var(--font-display);
+  color: var(--text);
+}
+
+.empty-state-hint {
+  color: var(--text-2);
+  max-width: 46ch;
+  font-size: var(--fs-sm);
+}
+
+.empty-state .btn {
+  margin-top: var(--sp-3);
+}
+
+.skeleton {
+  border-radius: var(--r-md);
+  background: linear-gradient(
+    100deg,
+    var(--bg-active) 40%,
+    var(--bg-hover) 50%,
+    var(--bg-active) 60%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+/* ---------- tooltips ---------- */
+[data-tip] {
+  position: relative;
+}
+
+[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + var(--sp-2));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 260px;
+  width: max-content;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--text);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+  white-space: normal;
+  pointer-events: none;
+  z-index: var(--z-tooltip);
+  animation: tooltip-in var(--t-fast) both;
+  animation-delay: 250ms;
+}
+
+/* ---------- animation ---------- */
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes fade-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(8px);
+  }
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(40px);
+    opacity: 0;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--brand-ring);
+  }
+  55% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--brand-ring) 0%, transparent);
+  }
+}
+
+@keyframes progress-slide {
+  from {
+    background-position: -60% 0;
+  }
+  to {
+    background-position: 160% 0;
+  }
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 860px) {
+  .empty-state {
+    padding: var(--sp-6) var(--sp-4);
+  }
+
+  /* keep tooltips inside the viewport on narrower screens */
+  [data-tip]:hover::after {
+    max-width: min(260px, calc(100vw - var(--sp-6)));
+  }
+}
+
+@media (max-width: 560px) {
+  /* scale the empty state down + keep it centered on phones */
+  .empty-state {
+    padding: var(--sp-5) var(--sp-4);
+    gap: var(--sp-1);
+    align-items: center;
+    text-align: center;
+  }
+
+  .empty-state-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--r-md);
+    margin-bottom: var(--sp-1);
+  }
+
+  .empty-state-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .empty-state h3 {
+    font-size: var(--fs-sm);
+  }
+
+  .empty-state-hint {
+    font-size: var(--fs-xs);
+    max-width: 38ch;
+  }
+}
+

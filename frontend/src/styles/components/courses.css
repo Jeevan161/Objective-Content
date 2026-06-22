@@ -1,0 +1,690 @@
+/* Courses — list, cards, collapse, pipeline, prerequisites & topics */
+
+/* ---------- course list & cards ---------- */
+.course-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.course-card {
+  position: relative;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--t-fast), box-shadow var(--t-med),
+    transform var(--t-fast);
+  animation: card-in 360ms var(--ease) both;
+  animation-delay: var(--stagger, 0ms);
+}
+
+.course-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.course-card.expanded {
+  box-shadow: var(--shadow-md);
+  transform: none;
+}
+
+.course-card.nested {
+  background: var(--bg-overlay);
+  box-shadow: none;
+}
+
+.course-card.nested:hover {
+  transform: none;
+}
+
+/* animated progress shimmer along the top edge while a job runs */
+.course-card.syncing::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 2.5px;
+  border-radius: var(--r-full);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--brand) 30%,
+    var(--violet) 50%,
+    var(--brand) 70%,
+    transparent
+  );
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: progress-slide 1.3s linear infinite;
+  z-index: 1;
+}
+
+.course-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
+}
+
+.expander {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  transition: transform var(--t-med), background var(--t-fast), color var(--t-fast);
+}
+
+.expander:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.expander.open {
+  transform: rotate(90deg);
+}
+
+.course-card-info {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.course-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.course-card-title strong {
+  font-size: 14.5px;
+  letter-spacing: -0.01em;
+}
+
+.course-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.course-card-meta > span:not(:last-child)::after {
+  content: '·';
+  margin-left: 4px;
+  color: var(--text-3);
+}
+
+.course-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.course-card-pipeline {
+  padding: 0 var(--sp-4) var(--sp-4) 52px;
+}
+
+.course-card-body {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--bg-inset);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* ---------- animated collapse (height auto ↔ 0) ---------- */
+.collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 280ms var(--ease);
+}
+
+.collapse.open {
+  grid-template-rows: 1fr;
+}
+
+.collapse-inner {
+  overflow: hidden;
+  min-height: 0;
+  /* cards no longer clip their children, so round the body's corners here */
+  border-radius: 0 0 calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px);
+}
+
+/* ---------- pipeline ---------- */
+.pipeline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.pipe-step {
+  display: flex;
+  align-items: center;
+}
+
+.pipe-node {
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-full);
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background var(--t-fast), transform var(--t-fast);
+}
+
+.pipe-node.clickable {
+  cursor: pointer;
+}
+
+.pipe-node.clickable:hover {
+  background: var(--brand-soft);
+  transform: translateY(-1px);
+}
+
+.pipe-node.clickable:hover .pipe-dot {
+  transform: scale(1.15);
+}
+
+.pipe-connector {
+  width: 26px;
+  height: 1.5px;
+  margin: 0 7px;
+  background: var(--border-strong);
+}
+
+.pipe-dot {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: var(--r-full);
+  border: 1.5px solid var(--border-strong);
+  color: var(--text-3);
+  background: var(--bg-raised);
+  flex-shrink: 0;
+  transition: transform var(--t-fast);
+}
+
+.pipe-label {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.pipe-done .pipe-dot {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--accent-contrast);
+}
+
+.pipe-done .pipe-label {
+  color: var(--text-2);
+}
+
+.pipe-running .pipe-dot {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.pipe-running .pipe-label {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.pipe-ready .pipe-dot {
+  border-color: var(--brand);
+  animation: pulse-ring 2.2s var(--ease) infinite;
+}
+
+.pipe-ready .pipe-label {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.pipe-soon .pipe-dot {
+  border-style: dashed;
+}
+
+/* ---------- prerequisites & topics ---------- */
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-2);
+  margin-bottom: var(--sp-2);
+}
+
+.prereq-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+}
+
+.topic {
+  display: flex;
+  flex-direction: column;
+}
+
+.topic-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.topics-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: calc(var(--sp-2) * -1);
+}
+
+.topics-toolbar .section-label {
+  margin-bottom: 0;
+}
+
+.tag-topic {
+  gap: 4px;
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.topic-count {
+  font-size: 11.5px;
+  color: var(--text-3);
+  background: var(--bg-active);
+  border-radius: var(--r-full);
+  padding: 1px 9px;
+}
+
+.expander-sm {
+  width: 22px;
+  height: 22px;
+}
+
+.topic-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text);
+  width: fit-content;
+}
+
+.topic-title:hover {
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.unit-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.unit-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: border-color var(--t-fast), transform var(--t-fast),
+    box-shadow var(--t-fast);
+  animation: card-in 300ms var(--ease) both;
+  animation-delay: var(--stagger, 0ms);
+}
+
+.unit-card:hover {
+  border-color: var(--border-strong);
+  transform: translateX(3px);
+  box-shadow: var(--shadow-sm);
+}
+
+.unit-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-hover);
+  border-radius: calc(var(--r-md) - 1px) calc(var(--r-md) - 1px) 0 0;
+}
+
+/* Per-unit "Sync content" button, right-aligned in the unit header. */
+.unit-sync {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.unit-title {
+  font-weight: 550;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.unit-card-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.resource-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+/* Click-to-copy chip showing a part's portal learning_resource id. */
+.resource-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-active);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 1px 8px;
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast);
+}
+
+.resource-id:hover {
+  color: var(--text);
+  border-color: var(--brand);
+}
+
+/* Reading material that ran extraction but is empty or errored. */
+.resource-row.flagged {
+  border-left: 2px solid var(--amber);
+  padding-left: var(--sp-2);
+  margin-left: -2px;
+}
+
+.resource-link,
+.resource-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.unit-card-actions {
+  display: flex;
+  gap: var(--sp-2);
+  padding-top: 4px;
+}
+
+.error-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--red);
+  font-size: 12px;
+}
+
+/* unit kind tags */
+.unit-tag,
+.res-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tag-session {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.tag-practice {
+  color: var(--violet);
+  background: var(--violet-soft);
+}
+
+.tag-question {
+  color: var(--pink);
+  background: var(--pink-soft);
+}
+
+.tag-quiz,
+.tag-quiz-part {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.tag-learning {
+  color: var(--cyan);
+  background: var(--cyan-soft);
+}
+
+.tag-reading {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.tag-mcq {
+  color: var(--pink);
+  background: var(--pink-soft);
+}
+
+.tag-coding {
+  color: var(--violet);
+  background: var(--violet-soft);
+}
+
+.tag-default {
+  color: var(--text-2);
+  background: var(--bg-active);
+}
+
+/* content extraction badge */
+.content-badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.content-badge.ok {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.content-badge.empty {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.content-badge.err {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.content-badge.none {
+  color: var(--text-3);
+  background: var(--bg-active);
+}
+
+.content-badge.ingested {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  /* Sit right after the preceding (extracted) badge instead of grabbing the
+     free space the way the lone `margin-left: auto` default does. */
+  margin-left: var(--sp-2);
+  color: var(--violet);
+  background: var(--violet-soft);
+}
+
+/* ============================================================
+   RESPONSIVE — courses surface
+   ============================================================ */
+
+/* ---- tablet / small laptop (<=860px) ---- */
+@media (max-width: 860px) {
+  /* Let the header wrap so the actions cluster can drop below the title
+     instead of squeezing it. */
+  .course-card-head {
+    flex-wrap: wrap;
+  }
+
+  /* Actions move to their own full-width row under the title and stay
+     right-aligned. The expander + info keep the first row. */
+  .course-card-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+
+  /* Tighten the pipeline indent now that the head can wrap. */
+  .course-card-pipeline {
+    padding-left: var(--sp-6);
+  }
+
+  /* Keep the pipeline on one scrollable line rather than wrapping
+     awkwardly mid-step. */
+  .pipeline {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pipe-step {
+    flex-shrink: 0;
+  }
+
+  /* The card body and prerequisites get a little breathing room back. */
+  .course-card-body {
+    padding: var(--sp-4);
+  }
+}
+
+/* ---- phones (<=560px) ---- */
+@media (max-width: 560px) {
+  .course-card-head {
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  }
+
+  /* Full-width, wrapping action row; buttons stretch to fill so touch
+     targets are comfortable. */
+  .course-card-actions {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    justify-content: stretch;
+    gap: var(--sp-2);
+  }
+
+  .course-card-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 40px;
+  }
+
+  /* Pull the pipeline indent back near the card edge and let the row
+     scroll horizontally instead of overflowing the viewport. */
+  .course-card-pipeline {
+    padding: 0 var(--sp-3) var(--sp-3) var(--sp-3);
+  }
+
+  .pipeline {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    row-gap: 0;
+    /* trim the scroll gutter so the dots sit flush */
+    margin: 0 calc(var(--sp-1) * -1);
+    padding-inline: var(--sp-1);
+  }
+
+  .pipe-step {
+    flex-shrink: 0;
+  }
+
+  /* Shorter connectors keep more steps visible before scrolling. */
+  .pipe-connector {
+    width: 18px;
+    margin: 0 var(--sp-1);
+  }
+
+  /* Body padding shrinks on the narrowest screens. */
+  .course-card-body {
+    padding: var(--sp-3);
+    gap: var(--sp-3);
+  }
+
+  /* Topics toolbar stacks the label above its collapse-all button. */
+  .topics-toolbar {
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+  }
+
+  /* Unit header wraps so the sync button drops below a long title
+     rather than truncating it to nothing. */
+  .unit-card-head {
+    flex-wrap: wrap;
+  }
+
+  .unit-title {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .unit-sync {
+    margin-left: auto;
+    min-height: 40px;
+  }
+
+  /* Resource rows already wrap; let long links break instead of
+     forcing horizontal overflow. */
+  .resource-link,
+  .resource-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+

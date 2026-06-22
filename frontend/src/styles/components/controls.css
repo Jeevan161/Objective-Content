@@ -1,0 +1,338 @@
+/* Controls — buttons, forms, badges & tags */
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 16px;
+  font-weight: 550;
+  font-size: 13.5px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: background var(--t-fast), border-color var(--t-fast),
+    transform var(--t-fast), box-shadow var(--t-fast);
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+}
+
+.btn-sm {
+  padding: 6px 11px;
+  font-size: 12.5px;
+  border-radius: var(--r-sm);
+}
+
+.btn-primary {
+  background: var(--brand);
+  color: var(--accent-contrast);
+  box-shadow: var(--shadow-accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--brand-strong);
+  box-shadow: var(--shadow-accent);
+}
+
+.btn-ghost {
+  color: var(--text-2);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.btn-soft {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.btn-soft:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--brand) 26%, transparent);
+  color: var(--brand);
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ---------- forms ---------- */
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+
+.input::placeholder {
+  color: var(--text-3);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+
+.input.mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.input-with-action {
+  position: relative;
+}
+
+.input-with-action .input {
+  padding-right: 38px;
+}
+
+.input-action {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+}
+
+.security-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--green);
+  background: var(--green-soft);
+  border-radius: var(--r-md);
+  padding: 9px 12px;
+}
+
+/* segmented control */
+.segmented {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  width: fit-content;
+}
+
+.segmented-option {
+  padding: 6px 18px;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text-2);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.segmented-option.active {
+  background: var(--brand);
+  color: var(--accent-contrast);
+  box-shadow: var(--shadow-accent);
+}
+
+/* ---------- badges & tags ---------- */
+.env-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+}
+
+.env-prod {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.env-beta {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+/* Required vs optional (admin-fallback) marker on a token field. */
+.token-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+}
+
+.token-tag.req {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.token-tag.opt {
+  color: var(--text-2);
+  background: var(--bg-active);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--bg-active);
+  color: var(--text-2);
+}
+
+.badge-latest {
+  color: var(--violet);
+  background: var(--violet-soft);
+}
+
+.badge-ingested {
+  color: var(--violet);
+  background: var(--violet-soft);
+}
+
+.badge-warn {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.muted {
+  color: var(--text-2);
+}
+
+/* ============================================================
+   RESPONSIVE — controls reflow for tablet & phones
+   ============================================================ */
+
+/* ---- tablet / small viewports ---- */
+@media (max-width: 860px) {
+  /* form action rows wrap instead of overflowing */
+  .form-actions {
+    flex-wrap: wrap;
+  }
+
+  /* segmented control may need to flex to available width */
+  .segmented {
+    max-width: 100%;
+  }
+
+  .segmented-option {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+}
+
+/* ---- phones ---- */
+@media (max-width: 560px) {
+  /* comfortable touch targets on the primary control surface */
+  .btn {
+    min-height: 42px;
+  }
+
+  /* keep small buttons tappable too */
+  .btn-sm {
+    min-height: 40px;
+  }
+
+  /* bump icon buttons to a proper touch target */
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* buttons wrap gracefully rather than forcing horizontal overflow */
+  .btn {
+    white-space: normal;
+  }
+
+  /* form action rows stack full-width buttons on phones */
+  .form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .form-actions .btn {
+    width: 100%;
+  }
+
+  /* segmented control spans the row so each option is tappable */
+  .segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  .segmented-option {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+  }
+
+  /* keep the inline action inside the input within reach */
+  .input-action {
+    right: 8px;
+  }
+}
+

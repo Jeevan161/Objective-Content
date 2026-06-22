@@ -1,0 +1,430 @@
+/* Layout — shell, sidebar, topbar, stats, toolbar */
+
+/* ---------- shell ---------- */
+.app-shell {
+  display: flex;
+  height: 100%;
+  background: var(--bg);
+  background-image: var(--glow);
+  background-attachment: fixed;
+  isolation: isolate;
+}
+
+/* Column that holds the mobile bar + scrollable main area. */
+.workspace-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-8) clamp(var(--sp-5), 4vw, 48px);
+  padding-bottom: calc(var(--sp-10) + var(--safe-b));
+}
+
+/* ---------- mobile top bar (hidden on desktop) ---------- */
+.mobile-bar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  height: 56px;
+  padding: 0 max(var(--sp-3), var(--safe-l)) 0 max(var(--sp-3), var(--safe-r));
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-raised) 88%, transparent);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+}
+
+.mobile-bar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.mobile-bar-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.mobile-bar-btn:hover,
+.mobile-bar-btn:active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.mobile-bar-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-contrast);
+  background: var(--brand);
+  border-radius: var(--r-full);
+}
+
+/* Scrim behind the mobile nav drawer (shown only on mobile). */
+.nav-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--backdrop);
+  backdrop-filter: blur(2px);
+  z-index: var(--z-drawer);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-med);
+}
+
+.nav-scrim.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ---------- sidebar ---------- */
+.sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 252px;
+  flex-shrink: 0;
+  padding: var(--sp-5) var(--sp-3);
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+  z-index: calc(var(--z-drawer) + 1);
+  transition: transform var(--t-med), width var(--t-med), padding var(--t-med);
+}
+
+/* Collapse control — a quiet, secondary footer button (not the primary nav). */
+.nav-collapse {
+  color: var(--text-3);
+}
+
+.nav-collapse .nav-icon,
+.nav-collapse svg {
+  transition: transform var(--t-med);
+}
+
+.sidebar.collapsed .nav-collapse svg {
+  transform: translateX(1px);
+}
+
+/* ---- collapsed (icon-only) rail ---- */
+.sidebar.collapsed {
+  width: 76px;
+  padding-left: var(--sp-2);
+  padding-right: var(--sp-2);
+}
+
+.sidebar.collapsed .brand-text,
+.sidebar.collapsed .nav-section-label,
+.sidebar.collapsed .nav-item > span:first-of-type,
+.sidebar.collapsed .soon-pill {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-brand {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 10px;
+}
+
+/* keep the running-job count visible as a corner badge on the rail */
+.sidebar.collapsed .activity-count {
+  position: absolute;
+  top: 3px;
+  right: 9px;
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+}
+
+/* on the rail, labels appear to the RIGHT of the icon, not above it */
+.sidebar.collapsed .nav-item[data-tip]:hover::after {
+  bottom: auto;
+  top: 50%;
+  left: calc(100% + var(--sp-3));
+  transform: translateY(-50%);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-5);
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  color: var(--accent-contrast);
+  background: linear-gradient(140deg, var(--brand), var(--violet));
+  box-shadow: var(--shadow-accent);
+}
+
+.brand-mark.sm {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+}
+
+.brand-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+/* Close button — only visible when the sidebar is a mobile drawer. */
+.sidebar-close {
+  display: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+}
+
+.sidebar-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.brand-sub {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.sidebar-nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-section-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  padding: var(--sp-4) var(--sp-2) var(--sp-1);
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-weight: 500;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.nav-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+/* left accent bar marks the current page */
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: var(--r-full);
+  background: var(--brand);
+}
+
+.nav-item span:first-of-type {
+  flex: 1;
+  text-align: left;
+}
+
+.soon-pill {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  background: var(--bg-active);
+  border-radius: var(--r-full);
+  padding: 2px 7px;
+}
+
+.activity-count {
+  display: grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-contrast);
+  background: var(--brand);
+  border-radius: var(--r-full);
+}
+
+.sidebar-footer {
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-3);
+}
+
+/* ---------- topbar ---------- */
+.topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-6);
+}
+
+.topbar h1 {
+  font-size: var(--fs-h1);
+}
+
+.topbar-sub {
+  color: var(--text-2);
+  margin-top: 5px;
+  max-width: 60ch;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+}
+
+.running-pill {
+  color: var(--brand);
+}
+
+/* ---------- stats ---------- */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+
+.stat-card {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4) var(--sp-5);
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+  transition: transform var(--t-fast), border-color var(--t-fast),
+    box-shadow var(--t-fast), background var(--t-fast);
+}
+
+.stat-card.clickable {
+  cursor: pointer;
+}
+
+.stat-card.clickable:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.stat-card.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+
+.stat-value {
+  font-family: var(--font-display);
+  font-size: clamp(1.4rem, 1.2rem + 0.6vw, 1.7rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 4px;
+}
+
+/* ---------- toolbar (search + bulk actions) ---------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.search-bar {
+  position: relative;
+  flex: 1;
+  max-width: 420px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.search-bar .search-input {
+  padding-left: 36px;
+}
+

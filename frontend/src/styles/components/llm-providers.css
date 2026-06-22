@@ -1,0 +1,185 @@
+/* ============================================================
+   LLM Connectors — admin page for the user-configurable LLM
+   providers (OpenAI / OpenRouter / Anthropic / internal proxy).
+   ============================================================ */
+
+.llm-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* Active-connector summary chip in the topbar. */
+.llm-active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.llm-active-pill strong {
+  color: var(--text);
+}
+
+/* Search bar reused from .panel-search (pipeline) but spaced for this page. */
+.llm-search {
+  max-width: 420px;
+}
+
+/* ---- Card grid ---- */
+.llm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--sp-4);
+}
+
+.llm-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.llm-card:hover {
+  border-color: var(--border-strong);
+}
+.llm-card.active {
+  border-color: color-mix(in srgb, var(--green) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--green) 35%, transparent), var(--shadow-sm);
+}
+
+.llm-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.llm-name {
+  font-weight: 650;
+  font-size: 15px;
+  color: var(--text);
+}
+
+/* Adapter type badge. */
+.adapter-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  color: var(--violet);
+  background: var(--violet-soft);
+}
+.adapter-badge.anthropic {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 16%, transparent);
+}
+
+.active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 650;
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+}
+
+/* ---- Meta list ---- */
+.llm-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+.llm-meta-row {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: 12.5px;
+}
+.llm-meta-row dt {
+  color: var(--text-3);
+  font-weight: 500;
+}
+.llm-meta-row dd {
+  margin: 0;
+  color: var(--text);
+  word-break: break-all;
+}
+.llm-meta-row dd.muted,
+.llm-meta-row .muted {
+  color: var(--text-3);
+}
+.llm-nokey {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--amber);
+}
+
+/* ---- Actions ---- */
+.llm-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;            /* actions wrap rather than overflow on a narrow card */
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+.llm-actions-spacer {
+  flex: 1;
+}
+.llm-active-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--green);
+  font-weight: 550;
+}
+
+.icon-btn.danger:hover:not(:disabled) {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+/* ---- Modal form bits ---- */
+.llm-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4);
+}
+.field-opt {
+  color: var(--text-3);
+  font-weight: 400;
+}
+.llm-json {
+  resize: vertical;
+  line-height: 1.5;
+}
+.field-hint code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+@media (max-width: 560px) {
+  .llm-form-row {
+    grid-template-columns: 1fr;
+  }
+}

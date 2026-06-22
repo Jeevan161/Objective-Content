@@ -1,0 +1,219 @@
+/* Chat */
+
+/* ---------- chat ---------- */
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chat-course-select {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-2);
+}
+
+.chat-course-select .input {
+  min-width: 200px;
+}
+
+.chat-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.chat-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.chat-intro {
+  margin: auto;
+  max-width: 46ch;
+  text-align: center;
+  color: var(--text-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.chat-intro-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-full);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 80%;
+}
+
+.chat-msg-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.chat-msg-assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.chat-bubble {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-msg-user .chat-bubble {
+  color: var(--accent-contrast);
+  background: var(--brand);
+  box-shadow: var(--shadow-accent);
+  border-bottom-right-radius: var(--r-sm);
+}
+
+.chat-msg-assistant .chat-bubble {
+  color: var(--text);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--r-sm);
+}
+
+.chat-bubble-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-2);
+}
+
+.chat-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.chat-sources-label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+.chat-source {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: var(--sp-1) var(--sp-3);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-composer {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.chat-composer .input {
+  flex: 1;
+}
+
+/* ============================================================
+   RESPONSIVE — chat surface
+   ============================================================ */
+
+/* Tablet / small screens */
+@media (max-width: 860px) {
+  .chat-thread {
+    padding: var(--sp-4);
+    gap: var(--sp-3);
+  }
+
+  .chat-msg {
+    max-width: 90%;
+  }
+
+  .chat-course-select .input {
+    min-width: 0;
+  }
+}
+
+/* Phones — full-height flex column, composer pinned to bottom edge */
+@media (max-width: 560px) {
+  /* Let the chat fill the viewport so the composer can sit on the edge. */
+  .chat-page {
+    min-height: 0;
+    flex: 1;
+  }
+
+  .chat-shell {
+    /* edge-to-edge feel: drop the side radius on a narrow phone */
+    border-radius: var(--r-md);
+  }
+
+  .chat-thread {
+    padding: var(--sp-3);
+    gap: var(--sp-3);
+  }
+
+  .chat-intro {
+    max-width: 100%;
+  }
+
+  /* Comfortable line-length + roomy bubbles for thumbs. */
+  .chat-msg {
+    max-width: 90%;
+  }
+
+  .chat-bubble {
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  /* Composer sticks to the bottom with safe-area padding. */
+  .chat-composer {
+    position: sticky;
+    bottom: 0;
+    z-index: var(--z-nav);
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+    padding-left: max(var(--sp-3), var(--safe-l));
+    padding-right: max(var(--sp-3), var(--safe-r));
+    padding-bottom: max(var(--sp-3), var(--safe-b));
+  }
+
+  /* Touch targets: keep the input and send button comfortably tappable. */
+  .chat-composer .input,
+  .chat-composer .btn {
+    min-height: 44px;
+  }
+}
+

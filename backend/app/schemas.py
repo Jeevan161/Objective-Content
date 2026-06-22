@@ -1,0 +1,244 @@
+"""
+app/schemas.py
+--------------
+Request validation models (Pydantic) + output serializers that reproduce the
+former DRF serializer shapes EXACTLY, so the existing frontend is unaffected.
+
+Outputs are built as plain dicts (FastAPI's jsonable_encoder renders datetimes /
+UUIDs), which keeps full control over the nested + computed fields the DRF
+ModelSerializers produced (has_content, content_chars, topic_count, …).
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from app.models import Course, SyncJob, Topic, Unit, UnitPart
+
+
+# --------------------------------------------------------------------------- #
+# Request bodies
+# --------------------------------------------------------------------------- #
+class VersionsRequest(BaseModel):
+    course_id: str = ""
+    environment: str | None = None
+
+
+class SyncRequest(BaseModel):
+    course_id: str = ""
+    courseversion_id: str | None = None
+    version_id: str | None = None
+    is_latest_version: bool = False
+    environment: str | None = None
+    prerequisite_for: str | None = None
+
+
+class ExtractRequest(BaseModel):
+    course_id: str = ""
+    tokens: dict | None = None
+    # When given, limit extraction to these reading-material/learning-set portal
+    # unit_ids (per-unit "Sync content") instead of the whole course.
+    unit_ids: list[str] | None = None
+
+
+class BuildRagRequest(BaseModel):
+    course_id: str = ""
+    unit_ids: list[str] | None = None
+
+
+class McqGenerateRequest(BaseModel):
+    course_id: str = ""
+    topic_id: str = ""
+    unit_id: str = ""  # a reading-material part's portal unit_id within the session
+    review: bool = True
+    # Reading-material portal unit_ids of the PREREQUISITE units to include in RAG
+    # grounding. None = include all prerequisites (default); [] = none.
+    prerequisite_unit_ids: list[str] | None = None
+
+
+class RagSearchRequest(BaseModel):
+    course_ids: list[str]
+    query: str
+    topic_ids: list[str] | None = None
+    unit_ids: list[str] | None = None
+    top_k: int = 10
+
+
+# --- human-in-the-loop review (Gate B) ---
+class RegenerateQuestionRequest(BaseModel):
+    feedback: str
+    tags: list[str] = []
+    reviewer: str = ""
+
+
+class QuestionFeedbackRequest(BaseModel):
+    action: str = "accept"          # accept | reject_regenerate (regenerate has its own route)
+    tags: list[str] = []
+    comment: str = ""
+    reviewer: str = ""
+
+
+class ApproveRunRequest(BaseModel):
+    reviewer: str = ""
+
+
+class RagCheckRequest(BaseModel):
+    course_ids: list[str]
+    topic: str
+    syntax: str | None = None
+
+
+class RagAnswerRequest(BaseModel):
+    course_ids: list[str]
+    query: str = ""
+    # Generous default: "list all X" questions need high recall (items scatter
+    # across many sections). Capped to keep the chat context bounded.
+    top_k: int = 15
+    # When true, the scope is expanded to include each course's prerequisites.
+    include_prerequisites: bool = True
+
+
+# --------------------------------------------------------------------------- #
+# Output serializers (parity with DRF)
+# --------------------------------------------------------------------------- #
+# `chunk_count`/`is_ingested` are derived from the RAG store (presence of RagChunk
+# rows) rather than a stored flag, so they stay correct across re-ingests (which
+# clear and rebuild chunks). Counts are passed in by the routes — keyed by
+# UnitPart.id for parts and by Course.course_id for courses — to avoid loading the
+# (large) embedding vectors just to display a status.
+def serialize_unit_part(part: UnitPart, *, chunk_count: int = 0) -> dict:
+    return {
+        "label": part.label,
+        "unit_id": part.unit_id,
+        "unit_type": part.unit_type,
+        "name": part.name,
+        "link": part.link,
+        "error": part.error,
+        "order": part.order,
+        "content_status": part.content_status,
+        "content_error": part.content_error,
+        "resource_ids": part.resource_ids,
+        "has_content": bool(part.content),
+        "content_chars": len(part.content or ""),
+        "chunk_count": chunk_count,
+        "is_ingested": chunk_count > 0,
+    }
+
+
+def serialize_unit(unit: Unit, *, part_counts: dict | None = None) -> dict:
+    part_counts = part_counts or {}
+    return {
+        "kind": unit.kind,
+        "label": unit.label,
+        "order": unit.order,
+        "parts": [
+            serialize_unit_part(p, chunk_count=part_counts.get(p.id, 0)) for p in unit.parts
+        ],
+    }
+
+
+def serialize_topic(topic: Topic, *, part_counts: dict | None = None) -> dict:
+    return {
+        "topic_id": topic.topic_id,
+        "topic_name": topic.topic_name,
+        "topic_link": topic.topic_link,
+        "order": topic.order,
+        "units": [serialize_unit(u, part_counts=part_counts) for u in topic.units],
+    }
+
+
+def serialize_course_list(
+    course: Course, *, ingested_chunk_count: int = 0, content_issue_count: int = 0
+) -> dict:
+    """Summary fields needed to render a (top-level or nested) course card."""
+    return {
+        "course_id": course.course_id,
+        "environment": course.environment,
+        "course_name": course.course_name,
+        "course_category": course.course_category,
+        "course_link": course.course_link,
+        "selected_version_id": course.selected_version_id,
+        "is_latest_version": course.is_latest_version,
+        "last_synced_at": course.last_synced_at,
+        "content_extracted_at": course.content_extracted_at,
+        "topic_count": len(course.topics),
+        "prerequisite_count": len(course.prerequisites),
+        "ingested_chunk_count": ingested_chunk_count,
+        "is_ingested": ingested_chunk_count > 0,
+        # Reading materials that ran extraction but came back EMPTY/ERROR.
+        "content_issue_count": content_issue_count,
+    }
+
+
+def serialize_course_detail(
+    course: Course,
+    *,
+    part_counts: dict | None = None,
+    course_counts: dict | None = None,
+    issue_counts: dict | None = None,
+) -> dict:
+    course_counts = course_counts or {}
+    issue_counts = issue_counts or {}
+    return {
+        "course_id": course.course_id,
+        "environment": course.environment,
+        "course_name": course.course_name,
+        "description": course.description,
+        "duration": course.duration,
+        "multimedia_url": course.multimedia_url,
+        "course_category": course.course_category,
+        "course_link": course.course_link,
+        "selected_courseversion_id": course.selected_courseversion_id,
+        "selected_version_id": course.selected_version_id,
+        "is_latest_version": course.is_latest_version,
+        "last_synced_at": course.last_synced_at,
+        "ingested_chunk_count": course_counts.get(course.course_id, 0),
+        "is_ingested": course_counts.get(course.course_id, 0) > 0,
+        "content_issue_count": issue_counts.get(course.course_id, 0),
+        # Nested prerequisites use the list (summary) shape.
+        "prerequisites": [
+            serialize_course_list(
+                p,
+                ingested_chunk_count=course_counts.get(p.course_id, 0),
+                content_issue_count=issue_counts.get(p.course_id, 0),
+            )
+            for p in course.prerequisites
+        ],
+        "topics": [serialize_topic(t, part_counts=part_counts) for t in course.topics],
+    }
+
+
+def serialize_job(job: SyncJob) -> dict:
+    return {
+        "id": job.id,
+        "job_type": job.job_type,
+        "course_id": job.course_id,
+        "environment": job.environment,
+        "version_id": job.version_id,
+        "is_latest_version": job.is_latest_version,
+        "status": job.status,
+        "message": job.message,
+        "error": job.error,
+        "progress": job.progress,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+def serialize_mcq_run(run, *, include_result: bool = True) -> dict:
+    out = {
+        "id": run.id,
+        "job_id": run.job_id,
+        "course_id": run.course_id,
+        "topic_id": run.topic_id,
+        "unit_id": run.unit_id,
+        "langsmith_run_url": run.langsmith_run_url,
+        "lo_count": run.lo_count,
+        "question_count": run.question_count,
+        "needs_human_count": run.needs_human_count,
+        "review_status": getattr(run, "review_status", "draft"),
+        "created_at": run.created_at,
+    }
+    if include_result:
+        out["result"] = run.result
+    return out

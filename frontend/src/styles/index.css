@@ -1,0 +1,22 @@
+/* ============================================================
+   Objective Content Studio — stylesheet entry point.
+   Import order defines the cascade: tokens → base → components.
+   Surface-specific responsive rules live inside each component
+   file; responsive.css holds only cross-cutting layout shifts.
+   ============================================================ */
+
+@import './tokens.css';
+@import './base.css';
+
+@import './components/layout.css';
+@import './components/controls.css';
+@import './components/courses.css';
+@import './components/overlays.css';
+@import './components/feedback.css';
+@import './components/chat.css';
+@import './components/generation.css';
+@import './components/mcq.css';
+@import './components/pipeline-page.css';
+@import './components/llm-providers.css';
+
+@import './components/responsive.css';
