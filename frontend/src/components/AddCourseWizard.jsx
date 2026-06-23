@@ -1,43 +1,44 @@
 import { useState } from 'react'
-import { ArrowLeft, ArrowRight, GitBranch, Link2, Star } from 'lucide-react'
+import { ArrowLeft, ArrowRight, GitBranch, Link2, Star, CheckCircle2, XCircle } from 'lucide-react'
 import Modal from './Modal'
-import { EnvBadge, Segmented, Spinner } from './ui'
-import { fetchVersions } from '../api'
+import { EnvBadge, Spinner } from './ui'
+import { lookupCourse } from '../api'
 import { useToast } from './Toast'
 
 const ENVIRONMENTS = ['PROD', 'BETA']
 
-// Guided two-step flow for adding a course (or a prerequisite course):
-//   1. Pick environment + paste the course ID
-//   2. Choose which course version to fetch
-// On confirm, calls onStartSync(payload) and closes.
-function AddCourseWizard({ prerequisiteFor, defaultEnv = 'PROD', onClose, onStartSync }) {
+// Guided flow for adding a course (or a prerequisite course):
+//   1. Paste the course ID
+//   2. We look it up in BOTH environments (PROD + BETA) at once and show what's available where —
+//      PROD versions, BETA (usually unversioned), or "Not found" per environment. The same course
+//      can exist in both with differing content, so each environment is offered independently.
+function AddCourseWizard({ prerequisiteFor, onClose, onStartSync }) {
   const toast = useToast()
   const [step, setStep] = useState(1)
-  const [environment, setEnvironment] = useState(defaultEnv)
   const [courseId, setCourseId] = useState('')
   const [loading, setLoading] = useState(false)
-  const [versions, setVersions] = useState([])
+  const [lookup, setLookup] = useState(null) // { PROD: {...}, BETA: {...} }
 
   const isPrereq = Boolean(prerequisiteFor)
+  const anyPresent = lookup && ENVIRONMENTS.some((e) => lookup[e]?.present)
 
-  async function handleFetchVersions(e) {
+  async function handleLookup(e) {
     e.preventDefault()
     const id = courseId.trim()
     if (!id || loading) return
     setLoading(true)
     try {
-      const data = await fetchVersions(id, environment)
-      setVersions(data.versions)
+      const data = await lookupCourse(id)
+      setLookup(data.environments || {})
       setStep(2)
     } catch (err) {
-      toast.push({ kind: 'error', title: 'Could not fetch versions', message: err.message })
+      toast.push({ kind: 'error', title: 'Could not look up course', message: err.message })
     } finally {
       setLoading(false)
     }
   }
 
-  function startSync(extra = {}) {
+  function startSync(environment, extra = {}) {
     onStartSync({
       course_id: courseId.trim(),
       environment,
@@ -64,25 +65,16 @@ function AddCourseWizard({ prerequisiteFor, defaultEnv = 'PROD', onClose, onStar
       {/* step indicator */}
       <div className="wizard-steps">
         <div className={`wizard-step ${step === 1 ? 'current' : 'done'}`}>
-          <span className="wizard-step-num">1</span> Course details
+          <span className="wizard-step-num">1</span> Course ID
         </div>
         <div className="wizard-step-line" />
         <div className={`wizard-step ${step === 2 ? 'current' : ''}`}>
-          <span className="wizard-step-num">2</span> Select version
+          <span className="wizard-step-num">2</span> Choose environment
         </div>
       </div>
 
       {step === 1 && (
-        <form onSubmit={handleFetchVersions} className="form-stack">
-          <div className="field">
-            <label className="field-label">Environment</label>
-            <Segmented options={ENVIRONMENTS} value={environment} onChange={setEnvironment} />
-            <p className="field-hint">
-              Which portal to fetch from. {environment === 'PROD' ? 'Production' : 'Beta'} portal
-              credentials will be used.
-            </p>
-          </div>
-
+        <form onSubmit={handleLookup} className="form-stack">
           <div className="field">
             <label className="field-label" htmlFor="course-id-input">
               Course ID
@@ -96,6 +88,9 @@ function AddCourseWizard({ prerequisiteFor, defaultEnv = 'PROD', onClose, onStar
               placeholder="e.g. c6008f8d-cd91-4843-bb3f-b75d4beca046"
               spellCheck={false}
             />
+            <p className="field-hint">
+              We&apos;ll look it up in both PROD and BETA and show what&apos;s available in each.
+            </p>
           </div>
 
           <div className="form-actions">
@@ -105,11 +100,11 @@ function AddCourseWizard({ prerequisiteFor, defaultEnv = 'PROD', onClose, onStar
             <button className="btn btn-primary" type="submit" disabled={!courseId.trim() || loading}>
               {loading ? (
                 <>
-                  <Spinner /> Fetching versions…
+                  <Spinner /> Looking up…
                 </>
               ) : (
                 <>
-                  Continue <ArrowRight size={14} />
+                  Look up <ArrowRight size={14} />
                 </>
               )}
             </button>
@@ -117,54 +112,88 @@ function AddCourseWizard({ prerequisiteFor, defaultEnv = 'PROD', onClose, onStar
         </form>
       )}
 
-      {step === 2 && (
+      {step === 2 && lookup && (
         <div className="form-stack">
           <p className="muted">
-            <EnvBadge env={environment} /> <code>{courseId.trim()}</code>
+            <code>{courseId.trim()}</code>
           </p>
 
-          {versions.length === 0 ? (
+          {!anyPresent && (
             <div className="empty-versions">
-              <p>No published versions were found for this course.</p>
-              <p className="field-hint">
-                You can still fetch the hierarchy directly from its resource links.
+              <p>
+                This course was <strong>not found</strong> in PROD or BETA.
               </p>
-              <button className="btn btn-primary" onClick={() => startSync()}>
-                <Link2 size={14} /> Fetch via resource links
-              </button>
+              <p className="field-hint">
+                Double-check the course ID, or confirm the portal credentials for each environment.
+              </p>
             </div>
-          ) : (
-            <ul className="version-list">
-              {versions.map((v) => (
-                <li key={v.row_id} className="version-item">
-                  <div className="version-item-info">
-                    <div className="version-item-title">
-                      <GitBranch size={14} />
-                      <strong>Version {v.version_id || '—'}</strong>
-                      {v.is_latest_version && (
-                        <span className="badge badge-latest">
-                          <Star size={10} /> latest
-                        </span>
-                      )}
-                    </div>
-                    <code className="version-row-id">{v.row_id}</code>
-                  </div>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() =>
-                      startSync({
-                        courseversion_id: v.row_id,
-                        version_id: v.version_id,
-                        is_latest_version: v.is_latest_version,
-                      })
-                    }
-                  >
-                    Use this version
-                  </button>
-                </li>
-              ))}
-            </ul>
           )}
+
+          {ENVIRONMENTS.map((env) => {
+            const info = lookup[env] || { present: false, versions: [], error: null }
+            const versions = info.versions || []
+            return (
+              <div key={env} className={`env-lookup-card ${info.present ? 'present' : 'absent'}`}>
+                <div className="env-lookup-head">
+                  <EnvBadge env={env} />
+                  {info.present ? (
+                    <span className="env-lookup-status ok">
+                      <CheckCircle2 size={13} /> {info.course_name || 'Available'}
+                    </span>
+                  ) : (
+                    <span className="env-lookup-status no">
+                      <XCircle size={13} /> Not found in {env}
+                      {info.error ? ` — ${info.error}` : ''}
+                    </span>
+                  )}
+                </div>
+
+                {info.present && versions.length > 0 && (
+                  <ul className="version-list">
+                    {versions.map((v) => (
+                      <li key={v.row_id} className="version-item">
+                        <div className="version-item-info">
+                          <div className="version-item-title">
+                            <GitBranch size={14} />
+                            <strong>Version {v.version_id || '—'}</strong>
+                            {v.is_latest_version && (
+                              <span className="badge badge-latest">
+                                <Star size={10} /> latest
+                              </span>
+                            )}
+                          </div>
+                          <code className="version-row-id">{v.row_id}</code>
+                        </div>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() =>
+                            startSync(env, {
+                              courseversion_id: v.row_id,
+                              version_id: v.version_id,
+                              is_latest_version: v.is_latest_version,
+                            })
+                          }
+                        >
+                          Use this version
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {info.present && versions.length === 0 && (
+                  <div className="env-lookup-noversion">
+                    <p className="field-hint">
+                      No versioning — fetch the hierarchy directly from its resource links.
+                    </p>
+                    <button className="btn btn-primary btn-sm" onClick={() => startSync(env)}>
+                      <Link2 size={14} /> Fetch from {env}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          })}
 
           <div className="form-actions">
             <button type="button" className="btn btn-ghost" onClick={() => setStep(1)}>

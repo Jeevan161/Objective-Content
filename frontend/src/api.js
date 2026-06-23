@@ -27,6 +27,14 @@ export const fetchVersions = (courseId, environment) =>
     body: JSON.stringify({ course_id: courseId, environment }),
   })
 
+// Look a course id up in BOTH environments at once → { course_id, environments: { PROD, BETA } },
+// each { present, versions, course_name, error }. Powers the add-course availability view.
+export const lookupCourse = (courseId) =>
+  request('/courses/lookup/', {
+    method: 'POST',
+    body: JSON.stringify({ course_id: courseId }),
+  })
+
 // Step 2 / Sync: start a background fetch. Pass version fields to choose a
 // specific version; omit them to reuse the course's stored version.
 export const startSync = (payload) =>

@@ -56,7 +56,7 @@ from app.services.jobs import (
     start_mcq_resume_job,
     start_sync_job,
 )
-from app.services.portal_sync import get_course_versions
+from app.services.portal_sync import get_course_versions, lookup_course_environments
 from portal.constants import ENVIRONMENTS
 
 router = APIRouter(prefix="/api")
@@ -113,6 +113,22 @@ def fetch_versions(body: VersionsRequest) -> dict:
     except Exception as err:  # noqa: BLE001 — portal failure surfaces as 502
         raise HTTPException(status_code=502, detail=f"Failed to fetch versions: {err}")
     return {"course_id": course_id, "environment": environment, "versions": versions}
+
+
+@router.post("/courses/lookup/")
+def lookup_course(body: VersionsRequest) -> dict:
+    """Given a course_id, probe BOTH environments (PROD + BETA) in parallel and report what's
+    present where — PROD versions, BETA presence (usually unversioned), and a 'not found' marker
+    per environment. Lets the UI show cross-environment availability before the user picks one to
+    sync. No comparison — the environments are reported independently."""
+    course_id = (body.course_id or "").strip()
+    if not course_id:
+        raise HTTPException(status_code=400, detail="course_id is required.")
+    try:
+        environments = lookup_course_environments(course_id)
+    except Exception as err:  # noqa: BLE001 — portal failure surfaces as 502
+        raise HTTPException(status_code=502, detail=f"Lookup failed: {err}")
+    return {"course_id": course_id, "environments": environments}
 
 
 @router.post("/courses/sync/", status_code=status.HTTP_202_ACCEPTED)

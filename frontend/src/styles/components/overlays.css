@@ -160,6 +160,53 @@
   color: var(--text-3);
 }
 
+/* per-environment availability cards in the Add-Course lookup (PROD / BETA) */
+.env-lookup-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.env-lookup-card.absent {
+  opacity: 0.7;
+  background: transparent;
+  border-style: dashed;
+}
+
+.env-lookup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.env-lookup-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+}
+
+.env-lookup-status.ok {
+  color: var(--green);
+}
+
+.env-lookup-status.no {
+  color: var(--red);
+}
+
+.env-lookup-noversion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
 .empty-versions {
   display: flex;
   flex-direction: column;

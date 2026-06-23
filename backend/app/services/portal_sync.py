@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Course, SyncJob, Topic, Unit, UnitPart
 from portal.client import PortalClient
-from portal.fetch import build_course_data, fetch_course_versions
+from portal.fetch import build_course_data, fetch_course_versions, parse_course_details
 
 
 def _now() -> datetime:
@@ -31,6 +31,44 @@ def get_course_versions(course_id: str, environment: str = "PROD") -> list:
     client = PortalClient(environment=environment)
     client.login()
     return fetch_course_versions(client, course_id)
+
+
+def _probe_environment(course_id: str, environment: str) -> dict:
+    """Probe ONE portal environment for a course id. Presence is VERSION-INDEPENDENT — a BETA course
+    is usually unversioned, so it counts as present when its course-detail page resolves to a real
+    course (has a name) OR any version rows exist. Never raises: login/network failures come back as
+    `error`, and a 404 (course absent in this environment) simply yields present=False."""
+    try:
+        client = PortalClient(environment=environment)
+        client.login()
+    except Exception as err:  # noqa: BLE001 — surface per-env; don't fail the whole lookup
+        return {"present": False, "versions": [], "course_name": "", "error": f"login failed: {err}"[:200]}
+
+    course_name = ""
+    try:
+        resp = client.get(client.config.course_detail_url_template.format(course_id))
+        course_name = (parse_course_details(resp.text, course_id).get("course_name") or "").strip()
+    except Exception:  # noqa: BLE001 — raise_for_status on a 404 = not found in this environment
+        course_name = ""
+    try:
+        versions = fetch_course_versions(client, course_id)
+    except Exception:  # noqa: BLE001 — version list unavailable; presence may still hold via name
+        versions = []
+    return {"present": bool(course_name) or bool(versions),
+            "versions": versions, "course_name": course_name, "error": None}
+
+
+def lookup_course_environments(course_id: str) -> dict:
+    """Look a course id up in BOTH environments AT ONCE (probed in parallel). Returns
+    ``{"PROD": {...}, "BETA": {...}}`` — each with present / versions / course_name / error — so the
+    UI can show what's available where and flag 'not found' per environment. No comparison: PROD is
+    typically versioned, BETA typically not, so the two are reported independently."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    envs = ("PROD", "BETA")
+    with ThreadPoolExecutor(max_workers=len(envs)) as pool:
+        results = list(pool.map(lambda e: (e, _probe_environment(course_id, e)), envs))
+    return dict(results)
 
 
 def persist_course_data(
