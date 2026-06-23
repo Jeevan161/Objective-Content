@@ -36,6 +36,14 @@ export const startSync = (payload) =>
   })
 
 export const getJob = (jobId) => request(`/courses/jobs/${jobId}/`)
+
+// WebSocket URL for live job progress (replaces polling). Same `/api` prefix, so Vite proxies it
+// (ws: true) to the backend in dev; in prod it rides the same host the page was served from.
+export const mcqJobWsUrl = (jobId) => {
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${proto}://${window.location.host}${BASE}/courses/mcq/jobs/${jobId}/ws`
+}
+
 export const getCourses = () => request('/courses/')
 export const getCourse = (courseId) => request(`/courses/${courseId}/`)
 

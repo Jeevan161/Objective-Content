@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ListChecks, BookOpen, Layers, FileText, Sparkles, AlertTriangle } from 'lucide-react'
-import { getCourse, generateMcq, resumeMcq, getJob, listMcqRuns, getMcqRun } from '../api'
+import { getCourse, generateMcq, resumeMcq, listMcqRuns, getMcqRun, mcqJobWsUrl } from '../api'
 import { EmptyState, Spinner } from './ui'
 import { useToast } from './Toast'
 import McqProgress from './McqProgress'
@@ -87,6 +87,8 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   const paused = job?.status === 'AWAITING_REVIEW' // waiting at a HITL gate
   const running = Boolean(job && !TERMINAL.includes(job.status) && !paused)
   const canGenerate = ready && sessionHasContent && !running && !paused
+  // Job is "live" (stream over a socket) while it's neither finished nor paused at a gate.
+  const streamable = Boolean(job?.id) && !TERMINAL.includes(job?.status) && !paused
 
   // Load the latest existing run for a freshly selected session.
   /* eslint-disable react-hooks/set-state-in-effect -- reset + async fetch on selection change */
@@ -109,26 +111,49 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   }, [courseId, sessionId])
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Poll the active job ~1s until terminal; on success load the run.
-  // NOTE: `toast` is intentionally NOT a dep — its identity changes on every
-  // toast add/dismiss, which would otherwise reset this poll timer mid-run.
+  // Live job progress over a WebSocket (replaces ~1s polling). The server pushes the serialized
+  // job on every change and closes when it settles (terminal / awaiting review), so this re-opens
+  // automatically after a HITL resume (status flips back to RUNNING). Unexpected drops reconnect.
   useEffect(() => {
-    if (!job || TERMINAL.includes(job.status) || job.status === 'AWAITING_REVIEW') return
-    const timer = setTimeout(async () => {
-      try {
-        const updated = await getJob(job.id)
+    if (!streamable) return
+    const url = mcqJobWsUrl(job.id)
+    let ws = null
+    let stopped = false
+    let retry = null
+    const open = () => {
+      ws = new WebSocket(url)
+      ws.onmessage = async (e) => {
+        let msg
+        try {
+          msg = JSON.parse(e.data)
+        } catch {
+          return
+        }
+        if (msg.type !== 'job') return // keepalive ping / non-job frame
+        const updated = msg.data
         setJob(updated)
         if (updated.status === 'SUCCESS') {
+          stopped = true
+          ws.close()
           const runs = await listMcqRuns(courseId, sessionId)
           if (runs && runs[0]) setRun(await getMcqRun(runs[0].id))
+        } else if (TERMINAL.includes(updated.status) || updated.status === 'AWAITING_REVIEW') {
+          stopped = true
+          ws.close()
         }
         // SUCCESS/FAILURE toasts are handled by the global Activity poller.
-      } catch {
-        // transient poll error; the next tick retries
       }
-    }, 1100)
-    return () => clearTimeout(timer)
-  }, [job, courseId, sessionId])
+      ws.onclose = () => {
+        if (!stopped) retry = setTimeout(open, 1500) // unexpected drop → reconnect
+      }
+    }
+    open()
+    return () => {
+      stopped = true
+      if (retry) clearTimeout(retry)
+      if (ws) ws.close()
+    }
+  }, [job?.id, streamable, courseId, sessionId])
 
   async function handleGenerate(prereqUnitIds) {
     setScopeOpen(false)

@@ -30,6 +30,7 @@ from app.mcq_pipeline.artifact import build_final_los, finalize as _finalize_art
 from app.mcq_pipeline.config import MAX_RETRIES
 from app.mcq_pipeline.nodes import author_outcomes, build_dependency_graph, canonicalize_concepts, extract_concepts, judge_outcomes, parse_structure, plan_allocation, profile_coverage, repair, resolve_prerequisites, sequence_outcomes, validate
 from app.mcq_pipeline.state import LOState, run_ctx
+from app.mcq_pipeline.nodes._common import _prog
 from app.mcq_pipeline.nodes.n14_generate_questions import generate_for_los
 from app.mcq_pipeline.nodes.n15_review_questions import review_and_fix_for_los
 from app.mcq_pipeline.nodes.n13_recommend_question_type import recommend_for_los
@@ -110,14 +111,20 @@ def review_questions_node(state, config) -> dict:
 # --- human-in-the-loop gates (inert pass-through unless ctx.hitl_enabled) --- #
 def review_division(state, config) -> dict:
     """HITL Gate 1 — pause for a human to approve/reject the Planner's LO division. Returns a
-    pass-through {} (no interrupt) unless the run enabled HITL."""
+    pass-through {} (no interrupt) unless the run enabled HITL. Emits a progress/trace span so the
+    gate is VISIBLE: it lights up 'running' (awaiting human) while paused, then 'done' with the
+    decision on resume — instead of the board/trace appearing frozen at plan_allocation and then
+    jumping to the next node."""
     ctx = run_ctx(config)
     if not getattr(ctx, "hitl_enabled", False):
         return {}
+    prog = _prog(config)
+    prog.start("review_division", detail="awaiting human review")
     from langgraph.types import interrupt
     decision = interrupt({"gate": "division", "proposal": state.get("division_proposal", {})})
     decision = decision if isinstance(decision, dict) else {"action": "approve"}
     action, note = decision.get("action", "approve"), decision.get("note", "")
+    prog.done("review_division", detail=f"human {action}" + (f": {note[:60]}" if note else ""))
     return {"gate_decision": {"gate": "division", "action": action, "note": note},
             "notes": [f"Gate-1 {action}" + (f": {note}" if note else "")]}
 
@@ -125,10 +132,14 @@ def review_division(state, config) -> dict:
 def review_outcomes(state, config) -> dict:
     """HITL Gate 2 — pause for a human to approve/reject the final LOs by concept mapping. A per-LO
     reject marks those ids as rubric failures (with the human note) so the existing repair path
-    regenerates exactly those, then re-judges + re-reviews. Inert pass-through unless HITL on."""
+    regenerates exactly those, then re-judges + re-reviews. Inert pass-through unless HITL on.
+    Emits a progress/trace span so the gate and the human decision are VISIBLE (the board lights up
+    'running' while awaiting review, then 'done' on resume) rather than the run appearing frozen."""
     ctx = run_ctx(config)
     if not getattr(ctx, "hitl_enabled", False):
         return {}
+    prog = _prog(config)
+    prog.start("review_outcomes", detail="awaiting human review")
     from langgraph.types import interrupt
     decision = interrupt({"gate": "outcomes", "outcomes": state.get("outcomes", []),
                           "reviews": state.get("lo_reviews", {})})
@@ -136,6 +147,8 @@ def review_outcomes(state, config) -> dict:
     action = decision.get("action", "approve")
     rejected = list(decision.get("rejected_ids", []))
     note = decision.get("note", "")
+    prog.done("review_outcomes",
+              detail=f"human {action}" + (f", {len(rejected)} to regenerate" if rejected else ""))
     out = {"gate_decision": {"gate": "outcomes", "action": action,
                              "rejected_ids": rejected, "note": note},
            "notes": [f"Gate-2 {action}" + (f" ({len(rejected)} rejected)" if rejected else "")]}

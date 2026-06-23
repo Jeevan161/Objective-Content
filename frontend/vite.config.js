@@ -5,9 +5,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    // Forward API calls to the Django backend during development.
+    // Forward API calls (HTTP + WebSocket) to the FastAPI backend during development.
     proxy: {
-      '/api': 'http://localhost:8000',
+      '/api': { target: 'http://localhost:8000', ws: true },
     },
   },
 })

@@ -387,16 +387,25 @@ def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
     "note":"..."}."""
     from langgraph.types import Command
 
+    from app.mcq_pipeline.utils.progress import STAGE_DEFS
     disable_langsmith()
     adapter, prereq_units, session_label = build_adapter(course_id, unit_id, prereq_unit_ids)
-    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id))
+    graph = get_lo_graph()
+    cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
+    # Which gate are we resuming from? Seed the fresh reporter so the stages already completed on the
+    # original run stay 'done' on the board (otherwise the resume would reset them all to 'pending').
+    gate = (_interrupt_payload(graph, cfg) or {}).get("gate")
+    gate_key = {"division": "review_division", "outcomes": "review_outcomes"}.get(gate)
+    keys = [d["key"] for d in STAGE_DEFS]
+    seed_done = ([k for k in keys[:keys.index(gate_key)] if k != "repair"]   # repair is conditional
+                 if gate_key in keys else [])
+    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id),
+                                seed_done=seed_done)
     ctx = RunContext(rag=adapter, progress=progress, db_prereq_units=prereq_units,
                      generate_questions=True, review_questions=review,
                      question_budget=question_budget, hitl_enabled=True)
     REGISTRY.register(thread_id, ctx)
     set_call_context(unit=(session_label or unit_id or thread_id))
-    graph = get_lo_graph()
-    cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
     try:
         state = graph.invoke(Command(resume=decision), config=cfg)
         paused = _interrupt_payload(graph, cfg)

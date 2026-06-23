@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.services import progress_broker
 from app.services.extraction import run_extraction_job
 from app.services.portal_sync import run_sync_job
 from app.services.rag_build import run_build_rag_job
@@ -81,6 +82,7 @@ def _mcq_sink(job_id: uuid.UUID):
                     job.status = SyncJob.RUNNING
                 job.updated_at = _now()
                 session.commit()
+        progress_broker.publish(str(job_id))   # nudge live WebSocket subscribers (no-op if none)
     return sink
 
 
@@ -105,6 +107,7 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
                 job.message = f"Awaiting human review (gate: {gate})."
                 job.updated_at = _now()
             session.commit()
+            progress_broker.publish(str(job_id))   # push the paused/awaiting state to the socket
             return
         session.add(McqRun(
             job_id=job_id, course_id=course_id, topic_id=topic_id, unit_id=unit_id,
@@ -127,6 +130,7 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
             job.progress = prog
             job.updated_at = _now()
         session.commit()
+        progress_broker.publish(str(job_id))       # push the terminal (SUCCESS/FAILURE) state
 
 
 def _fail_job(job_id: uuid.UUID, err: Exception) -> None:

@@ -12,14 +12,16 @@ they aren't captured as a course id.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.session import get_session
+from app.db.session import SessionLocal, get_session
 from app.models import Course, McqRun, McqTrace, RagChunk, SyncJob, Topic, Unit, UnitPart
 from app.schemas import (
     ApproveRunRequest,
@@ -40,6 +42,7 @@ from app.schemas import (
     serialize_mcq_run,
     serialize_mcq_trace,
 )
+from app.services import progress_broker
 from app.services.extraction import (
     READING_MATERIAL_LABEL,
     collect_courses_recursive,
@@ -382,6 +385,57 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
         decision, prereq_unit_ids, body.question_budget, bool(body.review),
     )
     return serialize_job(job)
+
+
+# --- live job progress over WebSocket (replaces the frontend poll) -------------- #
+_SETTLED_STATUSES = {SyncJob.SUCCESS, SyncJob.FAILURE, SyncJob.AWAITING_REVIEW}
+
+
+def _read_serialized_job(job_id: uuid.UUID) -> dict | None:
+    with SessionLocal() as session:
+        job = session.get(SyncJob, job_id)
+        return serialize_job(job) if job is not None else None
+
+
+@router.websocket("/courses/mcq/jobs/{job_id}/ws")
+async def mcq_job_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
+    """Stream a job's serialized state live (replaces the ~1s poll). Pushes on every change and
+    closes when the job SETTLES (SUCCESS / FAILURE / AWAITING_REVIEW); the client re-opens after a
+    HITL resume. Backed by the in-process progress_broker (single uvicorn process). Messages:
+    {"type":"job","data":<serialized job>} · {"type":"ping"} · {"type":"error","detail":...}."""
+    await websocket.accept()
+    jid = str(job_id)
+    q = progress_broker.subscribe(jid)            # subscribe BEFORE the first read (no missed change)
+    try:
+        job = await asyncio.to_thread(_read_serialized_job, job_id)
+        if job is None:
+            await websocket.send_json({"type": "error", "detail": "job not found"})
+            return
+        await websocket.send_json({"type": "job", "data": jsonable_encoder(job)})
+        if job["status"] in _SETTLED_STATUSES:
+            return
+        while True:
+            try:
+                await asyncio.wait_for(q.get(), timeout=20)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})   # keepalive + dead-connection probe
+                continue
+            job = await asyncio.to_thread(_read_serialized_job, job_id)
+            if job is None:
+                break
+            await websocket.send_json({"type": "job", "data": jsonable_encoder(job)})
+            if job["status"] in _SETTLED_STATUSES:
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001 — a socket error must never crash the worker
+        pass
+    finally:
+        progress_broker.unsubscribe(jid, q)
+        try:
+            await websocket.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @router.get("/courses/mcq/runs/")

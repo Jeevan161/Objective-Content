@@ -47,13 +47,18 @@ def _now_iso() -> str:
 
 class ProgressReporter:
     def __init__(self, sink: Callable[[dict], None] | None = None,
-                 trace_sink: Callable[[dict], None] | None = None):
+                 trace_sink: Callable[[dict], None] | None = None,
+                 seed_done: list[str] | None = None):
         self._lock = threading.Lock()
         self._sink = sink
         self._trace_sink = trace_sink          # emits one span per node entry (our own trace)
         self._open: dict[str, tuple] = {}       # node key -> (started_dt, started_perf)
+        # seed_done: stages already completed before this reporter took over (a HITL RESUME builds a
+        # fresh reporter; without seeding, every prior stage would reset to 'pending' on the board).
+        # Seeded stages open no span (their trace spans were already emitted on the original run).
+        _seeded = set(seed_done or ())
         self._stages: dict[str, dict] = {
-            d["key"]: {**d, "state": "pending"} for d in STAGE_DEFS
+            d["key"]: {**d, "state": "done" if d["key"] in _seeded else "pending"} for d in STAGE_DEFS
         }
 
     def snapshot(self) -> dict:
