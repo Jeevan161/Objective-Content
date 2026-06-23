@@ -156,6 +156,22 @@ export const approveMcqRun = (runId, reviewer = '') =>
     body: JSON.stringify({ reviewer }),
   })
 
+// Build the portal-format export ZIP for a run and upload it to the beta S3 bucket.
+// Returns { url, filename, counts, total, batch_id }.
+export const exportMcqRunZip = (runId) =>
+  request(`/courses/mcq/runs/${runId}/export-beta/`, {
+    method: 'POST',
+  })
+
+// Full beta-load pipeline: build+upload the ZIP, copy+fill the exam-config sheet,
+// submit the load, poll it, and unlock. Can take up to a couple of minutes.
+// Returns { status, message, sheet_url, resource_id, request_id, total, ... }.
+export const prepareAndLoadMcqRun = (runId, fields) =>
+  request(`/courses/mcq/runs/${runId}/prepare-and-load/`, {
+    method: 'POST',
+    body: JSON.stringify(fields),
+  })
+
 // --- MCQ pipeline & prompts (admin) ---
 // The ordered pipeline stages, each with the prompts that drive it.
 export const getMcqPipeline = () => request('/mcq/pipeline/')

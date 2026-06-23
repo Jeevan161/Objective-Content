@@ -94,5 +94,21 @@ class Settings(BaseSettings):
     beta_s3_region: str = "ap-south-1"
     beta_s3_upload_folder: str = "ccbp_beta/media/content_loading/uploads/"
 
+    # --- Exam-config Google Sheet (copy template → fill Form tab → submit load) ---
+    # A service-account JSON (gitignored file) drives the Drive copy + Sheets edit.
+    # The template is a formula-driven workbook whose `Form` tab is the single source
+    # of truth; we copy it and write only the Form's input cells (services/beta_sheet).
+    google_sa_credentials_file: str = "google_sa_credentials.json"
+    mcq_template_spreadsheet_id: str = "1Grps-VAstCkmquzC_oDOAMnpYWrFNsXUXDf5RrzCFm4"
+    # Comma-separated emails the prepared sheet is shared with (Editor), in addition
+    # to the requester. Defaults to the downstream learning-resource service account
+    # plus the reviewer account so the prepared sheets can be opened/reviewed.
+    mcq_sheet_share_emails: str = (
+        "learningresource@nkblearningbackend.iam.gserviceaccount.com,"
+        "jeevansravanth.parisa@nxtwave.co.in"
+    )
+    # Max seconds to poll the content-loading task before giving up.
+    beta_load_poll_timeout: int = 180
+
 
 settings = Settings()

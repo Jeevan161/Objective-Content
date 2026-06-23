@@ -100,6 +100,17 @@ class ApproveRunRequest(BaseModel):
     reviewer: str = ""
 
 
+class PrepareSheetRequest(BaseModel):
+    """User-facing fields for the exam-config sheet (Form tab). The rest is derived:
+    parent = run.topic_id, number of questions = generated count, name = 'MCQ Practice'."""
+    child_order: int
+    duration_min: int = 30
+    pass_percentage: float = 80.0          # percent (80 → stored as 0.8 in Form!B40)
+    show_answer_scoring_mode: str = "INCORRECT"
+    should_send_solutions: str = "yes"
+    reviewer_email: str = ""               # also shared on the prepared sheet, if given
+
+
 class RagCheckRequest(BaseModel):
     course_ids: list[str]
     topic: str

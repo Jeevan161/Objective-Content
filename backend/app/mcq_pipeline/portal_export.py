@@ -316,10 +316,14 @@ def validate_groups(groups: dict[str, list]) -> tuple[int, list[str]]:
     return total, errors
 
 
-def build_zip_bytes(result: dict) -> tuple[bytes, dict]:
+def build_zip_bytes(result: dict, *, batch_id: str | None = None) -> tuple[bytes, dict]:
     """Build the portal ZIP. Mirrors rename_zip: all four folders use ONE shared
     `<uuid>.json` filename, every question_id is validated, and NO ZIP is produced
     if validation fails (raises ExportValidationError).
+
+    `batch_id` names that shared JSON file. For a sheet-backed load it MUST be the
+    exam's resource id (Form!B5) so the loader can match the questions file to the
+    exam unit; for a standalone ZIP export it's left unset and a fresh UUID is used.
 
     Returns (zip_bytes, info) where info = {counts, total_questions, batch_id}.
     """
@@ -328,7 +332,7 @@ def build_zip_bytes(result: dict) -> tuple[bytes, dict]:
     if errors:
         raise ExportValidationError(errors)
 
-    batch = _uuid()
+    batch = batch_id or _uuid()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for folder in GROUPS:

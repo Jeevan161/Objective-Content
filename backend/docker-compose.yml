@@ -37,6 +37,11 @@ services:
       # Inside the compose network the DB is reached as host `db` on 5432.
       # This overrides whatever DATABASE_URL is in .env (which targets host:5545).
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/objective_content
+    volumes:
+      # Google service-account JSON for the exam-config sheet pipeline. It's gitignored
+      # and NOT copied into the image, so bind-mount it (read-only) at the path the
+      # backend resolves by default (/app == WORKDIR). Keeps the secret out of the image.
+      - ./google_sa_credentials.json:/app/google_sa_credentials.json:ro
     ports:
       - "8000:8000"
 

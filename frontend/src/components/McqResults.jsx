@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight,
-  FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck,
+  FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck, Download,
+  FileSpreadsheet, ExternalLink,
 } from 'lucide-react'
 import { Spinner } from './ui'
 import { useToast } from './Toast'
 import NodeSnapshot from './NodeSnapshot'
-import { regenerateMcqQuestion, submitMcqFeedback, approveMcqRun, getMcqTrace } from '../api'
+import { regenerateMcqQuestion, submitMcqFeedback, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace } from '../api'
 import ReactMarkdown from 'react-markdown'
 
 const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer', 'LO drift', 'too easy', 'too hard']
@@ -424,6 +425,15 @@ function McqResults({ run }) {
   const [reviewer, setReviewer] = useState('')
   const [busyOutcome, setBusyOutcome] = useState(null)
   const [approved, setApproved] = useState(run?.review_status === 'approved')
+  const [zipBusy, setZipBusy] = useState(false)
+  const [zipResult, setZipResult] = useState(null) // { url, filename } of the last generated export
+  const [prepOpen, setPrepOpen] = useState(false)
+  const [prepBusy, setPrepBusy] = useState(false)
+  const [prepResult, setPrepResult] = useState(null) // { status, message, sheet_url, ... }
+  const [prepForm, setPrepForm] = useState({
+    child_order: '', duration_min: 30, pass_percentage: 80,
+    show_answer_scoring_mode: 'INCORRECT', should_send_solutions: 'yes',
+  })
   // State is seeded from `run` on mount; the parent passes key={run.id} so a
   // different run remounts this component (no setState-in-effect needed).
 
@@ -454,6 +464,48 @@ function McqResults({ run }) {
       toast.push({ kind: 'success', title: 'Run approved', message: 'Questions are ready to export.' })
     } catch (e) {
       toast.push({ kind: 'error', title: 'Approve failed', message: e.message })
+    }
+  }
+  async function handleGenerateZip() {
+    setZipBusy(true)
+    try {
+      const { url, filename, total } = await exportMcqRunZip(run.id)
+      setZipResult({ url, filename })
+      window.open(url, '_blank', 'noopener,noreferrer')
+      toast.push({ kind: 'success', title: 'ZIP generated', message: `${total} question(s) exported to the portal bucket.` })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Generate ZIP failed', message: e.message })
+    } finally {
+      setZipBusy(false)
+    }
+  }
+  async function handlePrepareLoad() {
+    if (prepForm.child_order === '' || Number.isNaN(Number(prepForm.child_order))) {
+      toast.push({ kind: 'error', title: 'Child order required', message: 'Enter the position under the topic.' })
+      return
+    }
+    setPrepBusy(true)
+    setPrepResult(null)
+    try {
+      const res = await prepareAndLoadMcqRun(run.id, {
+        child_order: Number(prepForm.child_order),
+        duration_min: Number(prepForm.duration_min),
+        pass_percentage: Number(prepForm.pass_percentage),
+        show_answer_scoring_mode: prepForm.show_answer_scoring_mode,
+        should_send_solutions: prepForm.should_send_solutions,
+        reviewer_email: reviewer.includes('@') ? reviewer : '',
+      })
+      setPrepResult(res)
+      const ok = res.status === 'SUCCESS'
+      toast.push({
+        kind: ok ? 'success' : 'error',
+        title: ok ? 'Loaded to beta' : `Load ${String(res.status || '').toLowerCase()}`,
+        message: ok ? `${res.total} question(s) loaded; resource unlocked.` : (res.message || 'See the prepared sheet.'),
+      })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Prepare & load failed', message: e.message })
+    } finally {
+      setPrepBusy(false)
     }
   }
 
@@ -555,8 +607,84 @@ function McqResults({ run }) {
                   <ShieldCheck size={13} /> Approve run
                 </button>
               )}
+              <button className="btn btn-primary btn-sm" onClick={handleGenerateZip} disabled={zipBusy}>
+                <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
+              </button>
+              {zipResult && (
+                <a className="mcq-zip-link" href={zipResult.url} target="_blank" rel="noopener noreferrer"
+                  title={zipResult.url}>
+                  <Download size={12} /> <span>{zipResult.filename}</span>
+                </a>
+              )}
+              <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
+                onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy}>
+                <FileSpreadsheet size={13} /> Prepare &amp; Load
+              </button>
             </div>
           </div>
+
+          {prepOpen && (
+            <div className="mcq-prep-panel">
+              <div className="mcq-prep-head">
+                <FileSpreadsheet size={14} />
+                <span>Prepare exam-config sheet &amp; load to beta</span>
+                <span className="mcq-prep-sub">
+                  parent = this session's topic · name = “MCQ Practice” · {questions.filter((q) => q.status === 'generated' || q._reviewState).length || questions.length} question(s)
+                </span>
+              </div>
+              <div className="mcq-prep-fields">
+                <label>Child order under parent
+                  <input className="input" type="number" min="1" value={prepForm.child_order}
+                    onChange={(e) => setPrepForm((f) => ({ ...f, child_order: e.target.value }))}
+                    placeholder="e.g. 5" />
+                </label>
+                <label>Duration (minutes)
+                  <input className="input" type="number" min="1" value={prepForm.duration_min}
+                    onChange={(e) => setPrepForm((f) => ({ ...f, duration_min: e.target.value }))} />
+                </label>
+                <label>Pass percentage
+                  <input className="input" type="number" min="0" max="100" value={prepForm.pass_percentage}
+                    onChange={(e) => setPrepForm((f) => ({ ...f, pass_percentage: e.target.value }))} />
+                </label>
+                <label>Show answer scoring mode
+                  <select className="input" value={prepForm.show_answer_scoring_mode}
+                    onChange={(e) => setPrepForm((f) => ({ ...f, show_answer_scoring_mode: e.target.value }))}>
+                    <option value="INCORRECT">INCORRECT</option>
+                    <option value="CORRECT">CORRECT</option>
+                    <option value="DEFAULT">DEFAULT</option>
+                  </select>
+                </label>
+                <label>Should send solutions
+                  <select className="input" value={prepForm.should_send_solutions}
+                    onChange={(e) => setPrepForm((f) => ({ ...f, should_send_solutions: e.target.value }))}>
+                    <option value="yes">yes</option>
+                    <option value="no">no</option>
+                  </select>
+                </label>
+              </div>
+              <div className="mcq-prep-actions">
+                <button className="btn btn-primary btn-sm" onClick={handlePrepareLoad} disabled={prepBusy}>
+                  {prepBusy ? <Spinner size={13} /> : <FileSpreadsheet size={13} />}
+                  {prepBusy ? 'Loading… (up to ~2 min)' : 'Prepare & load'}
+                </button>
+                {prepResult && (
+                  <span className={`mcq-status-chip ${prepResult.status === 'SUCCESS' ? 'ok' : 'warn'}`}>
+                    {prepResult.status}
+                  </span>
+                )}
+                {prepResult?.sheet_url && (
+                  <a className="mcq-zip-link" href={prepResult.sheet_url} target="_blank" rel="noopener noreferrer"
+                    title={prepResult.sheet_url}>
+                    <ExternalLink size={12} /> <span>Open config sheet</span>
+                  </a>
+                )}
+              </div>
+              {prepResult && prepResult.status !== 'SUCCESS' && prepResult.message && (
+                <div className="mcq-prep-msg">{prepResult.message}</div>
+              )}
+            </div>
+          )}
+
           <div className="qc-list">
             {shown.map((q) => (
               <QuestionCard key={q.outcome} q={q} lo={loByOutcome[q.outcome]}

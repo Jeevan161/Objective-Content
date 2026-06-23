@@ -29,6 +29,7 @@ from app.schemas import (
     ExtractRequest,
     McqGenerateRequest,
     McqReviewRequest,
+    PrepareSheetRequest,
     QuestionFeedbackRequest,
     RagAnswerRequest,
     RagCheckRequest,
@@ -509,6 +510,90 @@ def export_mcq_run_to_beta(run_id: uuid.UUID, session: Session = Depends(get_ses
         raise HTTPException(status_code=502, detail=f"Beta S3 upload failed: {err}") from err
     return {"url": url, "filename": filename, "counts": info["counts"],
             "total": info["total_questions"], "batch_id": info["batch_id"]}
+
+
+@router.post("/courses/mcq/runs/{run_id}/prepare-and-load/")
+def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
+                             session: Session = Depends(get_session)) -> dict:
+    """Full beta-load pipeline for a run: build + upload the questions ZIP, copy the
+    exam-config sheet template and fill its Form tab, submit the SHEET_LOADING task,
+    poll it to completion, and (on success) unlock the resource.
+
+    The parent (Form!B14) is the run's topic_id; the question count and name are
+    derived; the five fields in `body` are the only reviewer-supplied values."""
+    from app.mcq_pipeline.portal_export import ExportValidationError, build_zip_bytes
+    from app.services import beta_s3, beta_sheet
+
+    run = session.get(McqRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="MCQ run not found.")
+    if not run.topic_id:
+        raise HTTPException(status_code=400,
+                            detail="This run has no topic_id, so the exam's parent "
+                                   "resource cannot be set. Re-run with a topic selected.")
+
+    # One id per unit, shared by the exam (Form!B5) AND the questions JSON filename in
+    # the ZIP, so the loader can match the questions file to the exam unit.
+    resource_id = str(uuid.uuid4())
+
+    # 1. Build the portal-format questions ZIP (in memory), named <resource_id>.json.
+    try:
+        data, info = build_zip_bytes(run.result or {}, batch_id=resource_id)
+    except ExportValidationError as err:
+        raise HTTPException(status_code=400, detail={"message": "Export validation failed",
+                                                     "errors": err.errors}) from err
+    if info["total_questions"] == 0:
+        raise HTTPException(status_code=400, detail="This run has no generated questions to load.")
+
+    # 2. Upload the ZIP to the beta S3 bucket.
+    filename = _export_filename(run)
+    try:
+        s3_url = beta_s3.upload_bytes(data, filename)
+    except Exception as err:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Beta S3 upload failed: {err}") from err
+
+    # 3. Copy the template + fill the Form tab.
+    try:
+        sheet = beta_sheet.prepare_sheet(
+            resource_id=resource_id,
+            topic_id=run.topic_id,
+            num_questions=info["total_questions"],
+            child_order=body.child_order,
+            duration_min=body.duration_min,
+            pass_percentage=body.pass_percentage / 100.0,
+            show_answer_scoring_mode=body.show_answer_scoring_mode,
+            should_send_solutions=body.should_send_solutions,
+            share_emails=[body.reviewer_email] if body.reviewer_email else None,
+        )
+    except Exception as err:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Sheet preparation failed: {err}") from err
+
+    # 4. Submit the sheet-loading task.
+    try:
+        request_id = beta_s3.submit_sheet_loading(
+            spreadsheet_id=sheet["spreadsheet_id"],
+            spread_sheet_name=sheet["title"], s3_url=s3_url)
+    except Exception as err:  # noqa: BLE001
+        raise HTTPException(status_code=502,
+                            detail={"message": f"Sheet-loading submit failed: {err}",
+                                    "sheet_url": sheet["url"]}) from err
+
+    # 5. Poll to completion, then 6. unlock on success.
+    status, message = beta_s3.poll_task(request_id)
+    unlock_id = None
+    if status == "SUCCESS":
+        try:
+            unlock_id = beta_s3.submit_unlock(sheet["resource_id"])
+        except Exception as err:  # noqa: BLE001
+            message = f"Loaded, but unlock failed: {err}"
+
+    return {
+        "status": status, "message": message,
+        "sheet_url": sheet["url"], "spreadsheet_id": sheet["spreadsheet_id"],
+        "resource_id": sheet["resource_id"], "s3_url": s3_url,
+        "request_id": request_id, "unlock_id": unlock_id,
+        "total": info["total_questions"], "filename": filename,
+    }
 
 
 # --- Human-in-the-loop review (Gate B): feedback + regenerate + approve --------- #

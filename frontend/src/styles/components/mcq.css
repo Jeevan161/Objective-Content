@@ -566,6 +566,40 @@
 /* ---------- MCQ: human-in-the-loop review actions ---------- */
 .mcq-review-tools { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
 .mcq-reviewer { width: 180px; max-width: 40vw; }
+.mcq-zip-link {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 220px; font-size: 12px; font-weight: 600;
+  color: var(--brand); text-decoration: none;
+  padding: 3px 9px; border-radius: var(--r-full);
+  background: var(--accent-soft); border: 1px solid var(--border);
+}
+.mcq-zip-link:hover { text-decoration: underline; }
+.mcq-zip-link svg { flex-shrink: 0; }
+/* truncate the filename so a long label can't blow out the toolbar */
+.mcq-zip-link { overflow: hidden; }
+.mcq-zip-link > :not(svg) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- MCQ: prepare exam-config sheet & load to beta ---------- */
+.mcq-prep-panel {
+  margin: var(--sp-2) 0 var(--sp-3); padding: var(--sp-3);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface-2, var(--accent-soft)); display: flex; flex-direction: column; gap: var(--sp-3);
+}
+.mcq-prep-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text-1); }
+.mcq-prep-sub { font-weight: 500; font-size: 11.5px; color: var(--text-2); }
+.mcq-prep-fields {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--sp-3);
+}
+.mcq-prep-fields label {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-2);
+}
+.mcq-prep-fields .input { font-weight: 500; }
+.mcq-prep-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.mcq-prep-msg {
+  font-size: 12px; color: var(--amber); background: var(--amber-soft);
+  border-radius: var(--r-sm); padding: 6px 10px; white-space: pre-wrap; word-break: break-word;
+}
 .qc-review-bar {
   margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--border);
   display: flex; align-items: flex-start; gap: var(--sp-2); flex-wrap: wrap;

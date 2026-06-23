@@ -20,6 +20,9 @@ numpy>=1.26
 requests>=2.32.0
 beautifulsoup4>=4.12.0
 soupsieve>=2.5
+boto3>=1.34.0             # upload generated content to the beta portal's S3 (services/beta_s3)
+gspread>=6,<7            # copy the exam-config Google Sheet template + fill its Form tab (services/beta_sheet)
+google-auth>=2          # service-account auth for gspread (Drive copy + Sheets edit)
 
 # --- MCQ generation pipeline (LangGraph) + LangSmith tracing ---
 langgraph>=0.2.0
