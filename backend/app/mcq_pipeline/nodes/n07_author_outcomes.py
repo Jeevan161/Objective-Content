@@ -36,14 +36,14 @@ def _coerce_outcome(item: dict, topic: dict, assignment: dict, inv: list) -> dic
     tier = assignment["tier"]
     cid = assignment["concept_id"]
     cur = next((c for c in inv if c["concept_id"] == cid), None)
+    cname = cur["canonical_name"] if cur else cid[2:].replace("_", " ")
     verb = str(item.get("learner_action", "")).lower().strip()
     if verb not in VERBS[tier]:
         verb = _DEFAULT_VERB[tier]
-    title = (item.get("title") or f"{verb} {topic['title']}").strip()
+    title = (item.get("title") or f"{verb.title()} {cname}").strip()   # concept-specific, not topic-wide
     skill = item.get("skill_type")
     if skill not in SKILL_TYPES:
         skill = "practical_application" if tier in ("apply", "scenario") else "conceptual"
-    cname = cur["canonical_name"] if cur else title
     quote = ground_quote(cname, topic["text"])
     return {"id": slugify(f"{verb}_{cid[2:]}"), "title": title, "topic_id": topic["topic_id"],
             "concept_id": cid, "bloom_level": tier, "scenario": tier == "scenario",
@@ -69,24 +69,26 @@ def _synthesize_outcome(topic: dict, assignment: dict, inv: list) -> dict:
     return _coerce_outcome(item, topic, assignment, inv)
 
 
-def _reconcile_to_assignments(items: list, topic: dict, assignments: list, inv: list) -> list:
-    """Produce EXACTLY one outcome per planned assignment. Each LLM item is matched to an
-    assignment by (concept_id, tier) — then concept_id, then leftover — and coerced to it.
-    Missing assignments are synthesized (grounded); extra items are dropped. No near-duplicate
-    filler is invented — the Planner already fixed which concept+tier to author."""
+def _match_items(items: list, topic: dict, assignments: list, inv: list, out: list) -> None:
+    """Staged match of LLM `items` onto the still-empty slots of `out` (aligned 1:1 to
+    `assignments`): pass 1 — exact (concept_id, tier); pass 2 — same concept_id, any tier. Each
+    item is consumed at most once. Staging (all of pass 1 before any of pass 2) ensures a weaker
+    match never steals an item an exact match needs, and NO arbitrary leftover is force-bound to
+    an unrelated concept — unfilled slots stay None for the caller to gap-fill (LLM) or, as a last
+    resort, synthesize. Mutates `out` in place."""
     pool = list(items)
-    out = []
-    for a in assignments:
-        match = (next((it for it in pool if it.get("concept_id") == a["concept_id"]
-                       and _tier_of(it) == a["tier"]), None)
-                 or next((it for it in pool if it.get("concept_id") == a["concept_id"]), None)
-                 or (pool[0] if pool else None))
-        if match is not None:
-            pool.remove(match)
-            out.append(_coerce_outcome(match, topic, a, inv))
-        else:
-            out.append(_synthesize_outcome(topic, a, inv))
-    return out
+
+    def _take(pred):
+        for i, a in enumerate(assignments):
+            if out[i] is not None:
+                continue
+            m = next((it for it in pool if pred(it, a)), None)
+            if m is not None:
+                pool.remove(m)
+                out[i] = _coerce_outcome(m, topic, a, inv)
+
+    _take(lambda it, a: it.get("concept_id") == a["concept_id"] and _tier_of(it) == a["tier"])
+    _take(lambda it, a: it.get("concept_id") == a["concept_id"])
 
 
 # DB-overridable (sentinel placeholders substituted in code — NOT str.format, because the
@@ -111,6 +113,21 @@ GROUNDED IN TAUGHT DEPTH — stay within what the material actually teaches; nev
 'syntax' is a code/command reference COPIED VERBATIM from the section (null if none — never invent or guess). 'quote' is copied verbatim from the evidence. No commentary.""")
 
 
+def _author_items(sys: str, topic: dict, concept_lines: str, assignments: list, name_of: dict) -> list:
+    """One author LLM call for `assignments`; returns the raw JSON item list ([] on miss/garbage).
+    Reused for the initial pass and the gap-fill retry — the retry simply passes the subset of
+    assignments that the first pass failed to produce."""
+    assignment_lines = "\n".join(
+        f'{i + 1}. concept_id={a["concept_id"]} ({name_of.get(a["concept_id"], a["concept_id"])}) '
+        f'— Bloom tier: {a["tier"]}' for i, a in enumerate(assignments))
+    usr = (f"TOPIC: {topic['title']} ({topic['topic_id']}, section_text_len={len(topic['text'])})\n\n"
+           f"CONCEPTS:\n{concept_lines}\n\n"
+           f"AUTHOR EXACTLY {len(assignments)} OUTCOMES — ONE PER ASSIGNMENT, IN ORDER:\n{assignment_lines}")
+    data = parse_json(chat([{"role": "system", "content": sys},
+                            {"role": "user", "content": usr}], temperature=TEMP_AUTHOR)) or []
+    return data if isinstance(data, list) else []
+
+
 def _author_topic(state: dict, topic: dict, plan_row: dict) -> list:
     # Author ONLY against in-scope (substantively explained) concepts — a named-only or
     # external concept was dropped by profile_coverage and must not seed an outcome.
@@ -128,21 +145,28 @@ def _author_topic(state: dict, topic: dict, plan_row: dict) -> list:
         f'{sorted(allowed_verbs_for(c.get("depth_category", "moderate"), bool(c.get("procedural"))))}] '
         f'— {(c.get("description") or "").strip()[:240]} '
         f'(evidence: "{c["evidence"]["quote"][:120]}")' for c in inv)
-    assignment_lines = "\n".join(
-        f'{i + 1}. concept_id={a["concept_id"]} ({name_of.get(a["concept_id"], a["concept_id"])}) '
-        f'— Bloom tier: {a["tier"]}' for i, a in enumerate(assignments))
     sys = (get_prompt("lo.author_sys", _AUTHOR_SYS)
            .replace("<REMEMBER_VERBS>", str(sorted(VERBS["remember"])))
            .replace("<UNDERSTAND_VERBS>", str(sorted(VERBS["understand"])))
            .replace("<APPLY_VERBS>", str(sorted(VERBS["apply"])))
            .replace("<SCENARIO_VERBS>", str(sorted(VERBS["scenario"]))))
-    usr = (f"TOPIC: {topic['title']} ({topic['topic_id']}, section_text_len={len(topic['text'])})\n\n"
-           f"CONCEPTS:\n{concept_lines}\n\n"
-           f"AUTHOR EXACTLY {len(assignments)} OUTCOMES — ONE PER ASSIGNMENT, IN ORDER:\n{assignment_lines}")
-    data = parse_json(chat([{"role": "system", "content": sys},
-                            {"role": "user", "content": usr}], temperature=TEMP_AUTHOR)) or []
-    items = data if isinstance(data, list) else []
-    return _reconcile_to_assignments(items, topic, assignments, inv)
+
+    out: list = [None] * len(assignments)
+    # Pass 1 — author every assignment, then staged-match the items onto their planned slots.
+    _match_items(_author_items(sys, topic, concept_lines, assignments, name_of),
+                 topic, assignments, inv, out)
+    # Pass 2 — LLM GAP-FILL: re-author ONLY the assignments pass 1 left unfilled (real outcomes,
+    # not placeholders). Still clamped by _coerce_outcome, so tier/verb/grounding are guaranteed.
+    # One extra call, fired only when pass 1 under-produced (rare at TEMP_AUTHOR).
+    missing = [a for i, a in enumerate(assignments) if out[i] is None]
+    if missing:
+        _match_items(_author_items(sys, topic, concept_lines, missing, name_of),
+                     topic, assignments, inv, out)
+    # Last resort — deterministic grounded synthesis for anything the LLM never produced.
+    for i, a in enumerate(assignments):
+        if out[i] is None:
+            out[i] = _synthesize_outcome(topic, a, inv)
+    return out
 
 
 def author_outcomes(state, config) -> dict:

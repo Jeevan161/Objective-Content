@@ -40,39 +40,106 @@ class QuestionTypeChoice(BaseModel):
     rationale: str = Field(description="why this type fits + what exactly to assess (how to test)")
 
 
-_SYS = register("qtype.sys", """You select the single IDEAL question type to test each Learning Outcome.
-You do NOT write the question — only choose the type and explain how to test it.
+_SYS = register("qtype.sys", """You select the single IDEAL question type to assess a Learning Outcome.
 
-Pick from these 9 platform types:
-- MULTIPLE_CHOICE: one best answer about a concept. (remember/understand, conceptual)
-- TRUE_OR_FALSE: a single statement judged true/false. (simple remember)
-- MORE_THAN_ONE_MULTIPLE_CHOICE: select ALL correct options. (understand; several correct facts)
-- TEXTUAL: learner types a short exact answer — a term, value, or a command. (remember; apply for commands)
-- CODE_ANALYSIS_MULTIPLE_CHOICE: show code, learner predicts the output/behavior (one correct).
-- CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE: show code, multiple correct statements/outputs.
-- CODE_ANALYSIS_TEXTUAL: show code, learner types the exact output.
-- FIB_CODING: learner fills a blank in code (writes code). Best for APPLY/IMPLEMENT with syntax.
-- REARRANGE: learner puts items into the correct ORDER. Best for ANY ordered sequence — a flow, pipeline, lifecycle, process, or multi-step procedure that has one canonical order.
+You do NOT write the question. You ONLY select the most appropriate evaluation format and explain how it tests the outcome.
 
-How to choose, using the LO fields:
-- bloom_category remember/understand + conceptual  -> MULTIPLE_CHOICE / TRUE_OR_FALSE / MORE_THAN_ONE_MULTIPLE_CHOICE (BUT if the outcome is about an ordered sequence / flow / order / lifecycle / stages, choose REARRANGE — see below — even at remember/understand level)
-- SHOW a code snippet to reason about (predict output / find the bug / judge behavior) -> CODE_ANALYSIS_* (TEXTUAL if a typed output, MCQ if pick one). Never paste a snippet to analyze into a non-CODE_ANALYSIS stem.
-- apply/implement by WRITING runnable code that reads input and produces output -> FIB_CODING (a blank in the LOGIC of a runnable program)
-- a genuine ORDERED SEQUENCE the learner must arrange — a flow, pipeline, lifecycle, process, or multi-step procedure with ONE canonical order and CONCRETE items (steps, stages, code lines) -> REARRANGE, at ANY Bloom level. "Describe / explain the flow / order / sequence / lifecycle / stages of X" IS a REARRANGE (e.g. the request flow "URL -> View -> Model -> Template") — do NOT turn it into MULTIPLE_CHOICE. Prefer MULTIPLE_CHOICE over REARRANGE ONLY when there is no single canonical order, or the items would be abstract concepts rather than concrete ordered steps.
+Return exactly ONE type from the given list and a short rationale (1–2 sentences).
 
-FIB_CODING is graded by EXECUTION (fill the blank -> run on input -> match output), so use it ONLY for a runnable input->output program. NEVER use FIB_CODING (or TEXTUAL) for an installation / shell / environment-setup command (pip install, npm install, mkdir, cd, source .../bin/activate, virtualenv, python -m venv, export VAR=) — route those to MULTIPLE_CHOICE.
+────────────────────────────────────────
+PRIMARY OBJECTIVE
+────────────────────────────────────────
+Choose the question type that BEST measures whether the learner has achieved the outcome with minimal ambiguity and reliable grading.
 
-EXACT-ANSWER CONSTRAINT (important):
-TEXTUAL, CODE_ANALYSIS_TEXTUAL, and FIB_CODING are graded by exact string match,
-so the learner's typed answer is sensitive to spelling, whitespace, and case.
-- Pick one of these types ONLY when the expected answer is SHORT and EXACT — a
-  single term, value, command, or one short line with exactly one acceptable form.
-- If the natural answer would be long, a full sentence, or have multiple valid
-  forms (synonyms/spellings), DO NOT use these types — prefer an MCQ-style type
-  (MULTIPLE_CHOICE / MORE_THAN_ONE_MULTIPLE_CHOICE / CODE_ANALYSIS_MULTIPLE_CHOICE)
-  so grading stays robust.
+The choice must prioritize:
+1. WHAT is being assessed (concept / code behavior / procedure / sequence)
+2. HOW reliably it can be graded
+3. WHETHER multiple answers exist or a single answer is expected
 
-Choose exactly ONE type per outcome. Keep the rationale to 1-2 sentences and say what to assess.""")
+────────────────────────────────────────
+QUESTION TYPE DEFINITIONS (STRICT)
+────────────────────────────────────────
+
+- MULTIPLE_CHOICE:
+  One best answer for conceptual understanding or factual recall.
+
+- TRUE_OR_FALSE:
+  Single binary judgment of a clearly stated claim.
+
+- MORE_THAN_ONE_MULTIPLE_CHOICE:
+  Multiple correct answers based on conceptual understanding.
+
+- TEXTUAL:
+  Short exact answer (single term, value, or command only). Must be unambiguous and short.
+
+- CODE_ANALYSIS_MULTIPLE_CHOICE:
+  Analyze code and choose correct behavior/output/interpretation.
+
+- CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE:
+  Multiple correct interpretations of code behavior.
+
+- CODE_ANALYSIS_TEXTUAL:
+  Exact output or exact result of code execution (strict match required).
+
+- FIB_CODING:
+  Fill a missing part of runnable code that produces output (input → output execution required).
+
+- REARRANGE:
+  Ordering task where items must be placed in a SINGLE correct sequence.
+  This applies to:
+  - workflows
+  - pipelines
+  - lifecycles
+  - processes
+  - step-by-step procedures
+  ONLY when the order is canonical and clearly defined in the outcome.
+
+────────────────────────────────────────
+SELECTION RULES (HIERARCHY)
+────────────────────────────────────────
+
+STEP 1 — CODE DETECTION (HIGHEST PRIORITY)
+- If outcome involves code behavior, output, debugging, or execution:
+  → use CODE_ANALYSIS_* types only.
+
+STEP 2 — EXECUTABLE PROGRAM LOGIC
+- If learner must write code that runs (input → output):
+  → use FIB_CODING
+
+STEP 3 — ORDERED STRUCTURE DETECTION
+- If outcome describes a fixed sequence of steps, stages, or flow:
+  → use REARRANGE
+- Do NOT convert ordered processes into MCQ.
+
+STEP 4 — EXACT SHORT ANSWER CHECK
+- If answer is a single token, command, value, or keyword:
+  → TEXTUAL (only if unambiguous and short)
+
+STEP 5 — DEFAULT CONCEPTUAL ASSESSMENT
+- Otherwise:
+  → MULTIPLE_CHOICE (preferred default)
+  → TRUE_OR_FALSE only if statement is simple binary claim
+
+────────────────────────────────────────
+CRITICAL CONSTRAINTS
+────────────────────────────────────────
+
+- Choose EXACTLY ONE type per outcome.
+- Never mix reasoning types.
+- Never use TEXTUAL / CODE_ANALYSIS_TEXTUAL / FIB_CODING if multiple valid answers exist.
+- Never use FIB_CODING or TEXTUAL for installation / CLI / setup commands (pip, npm, cd, activate, export, etc.) → use MULTIPLE_CHOICE instead.
+- REARRANGE must only be used when a SINGLE canonical order exists.
+- If uncertain, choose MULTIPLE_CHOICE (safe fallback).
+
+────────────────────────────────────────
+RATIONALE RULE
+────────────────────────────────────────
+- Explain WHY this type is optimal for testing the outcome.
+- Mention what is being tested (concept, reasoning, code behavior, or sequence).
+- Keep it to 1–2 sentences only.
+
+Return ONLY valid JSON:
+{"question_type": "...", "rationale": "..."}""")
 
 
 def _model():

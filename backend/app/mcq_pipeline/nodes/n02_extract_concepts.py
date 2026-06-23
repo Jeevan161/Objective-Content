@@ -1,4 +1,24 @@
-"""LO pipeline · Node 2 — extract_concepts (K-sample self-consistency)."""
+"""LO pipeline · Node 2 — extract_concepts.
+
+Finds the distinct teachable CONCEPTS in each topic section produced by parse_structure.
+
+What it does:
+  * For every section, calls the extractor LLM (`lo.extract_sys`) K times and keeps only the
+    concepts that reach a MAJORITY across those K runs — "K-sample self-consistency", which
+    suppresses one-off LLM drift/hallucination. For each surviving concept it keeps the richest
+    sample (the longest grounded description) plus a VERBATIM evidence quote from the section.
+  * In parallel, derives a short grounded DESCRIPTION for each topic (`lo.topic_desc_sys`), kept
+    only if it traces back to the section text — otherwise it falls back to the topic title.
+  * Sections run concurrently via `pmap`; a section that yields no stable concept is flagged.
+
+A concept is a TRANSFERABLE idea / skill / rule — never an example-local label ("Project A", a
+sample variable). The illustrative example is evidence FOR a concept, not a concept itself.
+
+Input:  state["sections"]  — topic sections (see parse_structure).
+Output: raw_concepts = [{name, description, evidence: {quote, section}}]  +  the sections enriched
+        with a grounded `description`  +  per-section extraction logs.
+Downstream: canonicalize_concepts dedups/merges these into the canonical concept inventory.
+"""
 from __future__ import annotations
 
 from collections import Counter
@@ -13,21 +33,112 @@ from app.mcq_pipeline.nodes._common import _bind_rag, _prog
 
 # ── Node 2 · extract_concepts (A · K-sample self-consistency) ─────────────── #
 _EXTRACT_SYS = register("lo.extract_sys", """\
-You extract the distinct teachable CONCEPTS from one section of instructional reading material (any subject). A concept is a TRANSFERABLE idea, skill, or rule a learner could be assessed on and could apply BEYOND this specific reading (e.g. "dependency version conflict", "virtual environment isolation", "list slicing").
+You extract the DISTINCT, TEACHABLE CONCEPTS from one section of instructional reading material (any subject).
 
-Instructional text usually teaches a concept THROUGH an illustrative example — a scenario, sample program, story, or named placeholders such as "Project A"/"Project B", sample variable/file/function names, characters, or one-off sample values. The example is EVIDENCE for a concept; it is NOT itself a concept. Extract the general concept the example demonstrates and give it a self-contained, transferable canonical name. NEVER turn an example's label or a one-off detail into a concept (extract "dependency version conflict", NOT "Project A" or "the Django version Project A needs").
+A concept is a TRANSFERABLE idea, rule, skill, mechanism, or principle that a learner could be assessed on and could apply BEYOND this specific section.
 
-Genuinely taught technologies, tools, commands, or terms the learner must know BY NAME (e.g. "venv", "pip", "Django") ARE valid concepts — keep those. Do NOT invent concepts not present in the text.
+---
 
-Prefer SPECIFIC, single-idea concepts over broad umbrellas. If a section covers a broad activity (e.g. "project setup"), extract the distinct sub-concepts it actually teaches (e.g. "dependency isolation", "creating a virtual environment", "activating an environment") rather than one vague umbrella.
+### CORE DISTINCTION RULE
+Instructional text often teaches concepts through examples (scenarios, sample programs, stories, placeholder names like "Project A", "User1", sample files, or values).
+- Examples are ONLY evidence.
+- NEVER treat example labels or concrete instances as concepts.
+- Extract the GENERALIZED idea demonstrated by the example.
 
-A concept must be SUBSTANTIVELY taught (the section defines, explains, or demonstrates it) — not merely NAMED in passing. When the section just lists items or gives a one-line overview (e.g. "the three frameworks are A, B, C, each for a different use"), capture the overview as ONE concept; do not mint a deep, separately-assessable concept per named item, and do not imply the items are contrasted unless the text actually contrasts them.
+✔ Correct: "dependency version conflict"
+✘ Incorrect: "Project A", "Django Project A"
 
-For each concept give:
-- "name": a SHORT transferable canonical name (no example-specific labels).
-- "description": 1-2 sentences stating what THIS section actually teaches about the concept — grounded ONLY in the text, no outside knowledge, no claims the section does not make. Describe it the way the material does; do not generalize beyond it.
-- "quote": a VERBATIM evidence quote copied from the section that supports the description (the quote MAY cite the example).
-Return ONLY a JSON list: [{"name": "...", "description": "...", "quote": "..."}]. 4-8 concepts max.""")
+---
+
+### CROSS-DOMAIN ABSTRACTION RULE (NEW IMPORTANT RULE)
+
+Examples and scenarios may appear in domain-specific forms (coding, networking, biology, finance, etc.).
+
+You MUST:
+- Recognize the SAME underlying concept even if expressed in different domains.
+- Normalize it into a domain-independent conceptual form.
+
+✔ Examples of correct abstraction:
+- "Docker container isolation" → "environment isolation"
+- "Bank account overdraft example" → "resource limit violation"
+- "TCP packet retransmission" → "reliable data transfer mechanism"
+- "Student A / Student B comparison" → "entity comparison logic"
+
+✘ Do NOT:
+- Keep domain-specific framing as the concept itself
+- Create separate concepts for the same underlying idea across domains
+- Anchor concept names to the story/context unless it is essential to the idea
+
+However:
+- If a concept is inherently domain-specific (e.g. "venv", "HTTP GET", "SQL JOIN"), KEEP the domain term as the concept name.
+
+---
+
+### VALID CONCEPT INCLUSION RULES
+
+Include a concept ONLY if:
+
+1. It is EXPLICITLY taught, explained, defined, or demonstrated in the text.
+2. It is SUBSTANTIVE (not just mentioned in passing).
+3. It is TRANSFERABLE beyond the given example or context.
+
+---
+
+### TOOL / TERMINOLOGY RULE
+
+Technologies, tools, commands, or domain terms explicitly taught by name ARE valid concepts:
+Examples: "pip", "venv", "Django", "HTTP GET"
+
+Do NOT infer concepts not present in the text.
+
+---
+
+### GRANULARITY RULE
+
+Prefer SPECIFIC, single-idea concepts over broad umbrellas.
+
+✔ Good:
+- "creating a virtual environment"
+- "installing dependencies"
+
+✘ Bad:
+- "project setup process"
+
+---
+
+### GROUPING RULE FOR LIST-STYLE CONTENT
+
+If the section only lists items or gives a high-level overview:
+
+- Extract ONE concept representing the OVERVIEW.
+- Do NOT break into multiple concepts unless each item is independently explained.
+
+---
+
+### OUTPUT REQUIREMENTS
+
+For each concept return:
+
+- "name": short, canonical, transferable concept name (no example-specific labels)
+- "description": 1–2 sentences strictly grounded in the text only. No external knowledge.
+- "quote": verbatim supporting evidence from the section
+
+---
+
+### STRICT LIMITS
+
+- Return ONLY valid JSON
+- Output must be a JSON list
+- 4–8 concepts max
+- Every concept MUST have a supporting quote
+- No markdown, no commentary, no extra text
+
+---
+
+### FINAL OUTPUT FORMAT
+
+[{"name": "...", "description": "...", "quote": "..."}]
+""")
 
 
 def _extract_once(section: dict) -> dict:

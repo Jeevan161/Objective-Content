@@ -1,13 +1,26 @@
 """LO pipeline · Node 1 — parse_structure.
 
-Splits the reading material into TOPIC sections. An LLM segmenter decides the topic
-boundaries (semantic, heading-independent), but the split itself is deterministic and
-lossless: the LLM returns only the START LINE of each topic, and a script partitions the
-ORIGINAL line array at those indices. Anchoring on line NUMBERS (not sentence text) means a
-sentence repeated in the material can never create an ambiguous cut. If the LLM is
-unavailable or its response fails any guard, we fall back to the original markdown-heading
-split (also lossless). Either way, every non-whitespace token of the source is preserved
-(asserted before returning).
+Splits the raw reading material into ordered TOPIC sections — the teaching units the rest of the
+pipeline is organized around (per-topic concept extraction, budget allocation, authoring).
+
+What it does:
+  * Sends the source to a segmenter LLM (`lo.segment_sys`, temp 0) with every line numbered, and
+    gets back each topic's START LINE — boundaries decided semantically, independent of the
+    author's markdown headings.
+  * A deterministic script then slices the ORIGINAL line array at those indices. Anchoring on line
+    NUMBERS (not sentence text) means a sentence repeated in the material can never create an
+    ambiguous cut.
+  * Guards keep it lossless and safe: start_lines must be in-range and STRICTLY INCREASING, any
+    preamble before the first topic becomes an "Introduction" section, and a non-whitespace
+    TOKEN-CONSERVATION check asserts no content was dropped or invented.
+  * If the LLM is unavailable or any guard fails, it falls back to the original markdown-heading
+    split (`_regex_sections`, itself lossless) — a run never blocks.
+
+Input:  state["source_text"]  — the raw reading material.
+Output: sections = [{topic_id, title, order, text, has_code}]  +  a log noting the method used
+        ("llm" vs "regex-fallback") and the topic count.
+Downstream: extract_concepts runs per section; topic_id threads through allocation, authoring, the
+        dependency DAG, sequencing, and repair.
 """
 from __future__ import annotations
 

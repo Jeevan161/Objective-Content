@@ -14,15 +14,47 @@ from app.mcq_pipeline.nodes._common import _prog
 # verb/Bloom tiers). LLM-primary (prompt lo.sequence_sys); deterministic graph+weight
 # sort as the fallback when the LLM is unavailable.
 _SEQUENCE_SYS = register("lo.sequence_sys", (
-    "You order a set of learning outcomes into the ideal pedagogical sequence — a DEEP DIVE "
-    "that starts with the most FOUNDATIONAL/basic and progresses to the most advanced, so "
-    "each question builds on what came before. HARD RULE: never place an outcome before one "
-    "it depends on (respect the prerequisite edges). Balance the per-outcome signals: "
-    "dag_depth (0 = foundational, higher = more advanced — earlier first), weight (higher = "
-    "more foundational, earlier), topic_order (the reading's own sequence), and level/depth. "
-    "This must work for ANY subject — judge from these signals, not from keywords. Return "
-    'ONLY JSON: {"order": ["<outcome_id>", ...]} listing EVERY given id EXACTLY once, first '
-    "to last."
+    "You order a set of learning outcomes into a STRICT pedagogical sequence that behaves like a "
+    "DEPENDENCY-SAFE deep dive.\n\n"
+
+    "PRIMARY GOAL:\n"
+    "- Produce a single valid ordering where learning progresses from foundational → advanced.\n"
+    "- Ensure each outcome appears exactly once.\n\n"
+
+    "HARD CONSTRAINT (NON-NEGOTIABLE):\n"
+    "- If outcome A depends on outcome B (via prerequisite concept edges), then B MUST appear before A.\n"
+    "- This is a strict ordering constraint, not a suggestion.\n\n"
+
+    "ORDERING PRINCIPLES (in priority order):\n"
+    "1. PREREQUISITE VALIDITY (hard constraint)\n"
+    "   - Never violate dependency edges between concepts.\n\n"
+
+    "2. FOUNDATIONALITY (primary sorting signal)\n"
+    "   - Lower dag_depth comes BEFORE higher dag_depth.\n"
+    "   - Higher weight (more downstream dependents) comes earlier.\n\n"
+
+    "3. TOPIC FLOW COHERENCE (secondary constraint)\n"
+    "   - Prefer keeping outcomes within the same topic_order together.\n"
+    "   - Only move across topics when required by dependencies or stronger foundationality.\n\n"
+
+    "4. CONCEPT COMPLEXITY PROGRESSION\n"
+    "   - Simpler conceptual depth comes before complex depth.\n"
+    "   - Use depth only as a tie-breaker after structural constraints.\n\n"
+
+    "TIE-BREAK RULE (STRICT AND STABLE):\n"
+    "- If two outcomes are otherwise equivalent, preserve original relative order by id.\n\n"
+
+    "CRITICAL RULES:\n"
+    "- Do NOT randomize ordering.\n"
+    "- Do NOT reorder within the same concept unless required by dependency constraints.\n"
+    "- Do NOT violate DAG structure even for better narrative flow.\n\n"
+
+    "OUTPUT REQUIREMENT:\n"
+    "- Return ONLY JSON.\n"
+    "- Must include EVERY outcome id exactly once.\n"
+    "- Must be a full permutation, not partial ordering.\n\n"
+
+    'Return ONLY JSON: {"order": ["<outcome_id>", ...]}'
 ))
 
 

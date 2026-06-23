@@ -3,8 +3,67 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from app.mcq_pipeline.config import BUDGET_STEP, MAX_LOS_PER_CONCEPT, MIN_BUDGET, QUESTION_BUDGET, SCENARIO_TARGET, TIER_ORDER, feasible_tiers
-from app.mcq_pipeline.nodes._common import _ctx, _prog
+from app.mcq_pipeline.config import (BUDGET_STEP, K_SAMPLES, MAX_LOS_PER_CONCEPT, MIN_BUDGET,
+                                     QUESTION_BUDGET, SCENARIO_TARGET, TEMP_GRAPH, TIER_ORDER,
+                                     USE_LLM_IMPORTANCE_RANKING, feasible_tiers)
+from app.mcq_pipeline.prompts.store import get_prompt, register
+from app.mcq_pipeline.utils.concurrency import pmap
+from app.mcq_pipeline.utils.llm import chat, parse_json
+from app.mcq_pipeline.nodes._common import _bind_rag, _ctx, _prog
+
+
+# Importance ranking (OPTIONAL · LLM proposes, deterministic allocator disposes) ── #
+_RANK_SYS = register("lo.rank_importance", (
+    "You rank how PEDAGOGICALLY CENTRAL each concept is within ONE learning session — "
+    "how much it deserves extra practice, application, and scenario-based assessment.\n\n"
+
+    "Return ONLY JSON:\n"
+    '{"scores": {"<concept_id>": <float 0.0-1.0>, ...}}\n\n'
+
+    "Scoring rules:\n"
+    "- HIGH (0.7–1.0): core mechanisms, foundational concepts, or concepts many others depend on\n"
+    "- MEDIUM (0.4–0.7): useful but not central\n"
+    "- LOW (0.0–0.4): peripheral, contextual, or lightly referenced concepts\n\n"
+
+    "Rules:\n"
+    "- Score ALL given concept_ids\n"
+    "- Do NOT invent or modify IDs\n"
+    "- No explanation or markdown\n"
+))
+
+
+def _importance_scores(inv_scope: list, graph: dict, config) -> dict:
+    """LLM importance score in [0,1] per in-scope concept_id, K-sample averaged. Returns {} on
+    any failure so the caller can fall back to inventory order. NEVER affects budget/feasibility —
+    it only reorders who the allocator reaches first for scarce slots."""
+    adj = (graph or {}).get("_adj", {})            # adj[X] = concepts that depend on X (its dependents)
+    dependents = {c["concept_id"]: len(adj.get(c["concept_id"], [])) for c in inv_scope}
+
+    def _line(c):
+        return (f'{c["concept_id"]}: {c["canonical_name"]} '
+                f'[depth={c.get("depth_category", "moderate")}, '
+                f'procedural={bool(c.get("procedural"))}, '
+                f'dependents={dependents.get(c["concept_id"], 0)}] '
+                f'evidence: "{(c.get("evidence") or {}).get("quote", "")[:100]}"')
+
+    usr = "CONCEPTS:\n" + "\n".join(_line(c) for c in inv_scope)
+
+    def _vote(_i):
+        d = parse_json(chat([{"role": "system", "content": get_prompt("lo.rank_importance", _RANK_SYS)},
+                             {"role": "user", "content": usr}], temperature=TEMP_GRAPH)) or {}
+        return d.get("scores", {}) if isinstance(d, dict) else {}
+
+    ids = {c["concept_id"] for c in inv_scope}
+    agg, cnt = defaultdict(float), defaultdict(int)
+    try:
+        for scores in pmap(_vote, list(range(K_SAMPLES))):
+            for cid, s in (scores or {}).items():
+                if cid in ids and isinstance(s, (int, float)):
+                    agg[cid] += float(s)
+                    cnt[cid] += 1
+    except Exception:                              # noqa: BLE001 — any LLM/parse failure → fall back
+        return {}
+    return {cid: agg[cid] / cnt[cid] for cid in agg if cnt[cid]}
 
 
 # ── Node 5 · plan_allocation / Planner (D · feasibility-driven 4-tier division) ── #
@@ -32,23 +91,29 @@ def _quantize_budget(requested: int, capacity: int, n_concepts: int) -> tuple:
     return final, flags
 
 
-def _allocate_tiers(inv_scope: list, final_budget: int) -> list:
+def _allocate_tiers(inv_scope: list, final_budget: int, rank: dict | None = None) -> list:
     """Deterministic feasibility-driven allocator. Produces exactly `final_budget`
     (concept_id, tier) assignments: (a) one LO per in-scope concept (coverage / V4) at its top
     non-scenario feasible tier; (b) up to SCENARIO_TARGET scenario LOs from deep+procedural
     concepts; (c) fill to budget by deepening concepts that still have capacity
-    (<= MAX_LOS_PER_CONCEPT), foundational tier first. Feasibility is never exceeded."""
+    (<= MAX_LOS_PER_CONCEPT), foundational tier first. Feasibility is never exceeded.
+
+    `rank` (optional LLM importance scores) only reorders WHO the scarce scenario slots (b) and
+    extra deepening LOs (c) reach first — it never changes budget, coverage, or feasibility. Ties
+    and missing scores (default 0.5) preserve the original inventory order (stable)."""
     assignments, used = [], defaultdict(set)
+    # Highest-importance concepts first for the discretionary passes; inventory order if no rank.
+    ranked = sorted(inv_scope, key=lambda c: -rank.get(c["concept_id"], 0.5)) if rank else inv_scope
 
     def add(cid, tier):
         assignments.append({"concept_id": cid, "tier": tier})
         used[cid].add(tier)
 
-    for c in inv_scope:                          # (a) coverage
+    for c in inv_scope:                          # (a) coverage — every concept, order irrelevant
         tiers = [t for t in _feasible_concept(c) if t != "scenario"]
         add(c["concept_id"], tiers[-1] if tiers else "remember")
 
-    for c in inv_scope:                          # (b) scenario quota
+    for c in ranked:                             # (b) scenario quota — most central first
         if sum(1 for a in assignments if a["tier"] == "scenario") >= SCENARIO_TARGET:
             break
         if len(assignments) >= final_budget:
@@ -59,7 +124,7 @@ def _allocate_tiers(inv_scope: list, final_budget: int) -> list:
     progressed = True                            # (c) fill to budget (deepen with spare tiers)
     while len(assignments) < final_budget and progressed:
         progressed = False
-        for c in inv_scope:
+        for c in ranked:                         # most central first
             if len(assignments) >= final_budget:
                 break
             cid = c["concept_id"]
@@ -94,7 +159,15 @@ def plan_allocation(state, config) -> dict:
         c["apply_suitable"] = "apply" in feasible_tiers(
             c.get("depth_category", "moderate"), bool(c.get("procedural")))
 
-    assignments = _allocate_tiers(inv_scope, final_budget)
+    # OPTIONAL: LLM ranks concept importance so scarce scenario / extra-deepening slots go to the
+    # most central concepts first. Bounded to reordering only — budget, coverage, and feasibility
+    # stay deterministic. Empty {} (disabled or any failure) → allocator keeps inventory order.
+    rank = {}
+    if USE_LLM_IMPORTANCE_RANKING and inv_scope and final_budget > n:
+        _bind_rag(config)
+        rank = _importance_scores(inv_scope, state.get("concept_graph"), config)
+
+    assignments = _allocate_tiers(inv_scope, final_budget, rank or None)
 
     topic_of = {c["concept_id"]: c["topic_id"] for c in inv}
     plan = {t["topic_id"]: {"topic_id": t["topic_id"], "title": t["title"], "order": t["order"],
@@ -129,12 +202,14 @@ def plan_allocation(state, config) -> dict:
                      "reason": c.get("out_of_scope_reason", "out of scope")}
                     for c in inv if not c.get("in_scope")],
         "flags": [f["flag"] for f in flags],
+        "importance_ranked": bool(rank),   # were scarce slots LLM-prioritized vs inventory order?
     }
     allocation = {"by_topic": plan, "tier_counts": tier_counts,
                   "question_budget": final_budget, "capacity": capacity}
     overrides = [{"rule": "feasibility_division", **f} for f in flags]
     logs = [{"node": "plan_allocation", "budget": final_budget, "requested": requested,
-             "tier_counts": tier_counts, "flags": [f["flag"] for f in flags]}]
+             "tier_counts": tier_counts, "flags": [f["flag"] for f in flags],
+             "importance_ranked": bool(rank)}]
     prog.done("plan_allocation",
               detail=f"budget {final_budget} · "
                      + "/".join(f"{k[:3]}:{tier_counts[k]}" for k in TIER_ORDER))

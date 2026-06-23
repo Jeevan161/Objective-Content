@@ -17,6 +17,14 @@ MAX_LOS_PER_CONCEPT = 2             # capacity = (# in-scope concepts) x this
 MIN_BUDGET = 5                      # floor; budget is quantized to multiples of BUDGET_STEP
 BUDGET_STEP = 5                     # step the budget down to the nearest multiple of 5 when thin
 SCENARIO_TARGET = 2                 # aim for ~this many scenario LOs when feasible (0 is allowed)
+# When True, an LLM ranks concepts by pedagogical importance and the allocator hands the scarce
+# scenario / extra-deepening slots to the most central concepts first (LLM proposes, deterministic
+# allocator disposes within all ceilings). Falls back to inventory order if disabled or on failure.
+USE_LLM_IMPORTANCE_RANKING = True
+# When True, prerequisite coverage is checked by an LLM-driven, RAG-GROUNDED probe: the LLM writes
+# search queries (per depth aspect), the RAG tool answers, and the LLM judges covered + depth from
+# the retrieved evidence ONLY. Falls back to a single grounded check_concept if disabled/unavailable.
+USE_LLM_COVERAGE_PROBE = True
 
 # Quality: a concept only NAMED in passing (taught_depth "mention") is not assessable beyond
 # bare recall, so it is dropped from scope rather than seeding a recall LO on a bare mention.

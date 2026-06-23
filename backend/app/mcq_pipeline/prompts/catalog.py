@@ -31,7 +31,9 @@ _LO_STAGE = {
 _DETERMINISTIC_NOTE = ("Deterministic stage — driven by code, not an LLM. The rules "
                        "below are read-only reference documentation.")
 _STAGE_NOTES = {
-    "parse_structure": _DETERMINISTIC_NOTE,
+    "parse_structure": ("Hybrid — an LLM (lo.segment_sys) proposes the topic boundaries; a "
+                        "deterministic line-split enforces them losslessly and falls back to "
+                        "the heading rules below if the LLM is unavailable."),
     "canonicalize_concepts": _DETERMINISTIC_NOTE,
     "plan_allocation": _DETERMINISTIC_NOTE,
     "resolve_prerequisites": _DETERMINISTIC_NOTE,

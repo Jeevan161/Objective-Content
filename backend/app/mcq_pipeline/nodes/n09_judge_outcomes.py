@@ -17,37 +17,103 @@ from app.mcq_pipeline.nodes._common import _ctx, _prog
 # repair loop only re-scores what changed; degrades to "covered" if the LLM is
 # unavailable so it never blocks a run.
 _RUBRIC = register("lo.rubric", (
-    "You score ONE learning outcome against the reading material with a STRICT, UNIFORM RUBRIC. "
-    "A learner will see ONLY a question built from this outcome and must answer it from THIS "
-    "material PLUS whatever the listed PREREQUISITES cover (a prerequisite taught here or in a "
-    "prior course is fair game) — but NO other outside knowledge. For EACH criterion, PASS/FAIL:\n"
-    "R1 PRESENT — the concept is explicitly TAUGHT here (not merely named in passing or assumed).\n"
-    "R2 DEPTH MATCHES DEMAND — taught to the depth the verb needs: remember (identify/list/define) "
-    "= the fact is stated; understand (explain/describe) = the reason/explanation is given; "
-    "comparison = the items are EXPLICITLY contrasted; apply = method/steps/worked example shown; "
-    "scenario = enough shown that the method TRANSFERS to a new situation.\n"
-    "R3 ANSWERABLE — a learner with ONLY this material (plus the listed prerequisites) can "
-    "determine the answer with certainty; no un-taught outside knowledge, no inference the "
-    "material does not make.\n"
-    "R4 NO BEYOND-SCOPE LEAP — does NOT require a detail, value, case, comparison, or sub-topic "
-    "absent from BOTH this material and the listed prerequisites. (THE key failure: the concept is "
-    "covered, but the outcome reaches past it.)\n"
-    "R5 ANSWER KEY DERIVABLE — the single correct answer (and why wrong options are wrong) is "
-    "derivable from the material.\n"
-    "R6 SELF-CONTAINED & TRANSFERABLE — states the GENERAL concept; references NO source-local "
-    "entity (a scenario label like 'Project A', a sample variable/file/function name, a character, "
-    "or a one-off value).\n"
-    "R7 DISTINCT & SINGLE-ANSWER — targets ONE concept with ONE unambiguous correct answer (not a "
-    "broad/umbrella outcome admitting several defensible answers).\n"
-    "R8 APPLY-VALIDITY — for apply/scenario outcomes ONLY: the material shows HOW (method, steps, "
-    "or a worked example) so genuine application is possible. For remember/understand, pass R8.\n\n"
-    "Judge THIS ONE outcome in ISOLATION. Apply the rubric STRICTLY: the DEFAULT is FAIL; pass a "
-    "criterion ONLY when the material (or a listed prerequisite) PLAINLY supplies what is needed. "
-    "Any doubt, gap, or required un-taught inference means FAIL. Give NO benefit of the doubt.\n"
-    'Return ONLY JSON: {"R1_present":<bool>,"R2_depth":<bool>,"R3_answerable":<bool>,'
-    '"R4_in_scope":<bool>,"R5_answer_key":<bool>,"R6_self_contained":<bool>,"R7_distinct":<bool>,'
-    '"R8_apply_valid":<bool>,"fail_reason":"<one line: exactly what is missing, or empty if all '
-    'pass>","suggested_fix":"<a lower/safer outcome the material DOES fully support, or empty>"}.'
+    "You are a STRICT validator of learning outcomes against a reading passage.\n"
+    "You decide whether a SINGLE outcome is fully supported by the material.\n\n"
+
+    "You must evaluate each criterion independently. Default is FAIL.\n\n"
+
+    "Return ONLY JSON:\n"
+    '{"R1_present":bool,"R2_depth":bool,"R3_answerable":bool,"R4_in_scope":bool,'
+    '"R5_answer_key":bool,"R6_self_contained":bool,"R7_distinct":bool,"R8_apply_valid":bool,'
+    '"fail_reason":"<one line>","suggested_fix":"<safe lower-level outcome>"}\n\n'
+
+    "----------------------------\n"
+    "CRITICAL REASONING RULE\n"
+    "----------------------------\n"
+    "A criterion passes ONLY if it is explicitly supported by:\n"
+    "- the section text OR\n"
+    "- the listed prerequisites (as valid prior knowledge)\n\n"
+
+    "If any required detail is missing or inferred → FAIL.\n\n"
+
+    "----------------------------\n"
+    "R1 PRESENT (TEACHING CHECK)\n"
+    "----------------------------\n"
+    "PASS only if the concept is explicitly taught in the section.\n"
+    "FAIL if it is only mentioned, named, or assumed.\n\n"
+
+    "----------------------------\n"
+    "R2 DEPTH MATCH (VERB ALIGNMENT)\n"
+    "----------------------------\n"
+    "PASS only if the material supports the ACTION TYPE:\n"
+    "- remember → fact explicitly stated\n"
+    "- understand → explanation or reasoning is explicitly given\n"
+    "- apply → step-by-step method OR worked example exists\n"
+    "- scenario → transfer is explicitly demonstrated\n\n"
+
+    "IMPORTANT:\n"
+    "- Do NOT assume missing steps\n"
+    "- Do NOT upgrade depth from inference\n\n"
+
+    "----------------------------\n"
+    "R3 ANSWERABLE (NO OUTSIDE KNOWLEDGE)\n"
+    "----------------------------\n"
+    "PASS only if a learner can answer using ONLY:\n"
+    "- section text\n"
+    "- listed prerequisites\n\n"
+
+    "FAIL if ANY external knowledge is required or implied.\n\n"
+
+    "----------------------------\n"
+    "R4 IN-SCOPE (NO BEYOND MATERIAL)\n"
+    "----------------------------\n"
+    "PASS only if ALL required details exist in:\n"
+    "- section OR prerequisites\n\n"
+
+    "FAIL if outcome introduces ANY missing element, case, value, or concept.\n\n"
+
+    "IMPORTANT DISTINCTION:\n"
+    "- R3 = can the learner answer?\n"
+    "- R4 = does the outcome stay within taught boundaries?\n\n"
+
+    "----------------------------\n"
+    "R5 ANSWER KEY DERIVABLE\n"
+    "----------------------------\n"
+    "PASS only if a single correct answer can be derived without ambiguity.\n"
+    "FAIL if multiple valid interpretations exist.\n\n"
+
+    "----------------------------\n"
+    "R6 SELF-CONTAINED\n"
+    "----------------------------\n"
+    "PASS only if outcome does NOT depend on:\n"
+    "- project names\n"
+    "- sample variables\n"
+    "- placeholder identifiers (Project A, File1, etc.)\n\n"
+
+    "----------------------------\n"
+    "R7 DISTINCT\n"
+    "----------------------------\n"
+    "PASS only if outcome targets ONE concept and ONE assessable idea.\n"
+    "FAIL if it mixes multiple concepts or broad umbrellas.\n\n"
+
+    "----------------------------\n"
+    "R8 APPLY VALIDITY\n"
+    "----------------------------\n"
+    "For apply/scenario outcomes ONLY:\n"
+    "- PASS only if method or steps are explicitly shown in material\n"
+    "For remember/understand → automatically PASS.\n\n"
+
+    "----------------------------\n"
+    "STRICT DEFAULT RULE\n"
+    "----------------------------\n"
+    "If uncertain → FAIL.\n"
+    "Do NOT give benefit of doubt.\n\n"
+
+    "----------------------------\n"
+    "FAILURE OUTPUT RULE\n"
+    "----------------------------\n"
+    "- fail_reason must state EXACT missing element\n"
+    "- suggested_fix must downgrade to a safe, explicitly supported outcome\n\n"
 ))
 
 _COVERAGE_SRC_CAP = 12000

@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from app.mcq_pipeline.config import MAX_RETRIES, REMEMBER_VERBS, TEMP_AUTHOR, TIER_ORDER, VERBS
+from app.mcq_pipeline.config import (MAX_RETRIES, REMEMBER_VERBS, TEMP_AUTHOR, TIER_ORDER, VERBS,
+                                     feasible_tiers)
 from app.mcq_pipeline.utils.concept_graph import ground_quote
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
@@ -15,20 +16,65 @@ from app.mcq_pipeline.nodes.n07_author_outcomes import _coerce_outcome
 # ── Node 9 · repair (A · loop) ────────────────────────────────────────────── #
 # DB-overridable (sentinel placeholders substituted in code).
 _REPAIR_SYS = register("lo.repair_sys", (
-    "Rewrite ONE learning outcome so it PASSES every rubric criterion it currently fails, WITHOUT "
-    "changing its Bloom tier or concept. Return ONLY one JSON object with the same keys as the "
-    'input. Keep bloom_level = "<TIER>" and concept_id = "<CONCEPT_ID>"; learner_action MUST be one '
-    "of <VERBS>. The evidence 'quote' MUST be copied verbatim from the section text. title and "
-    "description MUST be SELF-CONTAINED and TRANSFERABLE — state the general concept and NEVER "
-    "reference a source-local entity (a label like 'Project A'/'Project B', a sample variable/file/"
-    "function name, a character, or a one-off value). Stay STRICTLY within what the material "
-    "teaches — require no detail, value, or comparison the material does not cover. Directly "
-    "address the FAILED RULES, the JUDGE FEEDBACK, and the SUGGESTED FIX given below."
+    "Rewrite ONE learning outcome so it PASSES every rubric criterion it currently fails. Make the "
+    "MINIMAL change needed: fix only what the failed criteria require and preserve the outcome's "
+    "original intent everywhere else.\n\n"
+
+    "HARD CONSTRAINTS (never violate):\n"
+    '- Keep bloom_level = "<TIER>" and concept_id = "<CONCEPT_ID>" EXACTLY (the tier label and '
+    "concept are fixed by the plan; do not change them).\n"
+    "- learner_action MUST be one of <VERBS>. Within that set you MAY switch to a LOWER-demand verb "
+    "when the current one over-reaches what the material supports — this is the INTENDED way to fix "
+    "a depth (R2) or apply-validity (R8) failure WITHOUT changing the tier.\n"
+    "- Return ONLY one JSON object with the SAME keys as the CURRENT OUTCOME shown below.\n\n"
+
+    "GROUNDING (use ONLY the provided SECTION TEXT):\n"
+    "- Introduce NO fact, term, value, comparison, or sub-topic that is not explicitly present in "
+    "the SECTION TEXT. Make no inference beyond the evidence.\n"
+    "- The evidence 'quote' must be copied verbatim from the SECTION TEXT.\n"
+    "- If the material cannot support the outcome even at the lowest verb in <VERBS>, write the "
+    "SIMPLEST fully-supported outcome you can — never invent content to satisfy a criterion.\n\n"
+
+    "SELF-CONTAINED & TRANSFERABLE:\n"
+    "- title and description must state the GENERAL concept/skill and stand on their own.\n"
+    "- NEVER reference a source-local entity: a scenario label ('Project A'/'Project B'), a sample "
+    "variable/file/function name, a character, a dataset name, or a one-off numeric value — "
+    "generalise it. Technologies/tools genuinely taught by name MAY be named.\n\n"
+
+    "HOW TO FIX (address each FAILED RUBRIC CRITERION):\n"
+    "- R1_present / R3_answerable: re-anchor the outcome on what the SECTION TEXT actually states.\n"
+    "- R2_depth: lower the verb within <VERBS> and/or narrow the claim to the taught depth.\n"
+    "- R4_in_scope: remove the beyond-scope leap; keep only what the section covers.\n"
+    "- R6_self_contained: replace any source-local entity with the general concept.\n"
+    "- R7_distinct: sharpen to the ONE idea this outcome should test.\n"
+    "- R8_apply_valid: make the action a concrete procedure the section demonstrates, or lower the verb.\n\n"
+
+    "Directly address the FAILED RUBRIC CRITERIA, the JUDGE FEEDBACK, and the SUGGESTED FIX below. "
+    "Do not over-edit: leave untouched anything the failed criteria do not require you to change."
 ))
 
 
 def _topic_of(state, tid):
     return next(t for t in state["sections"] if t["topic_id"] == tid)
+
+
+# Safe default verb per tier for the deterministic grounded fallback (each ∈ VERBS[tier]).
+_DEFAULT_VERB = {"remember": "identify", "understand": "describe", "apply": "apply", "scenario": "apply"}
+
+
+def _feasible_target(concept: dict | None, current_tier: str) -> str:
+    """Tier the deterministic terminal fallback grounds to: the HIGHEST tier the material supports
+    that does NOT exceed the current tier AND is at most 'understand'. Capped at understand because a
+    bare grounded remember/understand LO always satisfies R1–R8 + V5/V6, whereas apply/scenario would
+    owe authored prerequisites + a demonstrated method we won't fabricate here. Graduated
+    (apply→understand when feasible) instead of a blunt drop to 'remember'."""
+    rank = {t: i for i, t in enumerate(TIER_ORDER)}
+    c = concept or {}
+    depth = c.get("depth_category") or c.get("taught_depth") or "moderate"
+    feas = feasible_tiers(depth, bool(c.get("procedural")))
+    cap = min(rank.get(current_tier, 0), rank["understand"])
+    below = [t for t in feas if rank[t] <= cap]
+    return max(below, key=lambda t: rank[t]) if below else "remember"
 
 
 def _ground_recall(o: dict, name: str, state: dict, tier: str, verb: str, title: str, why: str) -> None:
@@ -45,8 +91,9 @@ def repair(state, config) -> dict:
     """Regenerate-with-feedback. Structural failures (V4 coverage gap, V14 out-of-scope target) get
     a cheap deterministic retarget. Rubric + item failures (V13/V5/V6/V8/V9/V10) are REGENERATED by
     the LLM with the Judge's per-criterion reasons + suggested fix, KEEPING the assigned tier and
-    concept. On the FINAL attempt, any still-failing rubric LO is deterministically lowered to a
-    grounded recall so the loop always converges (the run is then flagged NEEDS_REVIEW)."""
+    concept. On the FINAL attempt, any still-failing rubric LO is GROUNDED to the highest tier the
+    material supports but no higher than 'understand' — a graduated downgrade (not a blunt drop to
+    recall) so the loop always converges; a real tier downgrade is flagged NEEDS_REVIEW."""
     _bind_rag(config)
     prog = _prog(config)
     attempt = state.get("retry_count", 0) + 1
@@ -57,6 +104,7 @@ def repair(state, config) -> dict:
     by_id = {o["id"]: o for o in outcomes}
     inv_all = state["concept_inventory"]
     name_of = {c["concept_id"]: c["canonical_name"] for c in inv_all}
+    concept_by_id = {c["concept_id"]: c for c in inv_all}
     last_attempt = attempt >= MAX_RETRIES
     logs = []
 
@@ -105,13 +153,18 @@ def repair(state, config) -> dict:
         rv = reviews.get(oid) or {}
         rubric_fail = oid in rep.get("V13", {}).get("failing", [])
         if last_attempt and rubric_fail:
-            # terminal fallback: a grounded recall of the (taught) concept always satisfies R1–R8.
+            # terminal fallback: ground to the HIGHEST tier the material supports (capped at
+            # understand) so it always satisfies R1–R8 and the loop converges — a graduated
+            # downgrade, not a blunt drop to recall. A real tier drop is surfaced via overrides below.
+            target = _feasible_target(concept_by_id.get(cid), tier)
+            allowed = VERBS.get(target, REMEMBER_VERBS)
             sugg = (rv.get("suggested_fix") or "").strip()
             first = sugg.split()[0].lower() if sugg else ""
-            verb, title = (first, sugg) if first in REMEMBER_VERBS else ("identify", f"Identify {name}")
-            _ground_recall(o, name, state, "remember", verb, title,
-                           "Repaired (final): lowered to a grounded recall the material fully supports.")
-            logs.append({"node": "repair", "fix": "terminal_recall", "id": oid})
+            verb = first if first in allowed else _DEFAULT_VERB.get(target, "identify")
+            title = sugg if (first in allowed and sugg) else f"{verb.capitalize()} {name}"
+            _ground_recall(o, name, state, target, verb, title,
+                           f"Repaired (final): grounded to the highest tier the material supports ({target}).")
+            logs.append({"node": "repair", "fix": "terminal_grounded", "id": oid, "tier": target})
             continue
         topic = _topic_of(state, o["topic_id"])
         inv = [c for c in inv_all if c["topic_id"] == o["topic_id"]] or inv_all
@@ -120,7 +173,10 @@ def repair(state, config) -> dict:
         sys = (get_prompt("lo.repair_sys", _REPAIR_SYS)
                .replace("<TIER>", tier).replace("<CONCEPT_ID>", cid)
                .replace("<VERBS>", str(sorted(VERBS.get(tier, set())))))
-        usr = (f"FAILED RULES: {reasons}\n"
+        # Pass the SPECIFIC failing rubric criteria (R1–R8), not just the V-code — the Judge stored
+        # them per-criterion in rv["rubric"], so the model knows exactly what to fix.
+        failed_criteria = [k for k, ok in (rv.get("rubric") or {}).items() if not ok]
+        usr = (f"FAILED RUBRIC CRITERIA: {failed_criteria or reasons}\n"
                f"JUDGE FEEDBACK: {rv.get('fail_reason', '')}\n"
                f"SUGGESTED FIX: {rv.get('suggested_fix', '')}\n"
                f"CURRENT OUTCOME: {json.dumps(o)}\n"

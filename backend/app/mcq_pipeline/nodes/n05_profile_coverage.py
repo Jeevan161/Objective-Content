@@ -20,17 +20,77 @@ from app.mcq_pipeline.nodes._common import _bind_rag, _prog
 # (lo_config.allowed_verbs_for), which plan_allocation and author_outcomes obey — so depth
 # is established ONCE here instead of being reverse-engineered by V12/coverage_gate repairs.
 _DEPTH_PROFILE_SYS = register("lo.depth_profile", (
-    "You score how DEEPLY one concept is taught in the given section, for assessment "
-    "planning. Read the concept and its section, then classify the taught DEPTH as exactly "
-    "one of:\n"
-    "- mention: only named or stated, in passing or a single sentence, with no real "
-    "explanation (supports only recall: identify/list/define).\n"
-    "- moderate: explained with some reasoning or detail across a few sentences (supports "
-    "understand: explain/describe), but not thoroughly developed.\n"
-    "- deep: thoroughly developed — explanation PLUS examples, steps, or an explicit "
-    "contrast/comparison (supports compare/differentiate and, if procedural, apply).\n"
-    "Judge ONLY by what THIS material actually teaches; never credit outside knowledge.\n"
-    'Return ONLY JSON: {"depth": "mention|moderate|deep", "why": "<one line>"}.'
+    "You evaluate how COMPLETELY a concept is TAUGHT in the given instructional section.\n"
+    "This score determines whether the concept is assessable and what level of learning "
+    "outcomes can be generated later.\n\n"
+
+    "Return ONLY JSON:\n"
+    '{"depth": "mention|moderate|deep", "why": "<one line>"}\n\n'
+
+    "----------------------------\n"
+    "PRIMARY OBJECTIVE\n"
+    "----------------------------\n"
+    "Decide how well the material TEACHES the concept — not how important it is, not how "
+    "complex it is in general.\n\n"
+
+    "----------------------------\n"
+    "DEPTH DEFINITIONS (STRICT)\n"
+    "----------------------------\n"
+
+    "1. mention\n"
+    "- Concept is ONLY named, referenced, or listed\n"
+    "- No explanation of how or why it works\n"
+    "- No steps, reasoning, or example-based teaching\n"
+    "- Cannot be assessed beyond recall (recognize/identify only)\n\n"
+
+    "2. moderate\n"
+    "- Concept is explained with SOME reasoning OR description\n"
+    "- May include a simple example or partial breakdown\n"
+    "- Learner can understand and describe it\n"
+    "- But lacks full procedural detail or full coverage\n\n"
+
+    "3. deep\n"
+    "- Concept is fully taught with MULTIPLE of the following:\n"
+    "  * step-by-step explanation\n"
+    "  * worked examples\n"
+    "  * comparison or contrast\n"
+    "  * applied usage or procedure\n"
+    "- Learner can APPLY it, not just explain it\n\n"
+
+    "----------------------------\n"
+    "CRITICAL ASSESSMENT RULE\n"
+    "----------------------------\n"
+    "Judge ONLY what the section teaches explicitly.\n"
+    "Do NOT assume understanding from general knowledge.\n\n"
+
+    "If explanation is missing in the text → it is NOT moderate or deep.\n\n"
+
+    "----------------------------\n"
+    "BOUNDARY RULE (VERY IMPORTANT)\n"
+    "----------------------------\n"
+    "- A single sentence definition = mention\n"
+    "- A definition + example = usually moderate (only if example is explained)\n"
+    "- A procedural walkthrough or multi-step reasoning = deep\n\n"
+
+    "----------------------------\n"
+    "ASSESSMENT LINK RULE\n"
+    "----------------------------\n"
+    "Think in terms of what a learner could be tested on:\n"
+    "- mention → recognition only\n"
+    "- moderate → explanation questions\n"
+    "- deep → application / problem-solving questions\n\n"
+
+    "----------------------------\n"
+    "ANTI-OVERCLASSIFICATION RULE\n"
+    "----------------------------\n"
+    "- Do NOT upgrade depth based on importance or familiarity\n"
+    "- Do NOT assume missing steps\n"
+    "- If unsure between two levels → choose LOWER depth\n\n"
+
+    "----------------------------\n"
+    "OUTPUT CONSTRAINT\n"
+    "----------------------------\n"
+    "Return ONLY valid JSON. No explanation, no markdown.\n"
 ))
 
 

@@ -26,38 +26,48 @@ def validate(state, config) -> dict:
     def rule(rid, ok, detail="", items=None):
         rep[rid] = {"pass": bool(ok), "detail": detail, "failing": items or []}
 
-    # --- structural invariants (domain-agnostic) --------------------------------- #
-    rule("V1", len(O) == budget, f"count={len(O)} (want {budget})")
+    # --- structural invariants (domain-agnostic; each detail states what the rule ASSERTS) ----- #
+    rule("V1", len(O) == budget,
+         f"outcome count must equal the planned budget — got {len(O)}, want {budget}")
     want = {k: plan.get("tier_counts", {}).get(k, 0) for k in TIER_ORDER}
     got = {k: sum(o["bloom_level"] == k for o in O) for k in TIER_ORDER}
-    rule("V2", got == want, f"got={got} want={want}")
+    rule("V2", got == want,
+         f"realized Bloom-tier split must match the plan — got {got}, want {want}")
     bad = []
     for tid, p in plan["by_topic"].items():
         cnt = sum(o["topic_id"] == tid for o in O)
         if cnt != p["slots"]:
             bad.append({"topic": tid, "got": cnt, "want": p["slots"]})
-    rule("V3", not bad, "per-topic slot mismatch", bad)
+    rule("V3", not bad, "each topic's outcome count must equal its planned slot count", bad)
     covered = {o["concept_id"] for o in O}
-    rule("V4", not (inv_ids - covered), "uncovered in-scope concepts", sorted(inv_ids - covered))
+    rule("V4", not (inv_ids - covered),
+         "every in-scope concept must be targeted by at least one outcome (uncovered listed)",
+         sorted(inv_ids - covered))
     off_scope = [o["id"] for o in O if o["concept_id"] not in inv_ids]
-    rule("V14", not off_scope, "outcome targets a non-explained (out-of-scope) concept", off_scope)
-    no_pre = [o["id"] for o in O if o["bloom_level"] in apply_like and not o["prerequisites"]]
-    rule("V5", not no_pre, "apply/scenario outcome with empty prerequisite set", no_pre)
+    rule("V14", not off_scope,
+         "no outcome may target an out-of-scope (non-explained) concept", off_scope)
+    no_pre = [o["id"] for o in O if o["bloom_level"] in apply_like and not o.get("prerequisites")]
+    rule("V5", not no_pre,
+         "every apply/scenario outcome must carry a non-empty prerequisite set", no_pre)
     oos = [o["id"] for o in O if o["bloom_level"] in apply_like
-           and o["prerequisite_scope"] == "has_out_of_scope"]
-    rule("V6", not oos, "apply/scenario prerequisite closure out of scope", oos)
-    rule("V7", state["concept_graph"]["acyclic"], "DAG acyclicity")
+           and o.get("prerequisite_scope") == "has_out_of_scope"]
+    rule("V6", not oos,
+         "apply/scenario prerequisite closure must be fully in-scope or assumed (RAG-verified)", oos)
+    rule("V7", state["concept_graph"]["acyclic"], "the concept dependency graph must be acyclic")
     # V8 (de-coupled): an apply/scenario outcome must target a concept the LLM flagged procedural
     # (procedurality = the applied_skill vote, no regex). The verb itself is checked by V10.
     proc = {c["concept_id"]: bool(c.get("procedural")) for c in inv}
     fake = [o["id"] for o in O if o["bloom_level"] in apply_like and not proc.get(o["concept_id"], False)]
-    rule("V8", not fake, "apply/scenario outcome on a non-procedural concept", fake)
+    rule("V8", not fake,
+         "apply/scenario outcomes must target a procedural concept (applied_skill vote)", fake)
     ungrounded = [o["id"] for o in O
-                  if not o["source_evidence"]["quote"].strip()
-                  or _loosen(o["source_evidence"]["quote"])[:60] not in src]
-    rule("V9", not ungrounded, "source_evidence not found verbatim in source", ungrounded)
+                  if not (o.get("source_evidence") or {}).get("quote", "").strip()
+                  or _loosen((o.get("source_evidence") or {}).get("quote", ""))[:60] not in src]
+    rule("V9", not ungrounded,
+         "each outcome's evidence quote must appear verbatim in the source text", ungrounded)
     badverb = [o["id"] for o in O if o["learner_action"] not in VERBS.get(o["bloom_level"], set())]
-    rule("V10", not badverb, "action verb outside the tier's controlled vocabulary", badverb)
+    rule("V10", not badverb,
+         "each outcome's action verb must be in its Bloom tier's controlled vocabulary", badverb)
 
     # --- composite rubric gate (V13): every LO must pass every R1–R8 criterion --------- #
     # The unified Judge owns ALL quality judgments (depth, answerability, beyond-scope,
@@ -67,10 +77,17 @@ def validate(state, config) -> dict:
     reviews = state.get("lo_reviews") or {}
     not_covered = [o["id"] for o in O if (rv := reviews.get(o["id"])) and not rv.get("covered", True)]
     rule("V13", not not_covered,
-         "rubric gate: an outcome fails one or more of R1–R8 (see lo_reviews)", not_covered)
+         "every outcome must pass all unified-Judge rubric criteria R1-R8 (failures in lo_reviews)",
+         not_covered)
 
     failed = [k for k, v in rep.items() if not v["pass"]]
-    log = {"node": "validate", "attempt": state.get("retry_count", 0), "failed": failed}
+    # Advisory (non-blocking): apply/scenario prerequisites that are PRESENT but taught only
+    # shallowly (Node 7 depth grading). Surfaced for Gate-1 visibility; deliberately NOT a rule, so
+    # it never enters `failed` and never routes to repair — prior-course depth is not author-repairable.
+    shallow_prereqs = sorted({nm for o in O if o["bloom_level"] in apply_like
+                              for nm in (o.get("prerequisite_coverage") or {}).get("shallow", [])})
+    log = {"node": "validate", "attempt": state.get("retry_count", 0), "failed": failed,
+           "shallow_prereqs": shallow_prereqs}
     prog.done("validate", detail="pass" if not failed else f"failing: {failed}")
     return {"validation_report": rep, "log": [log]}
 

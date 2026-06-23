@@ -1,7 +1,8 @@
 """LO pipeline · Node 3 — canonicalize_concepts (variance sink + evidence binding)."""
 from __future__ import annotations
 
-from app.mcq_pipeline.utils.concept_graph import canonical_name, description_grounded, ground_quote, slugify
+from app.mcq_pipeline.utils.concept_graph import (
+    canonical_name, description_grounded, display_name, ground_quote, slugify)
 from app.mcq_pipeline.nodes._common import _prog
 
 
@@ -25,7 +26,7 @@ def canonicalize_concepts(state, config) -> dict:
         if not description_grounded(desc, [ev_quote, quote], section_text):
             desc = ev_quote or quote
         if cid not in inv:
-            inv[cid] = {"concept_id": cid, "canonical_name": canon.title(),
+            inv[cid] = {"concept_id": cid, "canonical_name": display_name(canon),
                         "topic_id": rc["evidence"]["section"], "in_scope": True,
                         "procedural": False, "description": desc,
                         "evidence_quotes": [q for q in {ev_quote, quote} if q],
@@ -40,7 +41,9 @@ def canonicalize_concepts(state, config) -> dict:
     # Merge near-duplicate concepts (not just log them): token-set Jaccard >= 0.7 AND
     # one token-set a subset of the other (e.g. plural/singular, "global environment"
     # vs "global environments"). Union-find so merges are order-independent. The
-    # surviving concept_id is the more procedural / more specific (longer name) one.
+    # surviving concept_id is the more specific (longer name) one — NOTE procedural is
+    # uniformly False at this node (set later in build_dependency_graph), so it does
+    # not yet affect the choice.
     logs = []
     ids = sorted(inv)
     parent = {k: k for k in ids}

@@ -1,6 +1,7 @@
 """LO pipeline · Node 4 — build_dependency_graph (K-sample edge voting)."""
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 
 from app.mcq_pipeline.utils.concurrency import pmap
@@ -13,21 +14,91 @@ from app.mcq_pipeline.nodes._common import _bind_rag, _prog
 
 # ── Node 4 · build_dependency_graph (A · K-sample edge voting) ────────────── #
 _GRAPH_SYS = register("lo.graph_sys", (
-    "You analyze ONE target concept from a reading (ANY subject) against the OTHER concepts "
-    "taught in the same session, and output JSON about the TARGET only.\n"
-    'Output ONLY JSON: {"prerequisites": ["<concept_id>", ...], "applied_skill": <bool>, '
-    '"assumed_prior": ["<short prior-knowledge name>", ...]}.\n'
-    "- prerequisites: which of the OTHER given concept_ids must be understood BEFORE the "
-    "target (are its direct prerequisites). Use ONLY ids from the given list; [] if none.\n"
-    "- applied_skill: true ONLY if the target is a PERFORMABLE SKILL the learner actively "
-    "carries out or APPLIES (solve a problem, compute a value, apply a method/framework to a "
-    "case, construct an argument, produce an artifact, execute steps) — NOT a fact, "
-    "definition, or idea merely recognized or explained. DOMAIN-GENERAL: include "
-    "non-programming skills, not just code.\n"
-    "- assumed_prior: foundational knowledge the target ASSUMES but that is NOT taught in "
-    "this session (short generic names); [] if none. Anything the target needs that is "
-    "OUTSIDE the given concept list belongs here, NOT in prerequisites.\n"
-    "Judge ONLY from what the material teaches; do not invent."
+    "You analyze ONE target concept from a learning session against OTHER concepts "
+    "in the same session and output ONLY dependency metadata for the TARGET concept.\n\n"
+
+    "Return ONLY JSON in this format:\n"
+    '{"prerequisites": ["<concept_id>", ...], '
+    '"applied_skill": <bool>, '
+    '"assumed_prior": ["<short prior-knowledge name>", ...]}\n\n'
+
+    "----------------------------\n"
+    "CORE TASK\n"
+    "----------------------------\n"
+    "Determine ONLY DIRECT LEARNING DEPENDENCIES for the target concept.\n"
+    "Do NOT build indirect chains or extended prerequisite trees.\n\n"
+
+    "----------------------------\n"
+    "1. PREREQUISITES (STRICT RULE)\n"
+    "----------------------------\n"
+    "A concept X is a prerequisite of target T ONLY IF ALL are true:\n"
+    "1. T explicitly or implicitly REQUIRES understanding or ability to use X\n"
+    "2. Without X, T cannot be correctly understood or performed\n"
+    "3. X is directly used inside T's explanation, steps, or reasoning\n\n"
+
+    "IMPORTANT FILTERS:\n"
+    "- Do NOT include 'supporting', 'related', or 'helpful' concepts\n"
+    "- Do NOT include general background unless it is structurally required\n"
+    "- Do NOT include parent concepts if the child already captures dependency\n"
+    "- Do NOT infer multi-hop dependencies (A → B → C, only A → C is invalid)\n\n"
+
+    "If uncertain → DO NOT include the edge.\n\n"
+
+    "----------------------------\n"
+    "2. APPLIED_SKILL CLASSIFICATION\n"
+    "----------------------------\n"
+    "Set applied_skill = true ONLY if the target concept is something the learner EXECUTES.\n\n"
+
+    "TRUE if it involves:\n"
+    "- performing steps\n"
+    "- solving a problem\n"
+    "- applying a method or algorithm\n"
+    "- constructing or producing an output\n\n"
+
+    "FALSE if it involves:\n"
+    "- definitions\n"
+    "- recognition or identification\n"
+    "- conceptual understanding without execution\n\n"
+
+    "Edge case rule:\n"
+    "- If it is both conceptual + applied, classify by PRIMARY assessment behavior.\n\n"
+
+    "----------------------------\n"
+    "3. ASSUMED_PRIOR (EXTERNAL KNOWLEDGE ONLY)\n"
+    "----------------------------\n"
+    "Include ONLY knowledge that:\n"
+    "- is NOT present in the given concept list\n"
+    "- is commonly assumed before learning this session\n\n"
+
+    "Examples:\n"
+    "- 'basic algebra'\n"
+    "- 'file system basics'\n"
+    "- 'programming fundamentals'\n\n"
+
+    "Do NOT include anything that exists as a concept_id in the session.\n\n"
+
+    "----------------------------\n"
+    "NEGATIVE CONSTRAINTS (VERY IMPORTANT)\n"
+    "----------------------------\n"
+    "- Do NOT create extra concepts\n"
+    "- Do NOT paraphrase concept IDs\n"
+    "- Do NOT infer missing session concepts\n"
+    "- Do NOT over-connect based on similarity of words\n"
+    "- Only connect based on functional dependency in learning\n\n"
+
+    "----------------------------\n"
+    "DECISION HEURISTIC\n"
+    "----------------------------\n"
+    "Ask internally:\n"
+    "- Does learning T FAIL without X? → prerequisite\n"
+    "- Is X just context or explanation support? → ignore\n"
+    "- Is X part of the same step-level mechanism? → prerequisite\n"
+    "- Is X only loosely related? → ignore\n\n"
+
+    "----------------------------\n"
+    "OUTPUT CONSTRAINT\n"
+    "----------------------------\n"
+    "Return ONLY valid JSON. No explanation, no markdown.\n"
 ))
 
 
@@ -67,21 +138,28 @@ def build_dependency_graph(state, config) -> dict:
             if d.get("applied_skill") is True:
                 skill_votes[cid] += 1
             for ap in d.get("assumed_prior", []):
+                # Normalize (case + whitespace) before tallying so phrasing variants
+                # ("Basic Algebra" / "basic  algebra") don't split the vote.
                 if isinstance(ap, str) and ap.strip():
-                    prior[ap.strip()] += 1
+                    prior[re.sub(r"\s+", " ", ap.strip().lower())] += 1
         prereq_votes[cid] = pv
         on_done()
 
     # majority-voted prerequisites -> edges P->C (P is a prerequisite of C), with cycle guard
     adj, edges, logs = defaultdict(set), [], []
-    candidates = sorted((p, cid) for cid, pv in prereq_votes.items()
-                        for p, v in pv.items() if v >= MAJORITY)
-    for (p, cid) in candidates:
+    # Resolve 2-cycles in favor of the STRONGER edge: order by vote count desc (then id) so the
+    # higher-confidence edge is added first and its weaker reverse is the one the guard drops.
+    candidates = sorted(((p, cid, v) for cid, pv in prereq_votes.items()
+                         for p, v in pv.items() if v >= MAJORITY),
+                        key=lambda e: (-e[2], e[0], e[1]))
+    for (p, cid, v) in candidates:
         if not reachable(adj, cid, p):          # adding p->cid is safe if cid can't already reach p
             adj[p].add(cid)
             edges.append({"from": p, "to": cid, "relation": "depends_on"})
         else:
             logs.append({"node": "build_graph", "dropped_edge": [p, cid], "reason": "would_create_cycle"})
+    # NOTE: `prior` accumulates across ALL concepts x K samples (unlike the per-concept prereq
+    # votes), so MAJORITY here is a weaker, session-wide bar than the per-concept threshold.
     assumed = [p for p, v in prior.items() if v >= MAJORITY]   # LLM-derived; NO hardcoded default
 
     # Two-level graph (P2): lift concept edges to a TOPIC dependency DAG — topic B precedes

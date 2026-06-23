@@ -43,6 +43,15 @@ def loosen_text(t: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[*_`#>]+", " ", (t or "").lower())).strip()
 
 
+def display_name(canon: str) -> str:
+    """Title-case for display WITHOUT destroying acronyms: a token that already
+    carries an uppercase letter (e.g. an ALIAS_MAP form like 'API', 'SQL') is kept
+    verbatim; plain lowercase words are capitalized. Use instead of str.title(),
+    which would clobber acronym casing supplied by canonical_name/ALIAS_MAP."""
+    return " ".join(w if any(c.isupper() for c in w) else w.capitalize()
+                    for w in canon.split())
+
+
 _DESC_STOP = {"this", "that", "with", "from", "into", "your", "they", "them", "then",
               "than", "such", "when", "what", "which", "while", "where", "have", "will",
               "would", "could", "should", "about", "these", "those", "their", "there",
