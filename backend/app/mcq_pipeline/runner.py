@@ -19,15 +19,16 @@ from app.db.session import SessionLocal
 from app.models import Course, RagChunk, Topic, Unit, UnitPart
 from app.services.extraction import READING_MATERIAL_LABEL, collect_courses_recursive
 
+import threading
 import uuid
 
-from . import prompt_store
-from .llm_factory import set_call_context
-from .lo_graph import get_lo_graph
-from .lo_state import REGISTRY, RunContext, new_state
-from .progress import ProgressReporter
-from .rag_adapter import RagAdapter
-from .tracing import capture_trace, setup_langsmith
+from app.mcq_pipeline.prompts import store as prompt_store
+from app.mcq_pipeline.utils.llm import set_call_context
+from app.mcq_pipeline.graph import get_lo_graph
+from app.mcq_pipeline.state import REGISTRY, RunContext, new_state
+from app.mcq_pipeline.utils.progress import ProgressReporter
+from app.mcq_pipeline.utils.rag_adapter import RagAdapter
+from app.mcq_pipeline.utils.tracing import disable_langsmith
 
 
 def _session_reading_material(session, course_id: str, unit_id: str) -> tuple[str, str]:
@@ -185,10 +186,12 @@ def _prompt_versions() -> list[dict]:
 def run_mcq_pipeline(
     *, course_id: str, topic_id: str, unit_id: str, review: bool = True,
     prereq_unit_ids: list[str] | None = None,
+    question_budget: int | None = None,
+    hitl_enabled: bool = False,
     progress_sink: Callable[[dict], None] | None = None,
     thread_id: str | None = None,
 ) -> dict:
-    setup_langsmith()
+    disable_langsmith()
     # The checkpointer keys every run by thread_id; default to a fresh uuid when the
     # caller (e.g. the job runner) doesn't supply the job id.
     thread_id = thread_id or str(uuid.uuid4())
@@ -245,13 +248,14 @@ def run_mcq_pipeline(
         course_ids=course_ids, prereq_units=prereq_units,
         reading_material=reading_material, ingested=ingested, unit_ids=unit_filter,
     )
-    progress = ProgressReporter(sink=progress_sink)
+    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id))
 
     # Live, non-serializable objects ride in the RunContext (keyed by thread_id),
     # never in checkpointed state. Always cleared so the registry can't leak.
     ctx = RunContext(
         rag=adapter, progress=progress, db_prereq_units=prereq_units,
         generate_questions=True, review_questions=review,
+        question_budget=question_budget, hitl_enabled=hitl_enabled,
     )
     REGISTRY.register(thread_id, ctx)
     state0 = new_state(
@@ -264,10 +268,17 @@ def run_mcq_pipeline(
     graph = get_lo_graph()
     cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
     try:
-        with capture_trace() as trace:
-            state = graph.invoke(state0, config=cfg)
+        state = graph.invoke(state0, config=cfg)
     finally:
         REGISTRY.pop(thread_id)
+
+    if hitl_enabled:                         # paused at a HITL gate? return a review payload.
+        paused = _interrupt_payload(graph, cfg)
+        if paused is not None:
+            return {"status": "awaiting_review", "thread_id": thread_id, "review": paused,
+                    "durable_checkpoint": _checkpoint_durable(),
+                    "session_label": session_label, "prereq_units": prereq_units,
+                    "trace_job_id": thread_id}
 
     artifact = state.get("artifact", {})
     los = state.get("final_los", [])
@@ -277,6 +288,7 @@ def run_mcq_pipeline(
     needs_human = sum(1 for q in questions if q.get("needs_human"))
 
     return {
+        "status": "completed",
         "session_label": session_label,
         "ingested": ingested,
         "artifact": artifact,
@@ -292,9 +304,127 @@ def run_mcq_pipeline(
         "log": state.get("log", []),
         "prereq_units": prereq_units,
         "prompt_versions": _prompt_versions(),
-        "langsmith_run_id": trace.get("run_id", ""),
-        "langsmith_run_url": trace.get("url", ""),
+        "trace_job_id": thread_id,
         "lo_count": len(artifact.get("outcomes", los)),
         "question_count": len(generated),
         "needs_human_count": needs_human,
+    }
+
+
+def _make_trace_sink(thread_id: str):
+    """Build a trace sink that writes one `McqTrace` row per node span — our own LangGraph-tailored
+    trace (job_id = the run's thread_id). Own short-lived session per write, like the progress sink.
+    Best-effort: never raises, so tracing can't break a run; returns None for a non-uuid thread_id."""
+    try:
+        jid = uuid.UUID(str(thread_id))
+    except Exception:  # noqa: BLE001
+        return None
+    counter = {"n": 0}
+    lock = threading.Lock()
+
+    def sink(span: dict) -> None:
+        from app.models import McqTrace
+        with lock:
+            counter["n"] += 1
+            n = counter["n"]
+        try:
+            with SessionLocal() as session:
+                session.add(McqTrace(
+                    job_id=jid, seq=n, node=span.get("node", ""),
+                    label=(span.get("label") or "")[:160], status=span.get("status", "ok"),
+                    detail=(span.get("detail") or "")[:2000],
+                    duration_ms=int(span.get("duration_ms", 0)),
+                    started_at=span.get("started_at"), ended_at=span.get("ended_at"),
+                ))
+                session.commit()
+        except Exception:  # noqa: BLE001 — tracing is best-effort
+            pass
+
+    return sink
+
+
+def _checkpoint_durable() -> bool:
+    """True if the active LangGraph checkpointer is the durable Postgres saver. HITL pause/resume
+    needs a durable checkpoint to survive across workers/restarts; an in-memory fallback (Postgres
+    unavailable when the singleton was built) cannot be resumed from another process — callers
+    should treat durable_checkpoint=False as 'do not rely on resume'."""
+    try:
+        from app.mcq_pipeline.graph import get_checkpointer
+        return type(get_checkpointer()).__name__ == "PostgresSaver"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _interrupt_payload(graph, cfg) -> dict | None:
+    """If the graph is paused at a HITL interrupt, return that interrupt's payload; else None.
+    Best-effort across LangGraph versions; when no interrupt is pending the graph reached END, so
+    None is returned and the normal (completed) path runs unchanged."""
+    try:
+        snap = graph.get_state(cfg)
+    except Exception:  # noqa: BLE001
+        return None
+    if not getattr(snap, "next", None):
+        return None                          # graph reached END — not paused
+    try:
+        for task in (getattr(snap, "tasks", None) or []):
+            for it in (getattr(task, "interrupts", None) or []):
+                val = getattr(it, "value", None)
+                if val is not None:
+                    return val
+    except Exception:  # noqa: BLE001
+        pass
+    return {"paused": True}
+
+
+def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
+               prereq_unit_ids: list[str] | None = None, question_budget: int | None = None,
+               review: bool = True, progress_sink: Callable[[dict], None] | None = None) -> dict:
+    """Resume a HITL-paused run after a human decision (Gate 1 / Gate 2). Rebuilds the run-scoped
+    RagAdapter/ProgressReporter (they are NOT checkpointed) and re-registers the RunContext under
+    the SAME thread_id, then resumes the graph from its checkpoint with the decision. If the run
+    pauses again (the other gate), returns another awaiting_review payload; otherwise the completed
+    result. `decision` is e.g. {"action":"approve"} or {"action":"reject","rejected_ids":[...],
+    "note":"..."}."""
+    from langgraph.types import Command
+
+    disable_langsmith()
+    adapter, prereq_units, session_label = build_adapter(course_id, unit_id, prereq_unit_ids)
+    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id))
+    ctx = RunContext(rag=adapter, progress=progress, db_prereq_units=prereq_units,
+                     generate_questions=True, review_questions=review,
+                     question_budget=question_budget, hitl_enabled=True)
+    REGISTRY.register(thread_id, ctx)
+    set_call_context(unit=(session_label or unit_id or thread_id))
+    graph = get_lo_graph()
+    cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
+    try:
+        state = graph.invoke(Command(resume=decision), config=cfg)
+        paused = _interrupt_payload(graph, cfg)
+    finally:
+        REGISTRY.pop(thread_id)
+    if paused is not None:
+        return {"status": "awaiting_review", "thread_id": thread_id, "review": paused,
+                "durable_checkpoint": _checkpoint_durable(),
+                "session_label": session_label, "prereq_units": prereq_units,
+                "trace_job_id": thread_id}
+    artifact = state.get("artifact", {})
+    los = state.get("final_los", [])
+    questions = state.get("questions", [])
+    _attach_dependencies(questions, los, state)
+    generated = [q for q in questions if q.get("status") == "generated"]
+    return {
+        "status": "completed", "session_label": session_label,
+        "ingested": getattr(adapter, "ingested", False),
+        "artifact": artifact, "lo_status": artifact.get("status", ""),
+        "spec_hash": artifact.get("spec_hash", ""),
+        "validation_report": artifact.get("validation_report", {}),
+        "overrides": artifact.get("overrides", []), "escalation": artifact.get("escalation"),
+        "final_los": los, "questions": questions,
+        "question_reviews": state.get("question_reviews", []),
+        "notes": state.get("notes", []), "log": state.get("log", []),
+        "prereq_units": prereq_units, "prompt_versions": _prompt_versions(),
+        "trace_job_id": thread_id,
+        "lo_count": len(artifact.get("outcomes", los)),
+        "question_count": len(generated),
+        "needs_human_count": sum(1 for q in questions if q.get("needs_human")),
     }

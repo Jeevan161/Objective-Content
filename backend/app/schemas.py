@@ -51,9 +51,27 @@ class McqGenerateRequest(BaseModel):
     topic_id: str = ""
     unit_id: str = ""  # a reading-material part's portal unit_id within the session
     review: bool = True
+    # User-chosen LO/question budget (default ceiling = 20; the Planner steps it down by 5s if thin).
+    question_budget: int | None = None
+    # Pause at the human-in-the-loop gates (division + LO↔concept mapping) instead of running through.
+    hitl: bool = False
     # Reading-material portal unit_ids of the PREREQUISITE units to include in RAG
     # grounding. None = include all prerequisites (default); [] = none.
     prerequisite_unit_ids: list[str] | None = None
+
+
+class McqReviewRequest(BaseModel):
+    """A human decision at a HITL gate, plus the run context needed to resume the paused
+    pipeline (rebuilds the run-scoped RAG adapter; the job_id is the checkpoint thread_id)."""
+    action: str = "approve"                       # "approve" | "reject"
+    rejected_ids: list[str] | None = None         # Gate-2: which LO ids to regenerate
+    note: str = ""
+    course_id: str = ""
+    topic_id: str = ""
+    unit_id: str = ""
+    prerequisite_unit_ids: list[str] | None = None
+    question_budget: int | None = None
+    review: bool = True
 
 
 class RagSearchRequest(BaseModel):
@@ -242,3 +260,17 @@ def serialize_mcq_run(run, *, include_result: bool = True) -> dict:
     if include_result:
         out["result"] = run.result
     return out
+
+
+def serialize_mcq_trace(t) -> dict:
+    """One node-execution span of an MCQ run (our own LangGraph-tailored trace)."""
+    return {
+        "seq": t.seq,
+        "node": t.node,
+        "label": t.label,
+        "status": t.status,
+        "detail": t.detail,
+        "duration_ms": t.duration_ms,
+        "started_at": t.started_at,
+        "ended_at": t.ended_at,
+    }

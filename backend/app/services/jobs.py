@@ -65,67 +65,139 @@ def start_build_rag_job(job_id: uuid.UUID, unit_ids: list[str] | None = None) ->
     return thread
 
 
-def _run_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
-                 review: bool, prereq_unit_ids: list[str] | None = None) -> None:
-    """Run the MCQ pipeline end to end, streaming structured progress onto the
-    SyncJob row and persisting the result as an McqRun. Heavy imports (langgraph)
-    are deferred to here so the API doesn't depend on them at import time."""
-    from app.models import McqRun, SyncJob
-    from app.mcq_pipeline.runner import run_mcq_pipeline
-
+def _mcq_sink(job_id: uuid.UUID):
+    """Progress sink: each flush opens its own short-lived session (called from the pipeline's
+    worker threads). MERGES the stage snapshot into job.progress so any non-stage keys already
+    stored (e.g. a parked review payload) are preserved."""
     def sink(snapshot: dict) -> None:
-        # Each progress flush opens its own short-lived session (called from the
-        # pipeline's worker threads), mirroring the other job writers.
+        from app.models import SyncJob
         with SessionLocal() as session:
             job = session.get(SyncJob, job_id)
             if job is not None:
-                job.progress = snapshot
+                prog = dict(job.progress or {})
+                prog.update(snapshot)
+                job.progress = prog
                 if job.status not in (SyncJob.SUCCESS, SyncJob.FAILURE):
                     job.status = SyncJob.RUNNING
                 job.updated_at = _now()
                 session.commit()
+    return sink
+
+
+def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
+                        topic_id: str, unit_id: str) -> None:
+    """Persist the outcome of a (possibly paused) MCQ run. status 'awaiting_review' -> park the
+    job at AWAITING_REVIEW with the review payload on `progress`; 'completed' -> store the McqRun
+    and mark SUCCESS."""
+    from app.models import McqRun, SyncJob
+
+    with SessionLocal() as session:
+        job = session.get(SyncJob, job_id)
+        if result.get("status") == "awaiting_review":
+            if job is not None:
+                prog = dict(job.progress or {})
+                prog["review"] = result.get("review")
+                prog["awaiting_review"] = True
+                prog["durable_checkpoint"] = result.get("durable_checkpoint", True)
+                job.progress = prog
+                job.status = SyncJob.AWAITING_REVIEW
+                gate = (result.get("review") or {}).get("gate", "review")
+                job.message = f"Awaiting human review (gate: {gate})."
+                job.updated_at = _now()
+            session.commit()
+            return
+        session.add(McqRun(
+            job_id=job_id, course_id=course_id, topic_id=topic_id, unit_id=unit_id,
+            langsmith_run_url=result.get("langsmith_run_url", ""),
+            lo_count=result.get("lo_count", 0),
+            question_count=result.get("question_count", 0),
+            needs_human_count=result.get("needs_human_count", 0),
+            result=result,
+        ))
+        if job is not None:
+            job.status = SyncJob.SUCCESS
+            job.message = (
+                f"{result.get('question_count', 0)} question(s) from "
+                f"{result.get('lo_count', 0)} LO(s); "
+                f"{result.get('needs_human_count', 0)} need human review."
+            )
+            prog = dict(job.progress or {})
+            prog.pop("awaiting_review", None)
+            prog.pop("review", None)
+            job.progress = prog
+            job.updated_at = _now()
+        session.commit()
+
+
+def _fail_job(job_id: uuid.UUID, err: Exception) -> None:
+    from app.models import SyncJob
+    with SessionLocal() as session:
+        job = session.get(SyncJob, job_id)
+        if job is not None:
+            job.status = SyncJob.FAILURE
+            job.error = str(err)
+            job.updated_at = _now()
+            session.commit()
+
+
+def _run_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
+                 review: bool, prereq_unit_ids: list[str] | None = None,
+                 question_budget: int | None = None, hitl_enabled: bool = False) -> None:
+    """Run the MCQ pipeline, streaming progress onto the SyncJob row. May PAUSE at a HITL gate
+    (status -> AWAITING_REVIEW) instead of completing. Heavy imports are deferred to here."""
+    from app.mcq_pipeline.runner import run_mcq_pipeline
 
     try:
         with _MCQ_SEMAPHORE:
             result = run_mcq_pipeline(
                 course_id=course_id, topic_id=topic_id, unit_id=unit_id,
-                review=review, prereq_unit_ids=prereq_unit_ids, progress_sink=sink,
-                thread_id=str(job_id),
+                review=review, prereq_unit_ids=prereq_unit_ids,
+                question_budget=question_budget, hitl_enabled=hitl_enabled,
+                progress_sink=_mcq_sink(job_id), thread_id=str(job_id),
             )
-        with SessionLocal() as session:
-            session.add(McqRun(
-                job_id=job_id, course_id=course_id, topic_id=topic_id, unit_id=unit_id,
-                langsmith_run_url=result.get("langsmith_run_url", ""),
-                lo_count=result.get("lo_count", 0),
-                question_count=result.get("question_count", 0),
-                needs_human_count=result.get("needs_human_count", 0),
-                result=result,
-            ))
-            job = session.get(SyncJob, job_id)
-            if job is not None:
-                job.status = SyncJob.SUCCESS
-                job.message = (
-                    f"{result.get('question_count', 0)} question(s) from "
-                    f"{result.get('lo_count', 0)} LO(s); "
-                    f"{result.get('needs_human_count', 0)} need human review."
-                )
-                job.updated_at = _now()
-            session.commit()
+        _persist_mcq_result(job_id, result, course_id, topic_id, unit_id)
     except Exception as err:  # noqa: BLE001 — surface failure on the job row
-        with SessionLocal() as session:
-            job = session.get(SyncJob, job_id)
-            if job is not None:
-                job.status = SyncJob.FAILURE
-                job.error = str(err)
-                job.updated_at = _now()
-                session.commit()
+        _fail_job(job_id, err)
+
+
+def _resume_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
+                    decision: dict, prereq_unit_ids: list[str] | None = None,
+                    question_budget: int | None = None, review: bool = True) -> None:
+    """Resume a HITL-paused MCQ run after a human decision; may pause AGAIN at the next gate."""
+    from app.mcq_pipeline.runner import resume_run
+
+    try:
+        with _MCQ_SEMAPHORE:
+            result = resume_run(
+                course_id=course_id, unit_id=unit_id, thread_id=str(job_id), decision=decision,
+                prereq_unit_ids=prereq_unit_ids, question_budget=question_budget, review=review,
+                progress_sink=_mcq_sink(job_id),
+            )
+        _persist_mcq_result(job_id, result, course_id, topic_id, unit_id)
+    except Exception as err:  # noqa: BLE001
+        _fail_job(job_id, err)
 
 
 def start_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
-                  review: bool = True, prereq_unit_ids: list[str] | None = None) -> threading.Thread:
+                  review: bool = True, prereq_unit_ids: list[str] | None = None,
+                  question_budget: int | None = None, hitl_enabled: bool = False) -> threading.Thread:
     thread = threading.Thread(
         target=_run_mcq_job,
-        args=(job_id, course_id, topic_id, unit_id, review, prereq_unit_ids),
+        args=(job_id, course_id, topic_id, unit_id, review, prereq_unit_ids,
+              question_budget, hitl_enabled),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def start_mcq_resume_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
+                         decision: dict, prereq_unit_ids: list[str] | None = None,
+                         question_budget: int | None = None, review: bool = True) -> threading.Thread:
+    thread = threading.Thread(
+        target=_resume_mcq_job,
+        args=(job_id, course_id, topic_id, unit_id, decision, prereq_unit_ids,
+              question_budget, review),
         daemon=True,
     )
     thread.start()

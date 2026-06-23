@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # --- MCQ pipeline (LangGraph) ---
     # Strong model drives the LO agents + question generation/review.
-    mcq_agent_model: str = "openai/gpt-4o"
+    mcq_agent_model: str = "openai/gpt-5o"
     # Production concurrency knobs (multi-user safety):
     #  - cap simultaneous pipeline jobs so threads/DB connections/LLM rate don't blow up.
     #  - LangGraph checkpointer backend: "postgres" (durable/resumable), "memory", or "none".

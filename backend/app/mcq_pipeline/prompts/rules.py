@@ -18,9 +18,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .prompt_store import register
+from app.mcq_pipeline.prompts.store import register
 
-_RULES_PATH = Path(__file__).with_name("lo_rules.json")
+_RULES_PATH = Path(__file__).with_name("rules.json")
 
 _DESCRIPTION = ("Read-only reference — the hard-coded rules of this deterministic "
                 "stage (no LLM prompt drives it; editing has no effect).")

@@ -13,8 +13,8 @@ from pydantic import BaseModel, Field
 
 class LearningOutcome(BaseModel):
     outcome: str = Field(description="snake_case slug, e.g. apply_migrate_command_to_execute_migrations")
-    bloom_category: str = Field(description="remember | understand | apply | implement")
-    bloom_level: str = Field(description="same Bloom level as bloom_category")
+    bloom_category: str = Field(description="remember | understand | apply | scenario")
+    bloom_level: str = Field(description="same Bloom tier as bloom_category")
     skill_type: str = Field(description="e.g. conceptual_knowledge | practical_application")
     concept: str = Field(description="the broad concept, e.g. 'Applying Migrations'")
     sub_concept: str = Field(description="the specific sub-concept, e.g. 'migrate_command'")

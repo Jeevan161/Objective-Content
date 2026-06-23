@@ -17,7 +17,7 @@ import re
 from app.db.session import SessionLocal
 from app.models import McqQuestionFeedback, McqRun
 
-from .prompt_store import get_prompt, register
+from app.mcq_pipeline.prompts.store import get_prompt, register
 
 # Reviewer phrasings -> canonical question type, MOST-SPECIFIC first so
 # 'more than one multiple choice' / 'code analysis ...' win over bare 'multiple choice'.
@@ -109,8 +109,8 @@ _TYPE_CHANGE_SYS = register("review.type_change_sys", (
 def _llm_type_change(feedback: str, current: str, question_text: str) -> str | None:
     """Returns a canonical type, 'REPICK' (change wanted, type unspecified), None (no
     change), or '__ERROR__' (LLM unavailable -> caller falls back to keywords)."""
-    from .lo_llm import chat, parse_json
-    from .question_type_agent import QUESTION_TYPES
+    from app.mcq_pipeline.utils.llm import chat, parse_json
+    from app.mcq_pipeline.nodes.n13_recommend_question_type import QUESTION_TYPES
     try:
         usr = (f"CURRENT QUESTION TYPE: {current}\n\nQUESTION:\n{question_text}\n\n"
                f"REVIEWER FEEDBACK:\n{feedback}")
@@ -163,11 +163,11 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     """Regenerate the question for `outcome`, injecting the human feedback as a
     top-priority instruction; re-review; persist (with a revision + feedback row).
     Returns the new question dict."""
-    from . import scope
-    from .qgen_agents import _ground, fix_lean, generate_lean
-    from .qreview_agents import review_and_fix_one
-    from .question_type_agent import recommend_one
-    from .runner import build_adapter
+    from app.mcq_pipeline.utils import scope
+    from app.mcq_pipeline.nodes.n14_generate_questions import _ground, fix_lean, generate_lean
+    from app.mcq_pipeline.nodes.n15_review_questions import review_and_fix_one
+    from app.mcq_pipeline.nodes.n13_recommend_question_type import recommend_one
+    from app.mcq_pipeline.runner import build_adapter
 
     # 1) load what we need, then release the session before the LLM work
     with SessionLocal() as s:
@@ -188,7 +188,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     adapter, _pu, _label = build_adapter(course_id, unit_id, None)
     scope.set_adapter(adapter)
     # Populate the proxy metadata's required `unit` field for this single-question run.
-    from .llm_factory import set_call_context
+    from app.mcq_pipeline.utils.llm import set_call_context
     set_call_context(unit=(_label or unit_id or str(run_id)), step="regenerate")
 
     # Honor a reviewer request to CHANGE the question type: regenerate AS the requested

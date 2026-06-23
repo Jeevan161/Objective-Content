@@ -11,11 +11,12 @@ span three different stages) need an explicit mapping.
 
 from __future__ import annotations
 
-from .progress import STAGE_DEFS
+from app.mcq_pipeline.utils.progress import STAGE_DEFS
 
 # `lo.*` keys don't share a stage-derivable prefix — map them explicitly to the
 # deterministic 10-node LO pipeline's agent stages.
 _LO_STAGE = {
+    "lo.segment_sys": "parse_structure",
     "lo.extract_sys": "extract_concepts",
     "lo.topic_desc_sys": "extract_concepts",
     "lo.depth_profile": "profile_coverage",

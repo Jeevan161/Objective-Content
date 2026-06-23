@@ -20,12 +20,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session
-from app.models import Course, McqRun, RagChunk, SyncJob, Topic, Unit, UnitPart
+from app.models import Course, McqRun, McqTrace, RagChunk, SyncJob, Topic, Unit, UnitPart
 from app.schemas import (
     ApproveRunRequest,
     BuildRagRequest,
     ExtractRequest,
     McqGenerateRequest,
+    McqReviewRequest,
     QuestionFeedbackRequest,
     RagAnswerRequest,
     RagCheckRequest,
@@ -37,6 +38,7 @@ from app.schemas import (
     serialize_course_list,
     serialize_job,
     serialize_mcq_run,
+    serialize_mcq_trace,
 )
 from app.services.extraction import (
     READING_MATERIAL_LABEL,
@@ -48,6 +50,7 @@ from app.services.jobs import (
     start_build_rag_job,
     start_extraction_job,
     start_mcq_job,
+    start_mcq_resume_job,
     start_sync_job,
 )
 from app.services.portal_sync import get_course_versions
@@ -285,6 +288,19 @@ def job_status(job_id: uuid.UUID, session: Session = Depends(get_session)) -> di
     return serialize_job(job)
 
 
+@router.get("/courses/mcq/jobs/{job_id}/trace/")
+def mcq_trace(job_id: uuid.UUID, session: Session = Depends(get_session)) -> list[dict]:
+    """Node-by-node execution trace for an MCQ run — our own tracing (replaces LangSmith).
+    One row per node entry, ordered chronologically. job_id is the run's job id (= the LangGraph
+    checkpoint thread_id); a run re-entered by the repair loop / HITL resume shows repeated nodes."""
+    rows = session.scalars(
+        select(McqTrace)
+        .where(McqTrace.job_id == job_id)
+        .order_by(McqTrace.started_at.asc(), McqTrace.seq.asc())
+    ).all()
+    return [serialize_mcq_trace(r) for r in rows]
+
+
 # --------------------------------------------------------------------------- #
 # MCQ generation (LangGraph pipeline) — static /courses/mcq/* before the catch-all
 # --------------------------------------------------------------------------- #
@@ -330,6 +346,40 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
     start_mcq_job(
         job.id, course_id, (body.topic_id or "").strip(), unit_id,
         bool(body.review), prereq_unit_ids,
+        question_budget=body.question_budget, hitl_enabled=bool(body.hitl),
+    )
+    return serialize_job(job)
+
+
+@router.post("/courses/mcq/jobs/{job_id}/resume/", status_code=status.HTTP_202_ACCEPTED)
+def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
+               session: Session = Depends(get_session)) -> dict:
+    """Resume a HITL-paused MCQ run after a human decision at a gate (approve / reject). The job
+    must be AWAITING_REVIEW. Re-runs the pipeline from its checkpoint in the background; it may
+    pause again at the next gate or complete. The run context (course/unit/etc.) is needed to
+    rebuild the run-scoped RAG adapter — the job_id is the checkpoint thread_id."""
+    job = session.get(SyncJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status != SyncJob.AWAITING_REVIEW:
+        raise HTTPException(status_code=409, detail="Job is not awaiting review.")
+    course_id = (body.course_id or job.course_id or "").strip()
+    unit_id = (body.unit_id or "").strip()
+    if not course_id or not unit_id:
+        raise HTTPException(status_code=400, detail="course_id and unit_id are required to resume.")
+    action = (body.action or "approve").strip().lower()
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'.")
+    decision = {"action": action, "rejected_ids": body.rejected_ids or [], "note": body.note or ""}
+    prereq_unit_ids = body.prerequisite_unit_ids
+    if prereq_unit_ids is not None:
+        prereq_unit_ids = [u.strip() for u in prereq_unit_ids if isinstance(u, str) and u.strip()]
+    job.status = SyncJob.RUNNING
+    job.message = f"Resuming after {action}…"
+    session.commit()
+    start_mcq_resume_job(
+        job.id, course_id, (body.topic_id or "").strip(), unit_id,
+        decision, prereq_unit_ids, body.question_budget, bool(body.review),
     )
     return serialize_job(job)
 

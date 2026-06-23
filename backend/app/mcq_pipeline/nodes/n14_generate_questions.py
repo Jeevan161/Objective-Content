@@ -12,13 +12,10 @@ from __future__ import annotations
 import difflib
 import re
 
-from . import config, rag_api, scope
-from .concurrency import pmap
-from .prompt_store import get_prompt, register
-from .qgen_schemas import (
-    CodeMCQLean, CodeMoreThanOneLean, CodeTextualLean, FibCodingLean,
-    MCQLean, RearrangeLean, TextualLean, TrueFalseLean,
-)
+from app.mcq_pipeline.utils import llm as config, rag_api, scope
+from app.mcq_pipeline.utils.concurrency import pmap
+from app.mcq_pipeline.prompts.store import get_prompt, register
+from app.mcq_pipeline.schemas.questions import CodeMCQLean, CodeMoreThanOneLean, CodeTextualLean, FibCodingLean, MCQLean, RearrangeLean, TextualLean, TrueFalseLean
 
 CODE_PATH_TYPES = {
     "FIB_CODING", "CODE_ANALYSIS_MULTIPLE_CHOICE",
@@ -32,17 +29,20 @@ OPTION_TYPES = {
     "CODE_ANALYSIS_MULTIPLE_CHOICE", "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE",
 }
 
-_DIFFICULTY = {"remember": "EASY", "understand": "MEDIUM", "apply": "MEDIUM", "implement": "HARD"}
+_DIFFICULTY = {"remember": "EASY", "understand": "MEDIUM", "apply": "MEDIUM",
+               "scenario": "HARD", "implement": "HARD"}
 
 
 def difficulty_of(lo: dict) -> str:
-    return _DIFFICULTY.get((lo.get("bloom_category") or "").lower(), "MEDIUM")
+    # Prefer the 4-tier bloom_level_raw (carries 'scenario'); fall back to legacy bloom_category.
+    tier = (lo.get("bloom_level_raw") or lo.get("bloom_category") or "").lower()
+    return _DIFFICULTY.get(tier, "MEDIUM")
 
 
 def _model(temp: float = 0.3):
     # Build from the active LlmProvider (OpenAI / OpenRouter / Anthropic / proxy); falls
     # back to the legacy OpenRouter settings when none is configured.
-    from .llm_factory import make_chat_model
+    from app.mcq_pipeline.utils.llm import make_chat_model
     return make_chat_model(temperature=temp)
 
 
@@ -365,8 +365,20 @@ def _sys_for(qtype: str, lo: dict) -> str:
     if qtype in _TYPED_ANSWER_TYPES:
         parts.append(get_prompt("gen.exact_answer_rules", _EXACT_ANSWER_RULES))
     parts.append(f"Difficulty: {difficulty_of(lo)}.")
+    if lo.get("is_scenario") or (lo.get("bloom_level_raw") or "").lower() == "scenario":
+        parts.append(get_prompt("gen.scenario_rules", _SCENARIO_RULES))
     parts.append(get_prompt("gen.final_validation", _FINAL_VALIDATION))
     return "\n\n".join(parts)
+
+
+_SCENARIO_RULES = register("gen.scenario_rules", (
+    "SCENARIO FRAMING — this outcome is a SCENARIO (apply-in-a-novel-situation) item. Build the "
+    "stem as a SHORT, SELF-CONTAINED, GENERIC situation the learner has NOT seen verbatim in the "
+    "material, then ask them to APPLY the taught concept/method to it (predict, choose, diagnose, "
+    "or decide). Describe the situation fully in the stem (no outside facts); it must be answerable "
+    "using ONLY the taught concept plus the learner's prerequisites. Do NOT reference a source-local "
+    "example entity — invent a fresh, plausible, generic case. Keep ONE unambiguous correct answer."
+))
 
 
 def _ground(lo: dict, max_seq: int | None) -> str:
@@ -730,7 +742,7 @@ def _verify_fib(lo: dict, res: dict, max_seq: int | None) -> dict:
     from app.core.config import settings
     if not settings.fib_verify:
         return res
-    from . import code_exec
+    from app.mcq_pipeline.utils import code_exec
 
     lang = lean.get("code_language") or "PYTHON"
     if not code_exec.language_supported(lang):
@@ -773,7 +785,7 @@ def _verify_code_output(lo: dict, res: dict, max_seq: int | None) -> dict:
     from app.core.config import settings
     if not settings.fib_verify:
         return res
-    from . import code_exec
+    from app.mcq_pipeline.utils import code_exec
 
     lean = res["lean"]
     code = lean.get("code") or ""

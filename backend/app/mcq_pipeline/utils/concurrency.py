@@ -11,7 +11,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable, List, TypeVar
 
-from .scope import with_current_adapter
+from app.mcq_pipeline.utils.scope import with_current_adapter
 
 T = TypeVar("T")
 R = TypeVar("R")

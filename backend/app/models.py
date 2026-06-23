@@ -191,6 +191,7 @@ class SyncJob(Base):
 
     PENDING = "PENDING"
     RUNNING = "RUNNING"
+    AWAITING_REVIEW = "AWAITING_REVIEW"   # paused at a HITL gate (division / LO-mapping)
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
 
@@ -276,6 +277,28 @@ class McqRun(Base):
 
     # final_los + questions + question_reviews + notes + apply_tool_trace + prompt versions.
     result: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class McqTrace(Base):
+    """One node-execution SPAN of an MCQ pipeline run — our own LangGraph-tailored trace
+    (replaces LangSmith). One row per node ENTRY, so a node re-run by the repair loop (or across
+    a HITL pause/resume) yields multiple spans. `job_id` is the run's checkpoint thread_id.
+    Read ordered by `started_at` then `seq`."""
+
+    __tablename__ = "mcq_traces"
+    __table_args__ = (Index("ix_mcq_traces_job", "job_id"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    job_id: Mapped[uuid.UUID] = mapped_column(index=True)   # = thread_id (the run's checkpoint key)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    node: Mapped[str] = mapped_column(String(64))
+    label: Mapped[str] = mapped_column(String(160), default="")
+    status: Mapped[str] = mapped_column(String(16), default="ok")   # ok | error
+    detail: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = created_at_col()
 
 

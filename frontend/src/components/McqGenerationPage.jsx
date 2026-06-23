@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ListChecks, BookOpen, Layers, FileText, Sparkles, AlertTriangle } from 'lucide-react'
-import { getCourse, generateMcq, getJob, listMcqRuns, getMcqRun } from '../api'
+import { getCourse, generateMcq, resumeMcq, getJob, listMcqRuns, getMcqRun } from '../api'
 import { EmptyState, Spinner } from './ui'
 import { useToast } from './Toast'
 import McqProgress from './McqProgress'
 import McqResults from './McqResults'
+import McqReviewGate from './McqReviewGate'
 import McqScopeModal from './McqScopeModal'
 
 const TERMINAL = ['SUCCESS', 'FAILURE']
@@ -34,6 +35,10 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   const [job, setJob] = useState(null)
   const [run, setRun] = useState(null)
   const [scopeOpen, setScopeOpen] = useState(false)
+  const [hitl, setHitl] = useState(false)
+  const [budget, setBudget] = useState('') // '' = default ceiling (20)
+  const [runParams, setRunParams] = useState(null) // {prereqUnitIds, questionBudget} of the active run, for resume
+  const [resuming, setResuming] = useState(false)
 
   // Load the full hierarchy when a course is chosen; reset downstream picks.
   // NOTE: deps are [courseId] ONLY. `toast`'s identity changes on every toast
@@ -79,8 +84,9 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   // NOT required. Content presence is what gates the action.
   const readingParts = (selectedSession?.parts || []).filter((p) => p.label === 'Reading Material')
   const sessionHasContent = readingParts.some((p) => p.has_content)
-  const running = Boolean(job && !TERMINAL.includes(job.status))
-  const canGenerate = ready && sessionHasContent && !running
+  const paused = job?.status === 'AWAITING_REVIEW' // waiting at a HITL gate
+  const running = Boolean(job && !TERMINAL.includes(job.status) && !paused)
+  const canGenerate = ready && sessionHasContent && !running && !paused
 
   // Load the latest existing run for a freshly selected session.
   /* eslint-disable react-hooks/set-state-in-effect -- reset + async fetch on selection change */
@@ -107,7 +113,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   // NOTE: `toast` is intentionally NOT a dep — its identity changes on every
   // toast add/dismiss, which would otherwise reset this poll timer mid-run.
   useEffect(() => {
-    if (!job || TERMINAL.includes(job.status)) return
+    if (!job || TERMINAL.includes(job.status) || job.status === 'AWAITING_REVIEW') return
     const timer = setTimeout(async () => {
       try {
         const updated = await getJob(job.id)
@@ -127,17 +133,47 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   async function handleGenerate(prereqUnitIds) {
     setScopeOpen(false)
     setRun(null)
+    const qb = budget.trim() === '' ? null : Math.max(1, parseInt(budget, 10) || 0) || null
+    setRunParams({ prereqUnitIds, questionBudget: qb })
     try {
-      const j = await generateMcq(courseId, topicId, sessionId, true, prereqUnitIds)
+      const j = await generateMcq(courseId, topicId, sessionId, true, prereqUnitIds, {
+        questionBudget: qb,
+        hitl,
+      })
       setJob(j)
       onTrackJob?.(j) // also surface it in the global Activity drawer
       toast.push({
         kind: 'info',
         title: 'MCQ generation started',
-        message: `Generating from “${selectedSession?.label}” — watch the live progress below.`,
+        message: hitl
+          ? `Generating from “${selectedSession?.label}” — it will pause for your review at each gate.`
+          : `Generating from “${selectedSession?.label}” — watch the live progress below.`,
       })
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not start MCQ generation', message: e.message })
+    }
+  }
+
+  // Submit a human decision at a HITL gate; the backend resumes the paused run from its
+  // checkpoint and returns the now-RUNNING job (the poll effect then takes over again).
+  async function handleDecision(decision) {
+    if (!job) return
+    setResuming(true)
+    try {
+      const j = await resumeMcq(job.id, {
+        ...decision,
+        course_id: courseId,
+        topic_id: topicId,
+        unit_id: sessionId,
+        prerequisite_unit_ids: runParams?.prereqUnitIds ?? null,
+        question_budget: runParams?.questionBudget ?? null,
+        review: true,
+      })
+      setJob(j)
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not submit review', message: e.message })
+    } finally {
+      setResuming(false)
     }
   }
 
@@ -241,6 +277,31 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
               </span>
             )}
           </div>
+          <div className="mcq-options">
+            <label className="mcq-opt">
+              <span>Questions</span>
+              <input
+                className="input mcq-opt-budget"
+                type="number"
+                min="5"
+                step="5"
+                placeholder="20"
+                value={budget}
+                disabled={running || paused}
+                onChange={(e) => setBudget(e.target.value)}
+                data-tip="Target number of questions (default 20; stepped down by 5s if the material is thin)"
+              />
+            </label>
+            <label className="mcq-opt mcq-opt-check" data-tip="Pause for human approval of the division and the final outcomes">
+              <input
+                type="checkbox"
+                checked={hitl}
+                disabled={running || paused}
+                onChange={(e) => setHitl(e.target.checked)}
+              />
+              <span>Human review</span>
+            </label>
+          </div>
           <button
             type="button"
             className="btn btn-primary"
@@ -270,13 +331,17 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
 
       {running && <McqProgress progress={job.progress} />}
 
+      {paused && (
+        <McqReviewGate review={job.progress?.review} busy={resuming} onDecide={handleDecision} />
+      )}
+
       {job?.status === 'FAILURE' && (
         <div className="mcq-fail">
           <AlertTriangle size={14} /> {job.error || 'Generation failed.'}
         </div>
       )}
 
-      {run && !running && <McqResults key={run.id} run={run} />}
+      {run && !running && !paused && <McqResults key={run.id} run={run} />}
     </div>
   )
 }

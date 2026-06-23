@@ -10,6 +10,7 @@ import IngestModal from './components/IngestModal'
 import ChatPage from './components/ChatPage'
 import GenerationStudio from './components/GenerationStudio'
 import McqGenerationPage from './components/McqGenerationPage'
+import McqRunsPage from './components/McqRunsPage'
 import PipelinePage from './components/PipelinePage'
 import LLMProvidersPage from './components/LLMProvidersPage'
 import CourseCard from './components/CourseCard'
@@ -301,6 +302,7 @@ function Workspace() {
             onTrackJob={(job) => setJobs((prev) => [job, ...prev])}
           />
         )}
+        {page === 'runs' && <McqRunsPage courses={courses} />}
         {page === 'courses' && (
         <>
         <header className="topbar">

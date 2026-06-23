@@ -1,23 +1,32 @@
 """
-app/mcq_pipeline/llm_factory.py
--------------------------------
-Central LLM client factory. EVERY pipeline LLM call goes through `make_chat_model()`,
-which builds a LangChain chat model from the ACTIVE LlmProvider row (the encrypted key
-is decrypted only at use). Supports:
-  - openai_compatible : OpenAI / OpenRouter / the internal proxy (the proxy's required
-    `extra_body` metadata is attached, with `unit`/`step` filled from the run context).
-  - anthropic         : Claude (ChatAnthropic; imported lazily).
+app/mcq_pipeline/utils/llm.py
+-----------------------------
+Central LLM utilities — a merge of the former `config` + `llm_factory` + `lo_llm`:
 
-If no provider is configured/active it falls back to the legacy OpenRouter settings, so
-the pipeline keeps working out of the box. The active-provider config is cached and
-refreshed via `refresh()` (called whenever the settings change).
+* OpenRouter settings shim (OPENROUTER_* / *_MODEL) sourced from app settings — the legacy
+  fallback config.
+* `make_chat_model()` — EVERY pipeline LLM call goes through here; builds a LangChain chat model
+  from the ACTIVE LlmProvider row (openai_compatible / anthropic), falling back to the legacy
+  OpenRouter settings when none is configured. Active config is cached; `refresh()` reloads it.
+* `chat()` / `parse_json()` — the plain-text completion + tolerant JSON extractor the agent nodes use.
 """
 
 from __future__ import annotations
 
 import contextvars
 import copy
+import json
+import re
 import threading
+
+from app.core.config import settings
+
+# --- OpenRouter settings shim (legacy fallback config) ---------------------- #
+OPENROUTER_API_KEY = settings.openrouter_api_key
+OPENROUTER_BASE_URL = settings.openrouter_base_url
+AGENT_MODEL = settings.mcq_agent_model          # strong model: LO agents + question gen/review
+CHAT_MODEL = settings.rag_chat_model
+EMBED_MODEL = settings.embed_model
 
 _UNSET = object()
 _active = _UNSET                # cached active-provider config dict, or None, or _UNSET (unloaded)
@@ -90,10 +99,8 @@ def _resolve_extra_body(extra_body: dict) -> dict:
 def _legacy(temperature: float):
     """The original hardcoded OpenRouter client — used when no provider is configured."""
     from langchain_openai import ChatOpenAI
-
-    from . import config
-    return ChatOpenAI(model=config.AGENT_MODEL, api_key=config.OPENROUTER_API_KEY,
-                      base_url=config.OPENROUTER_BASE_URL, temperature=temperature)
+    return ChatOpenAI(model=AGENT_MODEL, api_key=OPENROUTER_API_KEY,
+                      base_url=OPENROUTER_BASE_URL, temperature=temperature)
 
 
 def _build_model(cfg: dict, temperature: float, max_tokens: int | None = None):
@@ -178,3 +185,34 @@ def seed_providers() -> int:
         return 2
     except Exception:  # noqa: BLE001 — seeding is best-effort
         return 0
+
+
+# --- plain-text completion + tolerant JSON parsing (the agent nodes use these) - #
+def _model(temperature: float = 0.2):
+    return make_chat_model(temperature=temperature)
+
+
+def chat(messages: list[dict], *, temperature: float = 0.2) -> str:
+    """Run a chat completion and return the assistant text. `messages` is a list of
+    ``{"role": ..., "content": ...}`` dicts (LangChain accepts this form directly)."""
+    resp = _model(temperature).invoke(messages)
+    return getattr(resp, "content", None) or str(resp)
+
+
+def parse_json(text):
+    """Best-effort JSON extraction from a chat reply (strips code fences / prose)."""
+    t = (text or "").strip()
+    t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+    t = re.sub(r"\s*```$", "", t)
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    for open_c, close_c in (("[", "]"), ("{", "}")):
+        i, j = t.find(open_c), t.rfind(close_c)
+        if i != -1 and j != -1 and j > i:
+            try:
+                return json.loads(t[i:j + 1])
+            except Exception:
+                continue
+    return None

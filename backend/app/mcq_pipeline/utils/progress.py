@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Callable
 
 # The pipeline's stages, in order. `parallel_group` marks branches the UI renders
@@ -22,12 +23,14 @@ STAGE_DEFS = [
     {"key": "canonicalize_concepts", "label": "Canonicalize concepts"},
     {"key": "build_dependency_graph", "label": "Build dependency graph"},
     {"key": "profile_coverage", "label": "Profile coverage (breadth & depth)"},
-    {"key": "plan_allocation", "label": "Plan allocation"},
+    {"key": "plan_allocation", "label": "Plan division (feasibility + budget)"},
+    {"key": "review_division", "label": "Review division (human gate 1)"},
     {"key": "author_outcomes", "label": "Author outcomes"},
     {"key": "resolve_prerequisites", "label": "Resolve prerequisites"},
-    {"key": "coverage_gate", "label": "Coverage gate (strict rubric)"},
-    {"key": "validate", "label": "Validate (V1–V13)"},
-    {"key": "repair", "label": "Repair (if needed)"},
+    {"key": "judge_outcomes", "label": "Judge outcomes (R1–R8 rubric)"},
+    {"key": "validate", "label": "Validate (structural + rubric gate)"},
+    {"key": "repair", "label": "Repair (regenerate, if needed)"},
+    {"key": "review_outcomes", "label": "Review outcomes (human gate 2)"},
     {"key": "finalize", "label": "Finalize & freeze"},
     {"key": "lo_to_legacy", "label": "Bridge to questions"},
     {"key": "sequence_outcomes", "label": "Sequence outcomes (deep-dive order)"},
@@ -43,9 +46,12 @@ def _now_iso() -> str:
 
 
 class ProgressReporter:
-    def __init__(self, sink: Callable[[dict], None] | None = None):
+    def __init__(self, sink: Callable[[dict], None] | None = None,
+                 trace_sink: Callable[[dict], None] | None = None):
         self._lock = threading.Lock()
         self._sink = sink
+        self._trace_sink = trace_sink          # emits one span per node entry (our own trace)
+        self._open: dict[str, tuple] = {}       # node key -> (started_dt, started_perf)
         self._stages: dict[str, dict] = {
             d["key"]: {**d, "state": "pending"} for d in STAGE_DEFS
         }
@@ -65,11 +71,33 @@ class ProgressReporter:
                 pass
 
     def _set(self, key: str, **fields) -> None:
+        span = None
         with self._lock:
             stage = self._stages.get(key)
             if stage is not None:
                 stage.update(fields)
+                new_state = fields.get("state")
+                now = datetime.now(timezone.utc)
+                # First transition into "running" opens a span (covers start()/counter()/tick());
+                # the matching "done"/"error" closes it and emits the span. A node re-entered by
+                # the repair loop / resume re-opens, so each entry is its own span.
+                if new_state == "running" and key not in self._open:
+                    self._open[key] = (now, perf_counter())
+                elif new_state in ("done", "error"):
+                    started_dt, started_perf = self._open.pop(key, (now, perf_counter()))
+                    span = {
+                        "node": key, "label": stage.get("label", ""),
+                        "status": "error" if new_state == "error" else "ok",
+                        "detail": stage.get("detail", "") or "",
+                        "started_at": started_dt, "ended_at": now,
+                        "duration_ms": int(max(0.0, perf_counter() - started_perf) * 1000),
+                    }
         self._flush()
+        if span is not None and self._trace_sink:
+            try:
+                self._trace_sink(span)
+            except Exception:  # noqa: BLE001 — tracing must never crash the run
+                pass
 
     def start(self, key: str, detail: str | None = None) -> None:
         self._set(key, state="running", **({"detail": detail} if detail else {}))

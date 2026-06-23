@@ -18,8 +18,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-import app.mcq_pipeline.lo_graph  # noqa: F401 — import triggers all prompt register() calls
-from app.mcq_pipeline import prompt_catalog, prompt_store
+import app.mcq_pipeline.graph  # noqa: F401 — import triggers all prompt register() calls
+from app.mcq_pipeline.prompts import catalog as prompt_catalog, store as prompt_store
 
 router = APIRouter(prefix="/api/mcq")
 

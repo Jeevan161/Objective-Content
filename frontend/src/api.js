@@ -73,7 +73,14 @@ export const ragAnswer = (courseIds, query) =>
 // --- MCQ generation pipeline (LangGraph) ---
 // Start a run for a session. `unitId` is a reading-material part's portal unit_id
 // within the session. Returns a background job (job_type MCQ) the UI polls.
-export const generateMcq = (courseId, topicId, unitId, review = true, prerequisiteUnitIds = null) =>
+export const generateMcq = (
+  courseId,
+  topicId,
+  unitId,
+  review = true,
+  prerequisiteUnitIds = null,
+  { questionBudget = null, hitl = false } = {},
+) =>
   request('/courses/mcq/generate/', {
     method: 'POST',
     body: JSON.stringify({
@@ -82,7 +89,18 @@ export const generateMcq = (courseId, topicId, unitId, review = true, prerequisi
       unit_id: unitId,
       review,
       prerequisite_unit_ids: prerequisiteUnitIds,
+      question_budget: questionBudget,
+      hitl,
     }),
+  })
+
+// Resume a HITL-paused run after a human decision at a gate. `decision` carries the action
+// (approve/reject), any rejected LO ids + note, and the run context the backend needs to rebuild
+// the run-scoped RAG adapter (course/topic/unit/prereqs/budget). The job_id is the checkpoint key.
+export const resumeMcq = (jobId, decision) =>
+  request(`/courses/mcq/jobs/${jobId}/resume/`, {
+    method: 'POST',
+    body: JSON.stringify(decision),
   })
 
 // Recent runs (summaries), optionally scoped to a course/session.
@@ -93,6 +111,12 @@ export const listMcqRuns = (courseId, unitId) =>
 
 // Full result of a single run.
 export const getMcqRun = (runId) => request(`/courses/mcq/runs/${runId}/`)
+
+// Node-by-node execution trace for a run (our own tracing), by the run's job id.
+export const getMcqTrace = (jobId) => request(`/courses/mcq/jobs/${jobId}/trace/`)
+
+// All recent runs (summaries), newest first, across every course — for the Runs page.
+export const listAllMcqRuns = (limit = 50) => request(`/courses/mcq/runs/?limit=${limit}`)
 
 // --- Human-in-the-loop review (Gate B) ---
 // Regenerate ONE question with reviewer feedback injected; returns the new question.

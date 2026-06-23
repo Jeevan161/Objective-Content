@@ -418,4 +418,52 @@ Each phase is independently testable; the build stays runnable between phases.
 | 4-tier bloom breaks 2-value consumers | Legacy bridge + explicit `_DIFFICULTY`/`_fallback_type` cases; regression test. |
 | Removing the fixed split changes expected question counts | Budget user-supplied (default 20); division surfaced + approved at Gate 1 before authoring. |
 | Question stage still programming-coupled | Out of scope; `is_setup_or_cli` kept for it; tracked as follow-up. |
+
+---
+
+## 18. Build status (v2 implemented)
+
+**Done & verified** (all 28 `mcq_pipeline` modules + API import cleanly; pure-logic unit tests pass; graph compiles with gates; routing checked):
+- **Foundation** — `lo_config.py`: 4-tier verbs, `feasible_tiers`, `allowed_verbs_for(depth, procedural)`, budget knobs (`MIN_BUDGET=5`, `BUDGET_STEP=5`, `MAX_RETRIES=3`); `lo_concept_graph.py`: removed `_STRONG_PROC`/`is_procedural`, `has_explicit_contrast`/`_CONTRAST_CUE`; `concept_depth` demoted to DepthProfiler fallback; `is_setup_or_cli` kept for the question stage only.
+- **lo_nodes** — Planner (`plan_allocation`): feasibility 4-tier division + budget quantization + Gate-1 `division_proposal`; procedurality = LLM `applied_skill` only; assignment-based author (`_reconcile_to_assignments`, grounded synthesis — no junk filler); unified Judge `judge_outcomes` (R1–R8, prereq-RAG context); slim `validate` (V1–V10/V14 + composite V13 gate; V11/V12 deleted; V8 de-coupled); regenerate-with-feedback `repair` (terminal recall fallback only). `_RECAP` deletion removed.
+- **Bridge/graph/state/runner** — `lo_artifact`: 4-tier `_BLOOM_TO_LEGACY` + `is_scenario`, budget-flag NEEDS_REVIEW, surfaced `division_proposal` + per-LO rubric verdicts; `lo_graph`: node renamed `coverage_gate`→`judge_outcomes`; `lo_state`: RunContext `question_budget`/`hitl_enabled`, `division_proposal`/`gate_decision` channels; `runner`: `question_budget` threaded.
+- **Question stage** — scenario→MCQ routing (`_fallback_type` + recommend guard), `scenario`→HARD difficulty via `bloom_level_raw`, `gen.scenario_rules` stem-framing prompt; `progress.py` stage labels updated.
+- **HITL (graph + runner)** — `review_division` / `review_outcomes` interrupt gate nodes wired in, **inert pass-through when `hitl_enabled=False`** (default → zero behavior change); reject loops (Gate 1→re-plan, Gate 2→regenerate rejected); `runner.resume_run` + `_interrupt_payload` for pause/resume on the existing durable checkpointer.
+
+**DONE since the v2 build:** all 6 adversarial-review findings fixed; **HITL jobs/API wired** —
+`SyncJob.AWAITING_REVIEW` state, `start_mcq_job` carries `question_budget`/`hitl_enabled`, a paused
+run parks the review payload on `progress.review` (+ `durable_checkpoint`), and
+`POST /courses/mcq/jobs/{job_id}/resume/` → `start_mcq_resume_job` → `runner.resume_run`
+(approve/reject, may pause again at the next gate); `McqGenerateRequest` gained `question_budget` +
+`hitl`; activation script `backend/scripts/activate_lo_v2_prompts.py` created.
+
+**Remaining (needs the live stack — Postgres + pgvector + LLM):**
+1. **Run the prompt activation** — `cd backend && PYTHONPATH=. .venv/bin/python scripts/activate_lo_v2_prompts.py`
+   (seeds `lo.rubric` + `gen.scenario_rules`, resets `lo.author_sys` + `lo.repair_sys` to v2
+   defaults). REQUIRED before a real run, else the live author/repair prompts hold stale `<N_RU>` /
+   `<BLOOM_LEVEL>` placeholders. *(DB was down in the build env — this is the one ops step left.)*
+2. **End-to-end run** — full pipeline on a real session; a non-programming session for
+   domain-agnosticism; ~2 scenario LOs/questions on a hands-on session; and one HITL run
+   (`hitl: true` → poll job → `AWAITING_REVIEW` + `progress.review` → `resume/`).
+3. **`lo_rules.json`** reference-doc sync (remove V11/V12, note de-coupled V8) — cosmetic.
+
+**DONE since (frontend HITL + bug fix):**
+- **Frontend HITL UI** — new `McqReviewGate.jsx` renders Gate-1 (division proposal: budget, 4-tier
+  counts, in-scope/dropped concepts, flags) and Gate-2 (outcomes with per-LO reject checkboxes +
+  note + rubric verdict). `McqGenerationPage` adds a **Questions** budget input + **Human review**
+  toggle, treats `AWAITING_REVIEW` as a paused state (stops polling, shows the gate), and POSTs
+  approve/reject → `resumeMcq` → resume endpoint. `api.js` got `question_budget`/`hitl` on generate
+  + `resumeMcq`. `mcq.css` got the gate styles + `b-scenario` badge. **Frontend builds clean.**
+- **Bug fix** — `MAX_RETRIES` was used in `repair()` but missing from `lo_nodes`'s `lo_config`
+  import (a NameError that only fired when a run hit the repair loop — past the import/unit checks).
+  Now imported; the repair path is exercised by a deterministic test; an AST undefined-name sweep is
+  clean across all changed files. Also dropped two now-unused verb-set imports.
+
+**Adversarial review (done):** a 16-agent Workflow (integration / 4-tier / HITL-safety / decoupling, each finding independently verified) confirmed **6 real issues (0 critical, 2 high, 2 medium, 2 low) — ALL FIXED & re-verified**:
+1. *(high)* `repair` now **reconciles `allocation_plan`** (tier_counts + per-topic slots) with the repaired outcomes, so a legitimate fix no longer makes V2/V3 spuriously fail → needless NEEDS_REVIEW; a genuine tier-**downgrade** is surfaced as an explicit `tier_downgraded` override with a clear NEEDS_REVIEW reason (was a confusing V2 mismatch).
+2. *(high)* `effective_bloom_split` now emits real **4-tier counts** (scenario was being lumped into remember_understand); `frontend/McqResults.jsx` renders all four tiers.
+3. *(medium)* terminal-downgrade escalation reason is now specific (folded into #1).
+4. *(low)* `finalize` syntax null-out now covers **scenario** LOs, not just apply.
+5. *(low)* `no_scenario_feasible` flag now emitted in the division proposal (Gate-1 visibility).
+6. *(medium)* HITL pause payload now surfaces **`durable_checkpoint`** so a non-durable in-memory fallback isn't treated as resumable.
 ```

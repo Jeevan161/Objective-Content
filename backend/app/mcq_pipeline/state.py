@@ -41,11 +41,13 @@ class LOState(TypedDict, total=False):
     concept_graph: dict                    # {nodes, edges, _adj, assumed_prior, acyclic}
     coverage_profile: dict                 # breadth x depth manifest (profile_coverage node)
     allocation_plan: dict
+    division_proposal: dict                # Planner output, shown to the human at HITL Gate 1
     outcomes: list
 
     # ---- validation / repair loop ----------------------------------------- #
     validation_report: dict
-    lo_reviews: dict                       # outcome_id -> coverage-gate rubric verdict (V13)
+    lo_reviews: dict                       # outcome_id -> unified-judge rubric verdict (R1–R8)
+    gate_decision: dict                    # last HITL gate decision (Gate 1 division / Gate 2 outcomes)
     retry_count: int
     overrides: Annotated[list, operator.add]
     escalation: dict
@@ -72,7 +74,9 @@ class RunContext:
     db_prereq_units: list = field(default_factory=list)
     generate_questions: bool = True
     review_questions: bool = True
-    run_coverage_gate: bool = True         # strict coverage-rubric gate over LOs (V13)
+    run_coverage_gate: bool = True         # run the unified LLM Judge (R1–R8) over LOs (V13)
+    question_budget: Any = None            # user-supplied budget (default ceiling = QUESTION_BUDGET)
+    hitl_enabled: bool = False             # pause at review gates (Gate 1 / 2); off for tests/headless
 
 
 class _Registry:

@@ -186,7 +186,7 @@ def seed_prompts() -> int:
     `register()` so all keys are known. Safe to call at startup; returns the count
     inserted. Best-effort — never raises (missing deps/DB → 0)."""
     try:
-        import app.mcq_pipeline.lo_graph  # noqa: F401 — import triggers all register() calls
+        import app.mcq_pipeline.graph  # noqa: F401 — import triggers all register() calls
         from sqlalchemy import select as _select
 
         from app.db.session import SessionLocal

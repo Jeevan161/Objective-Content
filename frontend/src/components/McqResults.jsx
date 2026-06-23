@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  ExternalLink, CheckCircle2, AlertTriangle, ListChecks, Sparkles,
+  CheckCircle2, AlertTriangle, ListChecks, Activity,
   FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck,
 } from 'lucide-react'
 import { Spinner } from './ui'
 import { useToast } from './Toast'
-import { regenerateMcqQuestion, submitMcqFeedback, approveMcqRun } from '../api'
+import { regenerateMcqQuestion, submitMcqFeedback, approveMcqRun, getMcqTrace } from '../api'
 
 const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer', 'LO drift', 'too easy', 'too hard']
 
@@ -268,7 +268,7 @@ function SpecPanel({ artifact, overrides, escalation }) {
         )}
         <div className="mcq-spec-row">
           <span className="mcq-spec-k">Bloom split</span>
-          <span>{split.remember_understand ?? '—'} remember/understand · {split.apply ?? '—'} apply</span>
+          <span>{['remember', 'understand', 'apply', 'scenario'].map(t => `${split[t] ?? 0} ${t}`).join(' · ')}</span>
         </div>
       </div>
 
@@ -304,6 +304,67 @@ function SpecPanel({ artifact, overrides, escalation }) {
 }
 
 // Full result of one MCQ run: stat tiles + filterable question list + LOs + spec.
+function fmtMs(ms) {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`
+}
+
+// Node-by-node execution trace (our own tracing, replacing LangSmith). Fetched by the run's job
+// id; a node re-run by the repair loop / HITL resume appears more than once, in chronological order.
+function TracePanel({ jobId }) {
+  const [spans, setSpans] = useState(null)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    getMcqTrace(jobId)
+      .then((rows) => {
+        if (!cancelled) setSpans(rows || [])
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e.message)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [jobId])
+
+  if (err) return <p className="muted">Could not load trace: {err}</p>
+  if (spans === null)
+    return (
+      <div className="mcq-loading">
+        <Spinner size={14} /> Loading trace…
+      </div>
+    )
+  if (spans.length === 0) return <p className="muted">No trace recorded for this run.</p>
+
+  const total = spans.reduce((n, s) => n + (s.duration_ms || 0), 0)
+  const max = Math.max(1, ...spans.map((s) => s.duration_ms || 0))
+  return (
+    <div className="mcq-trace">
+      <div className="mcq-trace-head">
+        <span className="mcq-spec-k">{spans.length} node steps</span>
+        <span className="mcq-lo-tag">total {fmtMs(total)}</span>
+      </div>
+      <ol className="mcq-trace-list">
+        {spans.map((s, i) => (
+          <li key={i} className={`mcq-trace-row ${s.status === 'error' ? 'err' : ''}`}>
+            <span className="mcq-trace-node">
+              {s.status === 'error' && <AlertTriangle size={11} />} {s.label || s.node}
+            </span>
+            <span className="mcq-trace-bar">
+              <span
+                className="mcq-trace-fill"
+                style={{ width: `${Math.round(((s.duration_ms || 0) / max) * 100)}%` }}
+              />
+            </span>
+            <span className="mcq-trace-ms">{fmtMs(s.duration_ms || 0)}</span>
+            {s.detail && <span className="mcq-trace-detail">{s.detail}</span>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
 function McqResults({ run }) {
   const toast = useToast()
   const r = run?.result || {}
@@ -346,7 +407,7 @@ function McqResults({ run }) {
 
   const los = r.final_los || []
   const notes = r.notes || []
-  const url = run?.langsmith_run_url || r.langsmith_run_url
+  const jobId = run?.job_id
   const artifact = r.artifact || {}
   const status = artifact.status || r.lo_status || ''
   const overrides = r.overrides || artifact.overrides || []
@@ -399,11 +460,6 @@ function McqResults({ run }) {
               reading-material mode
             </span>
           )}
-          {url && (
-            <a className="btn btn-ghost btn-sm" href={url} target="_blank" rel="noreferrer">
-              <Sparkles size={13} /> LangSmith trace <ExternalLink size={11} />
-            </a>
-          )}
         </div>
       </div>
 
@@ -417,6 +473,11 @@ function McqResults({ run }) {
         {hasSpec && (
           <button className={`mcq-tab ${tab === 'spec' ? 'active' : ''}`} onClick={() => setTab('spec')}>
             Spec {status && <span className={`mcq-tab-n ${status === 'FROZEN' ? '' : 'warn'}`}>{status === 'FROZEN' ? '✓' : '!'}</span>}
+          </button>
+        )}
+        {jobId && (
+          <button className={`mcq-tab ${tab === 'trace' ? 'active' : ''}`} onClick={() => setTab('trace')}>
+            <Activity size={12} /> Trace
           </button>
         )}
       </div>
@@ -495,6 +556,8 @@ function McqResults({ run }) {
       {tab === 'spec' && hasSpec && (
         <SpecPanel artifact={artifact} overrides={overrides} escalation={escalation} />
       )}
+
+      {tab === 'trace' && jobId && <TracePanel jobId={jobId} />}
 
       {notes.length > 0 && (
         <div className="mcq-notes">{notes.map((n, i) => <span key={i}>{n}</span>)}</div>

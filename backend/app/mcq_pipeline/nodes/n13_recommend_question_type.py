@@ -13,10 +13,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from . import config, rag_api, scope
-from .concurrency import pmap
-from .lo_concept_graph import is_setup_or_cli
-from .prompt_store import get_prompt, register
+from app.mcq_pipeline.utils import llm as config, rag_api, scope
+from app.mcq_pipeline.utils.concurrency import pmap
+from app.mcq_pipeline.utils.concept_graph import is_setup_or_cli
+from app.mcq_pipeline.prompts.store import get_prompt, register
 
 CODE_PATH_TYPES = {
     "FIB_CODING", "CODE_ANALYSIS_MULTIPLE_CHOICE",
@@ -77,7 +77,7 @@ Choose exactly ONE type per outcome. Keep the rationale to 1-2 sentences and say
 
 def _model():
     # Build from the active LlmProvider (legacy OpenRouter fallback when none configured).
-    from .llm_factory import make_chat_model
+    from app.mcq_pipeline.utils.llm import make_chat_model
     return make_chat_model(temperature=0)
 
 
@@ -90,6 +90,9 @@ def _fallback_type(lo: dict) -> str:
     """Deterministic backup if the LLM omits a recommendation for some LO."""
     bloom = (lo.get("bloom_category") or "").lower()
     has_syntax = bool((lo.get("syntax") or "").strip())
+    # Scenario LOs are situation-based reasoning — keep them in the MCQ family.
+    if lo.get("is_scenario") or (lo.get("bloom_level_raw") or "").lower() == "scenario":
+        return "MULTIPLE_CHOICE"
     # Setup/CLI concepts are conceptual-for-assessment — never a code/FIB target. Gated to
     # LOs that carry code/syntax, so it stays a programming-domain heuristic (won't mis-fire
     # on e.g. 'shared environment' in genetics, which has no syntax).
@@ -126,6 +129,14 @@ def recommend_one(lo: dict, *, max_seq: int | None = None) -> dict:
         out["question_type"] = "MULTIPLE_CHOICE"
         out["question_type_rationale"] = (
             "[guard] setup/CLI concept is not a runnable code/FIB target -> MULTIPLE_CHOICE. "
+            + out.get("question_type_rationale", ""))
+
+    # Scenario LOs are situation-based reasoning — keep them MCQ-family (never FIB / typed / rearrange).
+    if (lo.get("is_scenario") or (lo.get("bloom_level_raw") or "").lower() == "scenario") \
+            and out["question_type"] in {"FIB_CODING", "TEXTUAL", "CODE_ANALYSIS_TEXTUAL", "REARRANGE"}:
+        out["question_type"] = "MULTIPLE_CHOICE"
+        out["question_type_rationale"] = (
+            "[scenario] situation-based reasoning -> MULTIPLE_CHOICE. "
             + out.get("question_type_rationale", ""))
 
     with scope.recording() as rag_calls:

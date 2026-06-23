@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.crypto import decrypt, encrypt, mask
 from app.db.session import get_session
-from app.mcq_pipeline import llm_factory
+from app.mcq_pipeline.utils import llm as llm_factory
 from app.models import LlmProvider
 
 router = APIRouter(prefix="/api/llm/providers")

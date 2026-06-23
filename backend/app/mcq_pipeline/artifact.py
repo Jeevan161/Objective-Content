@@ -16,8 +16,8 @@ import hashlib
 import json
 from datetime import date
 
-from .lo_concept_graph import slugify, syntax_grounded
-from .lo_config import QUESTION_BUDGET, SPEC_VERSION
+from app.mcq_pipeline.utils.concept_graph import slugify, syntax_grounded
+from app.mcq_pipeline.config import QUESTION_BUDGET, SPEC_VERSION, TIER_ORDER
 
 
 # --- finalize (Node 10) ---------------------------------------------------- #
@@ -27,6 +27,10 @@ def finalize(state: dict) -> dict:
     Never raises. Returns the partial-state update {"artifact": ...}."""
     report = state.get("validation_report", {})
     failed = [k for k, v in report.items() if not v.get("pass")]
+    proposal = state.get("division_proposal") or {}
+    budget_flags = [f for f in proposal.get("flags", [])
+                    if f in ("low_budget_review", "budget_raised_for_coverage")]
+    downgrade = next((o for o in (state.get("overrides") or []) if o.get("rule") == "tier_downgraded"), None)
     escalation = None
     if failed:
         # We only reach finalize with failures when retries are exhausted (the
@@ -38,6 +42,15 @@ def finalize(state: dict) -> dict:
             "report": {k: v for k, v in report.items() if not v.get("pass")},
             "retry_count": state.get("retry_count", 0),
         }
+    elif budget_flags or downgrade:
+        # Material too thin for the requested budget, or repair had to downgrade a tier — ship,
+        # but flag for human review with a SPECIFIC reason (not a confusing V2 mismatch).
+        reasons = (([f"thin material ({', '.join(budget_flags)})"] if budget_flags else [])
+                   + (["repair lowered outcomes below their planned Bloom tier"] if downgrade else []))
+        escalation = {"reason": "review recommended: " + "; ".join(reasons),
+                      "session_id": state["session_id"], "budget_flags": budget_flags,
+                      "tier_downgraded": (downgrade or {}).get("ids", []),
+                      "final_budget": proposal.get("final_budget")}
     status = "NEEDS_REVIEW" if escalation else "FROZEN"
     budget = state.get("allocation_plan", {}).get("question_budget", QUESTION_BUDGET)
     order = {t["topic_id"]: t["order"] for t in state["sections"]}
@@ -46,14 +59,14 @@ def finalize(state: dict) -> dict:
     # safety net: never ship an Apply outcome carrying syntax that doesn't ground in
     # the source — null it (repair-then-null policy, §16).
     for o in outcomes:
-        if o.get("bloom_level") == "apply" and o.get("syntax"):
+        if o.get("bloom_level") in ("apply", "scenario") and o.get("syntax"):
             if not syntax_grounded(o["syntax"], state["source_text"]):
                 o["syntax"] = None
 
     canonical = json.dumps(outcomes, sort_keys=True, ensure_ascii=False).encode("utf-8")
     spec_hash = "sha256:" + hashlib.sha256(canonical).hexdigest()
     src_fp = "sha256:" + hashlib.sha256(state["source_text"].encode("utf-8")).hexdigest()
-    got_ap = sum(o["bloom_level"] == "apply" for o in outcomes)
+    tier_counts = {t: sum(o["bloom_level"] == t for o in outcomes) for t in TIER_ORDER}
 
     artifact = {
         "session_id": state["session_id"],
@@ -63,7 +76,7 @@ def finalize(state: dict) -> dict:
         "spec_hash": spec_hash,
         "source_fingerprint": {"reading": src_fp},
         "question_budget": budget,
-        "effective_bloom_split": {"remember_understand": len(outcomes) - got_ap, "apply": got_ap},
+        "effective_bloom_split": tier_counts,        # 4-tier: remember/understand/apply/scenario
         "overrides": state.get("overrides", []),
         "validation_report": state.get("validation_report", {}),
         "outcomes": outcomes,
@@ -86,6 +99,14 @@ def finalize(state: dict) -> dict:
         "assumed_prior": graph.get("assumed_prior", []),
         "coverage_profile": state.get("coverage_profile", {}),
     }
+    # The Planner's division proposal (Gate-1 payload) + the per-LO rubric verdicts (R1–R8),
+    # so the portal can show WHY each LO exists and how it scored.
+    artifact["division_proposal"] = state.get("division_proposal", {})
+    artifact["lo_reviews"] = {
+        oid: {"covered": v.get("covered"), "rubric": v.get("rubric"),
+              "fail_reason": v.get("fail_reason")}
+        for oid, v in (state.get("lo_reviews") or {}).items()
+    }
     # Return ONLY the artifact (which carries the sorted, frozen outcomes). Do NOT also
     # return a top-level "outcomes" — that REPLACE channel holds the working/repaired
     # outcomes, and overwriting it with the sorted snapshot conflates archival vs working
@@ -98,8 +119,10 @@ def finalize(state: dict) -> dict:
 
 
 # --- legacy bridge --------------------------------------------------------- #
-# Lossy Bloom map: the question pipeline keys off the old 4-level vocabulary.
-_BLOOM_TO_LEGACY = {"apply": "apply", "remember_understand": "understand"}
+# Map the 4 LO tiers -> the question pipeline's bloom_category vocabulary. scenario rides on
+# 'apply' (its difficulty/distractor logic) but carries is_scenario so generation frames a situation.
+_BLOOM_TO_LEGACY = {"remember": "remember", "understand": "understand",
+                    "apply": "apply", "scenario": "apply"}
 
 
 def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
@@ -140,6 +163,7 @@ def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
         "in_session_prerequisites": in_session,
         "prerequisite_scope": outcome.get("prerequisite_scope"),
         "bloom_level_raw": outcome.get("bloom_level"),
+        "is_scenario": bool(outcome.get("scenario") or outcome.get("bloom_level") == "scenario"),
         "concept_id": cid,
     }
 

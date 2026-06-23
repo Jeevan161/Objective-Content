@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from .lo_config import ALIAS_MAP
+from app.mcq_pipeline.config import ALIAS_MAP
 
 
 # --- text utilities -------------------------------------------------------- #
@@ -93,26 +93,12 @@ def recover_syntax(text: str) -> str | None:
     return lines[0] if lines else None
 
 
-# --- procedurality / canonicalization -------------------------------------- #
-# Apply-suitability signal — STRICT, evidence-based (BR2 / V8). A concept is
-# "procedural" only when its section shows something to *do*: a fenced code block,
-# OR a STRONG operational cue. Loose prose verbs are deliberately excluded.
-_STRONG_PROC = re.compile(
-    r"\b(syntax|command|compute|calculate|execute|implement|invoke|debug|trace|"
-    r"evaluate|construct|instantiate|initiali[sz]e)\b|run\s+the|step\s*\d", re.I)
-
-
-def is_procedural(quote: str, canon: str, section_text: str) -> bool:
-    """CONCEPT-scoped procedurality. A concept is procedural only when it is itself
-    tied to something to *do*: its name tokens appear INSIDE a fenced code block of
-    the section, OR a strong operational cue occurs in the concept's own quote/name.
-    (Previously this scanned the whole section, so one unrelated `pip install` fence
-    or one strong-cue word marked EVERY concept in the section procedural.)"""
-    fences = "\n".join(_FENCE.findall(section_text or "")).lower()
-    name_toks = set(re.findall(r"[a-z_][a-z0-9_]{2,}", (canon or "").lower()))
-    in_fence = bool(name_toks) and any(t in fences for t in name_toks)
-    strong = bool(_STRONG_PROC.search(quote or "") or _STRONG_PROC.search(canon or ""))
-    return in_fence or strong
+# --- canonicalization ------------------------------------------------------ #
+# NOTE: procedurality (is a concept a performable/applied SKILL?) is now decided
+# SOLELY by the LLM `applied_skill` vote in build_dependency_graph. The old regex
+# floor (`is_procedural` / `_STRONG_PROC`) was a programming/English-biased heuristic
+# and was removed. `is_setup_or_cli` below is retained ONLY for the (still
+# programming-coupled, out-of-scope) question stage; the LO pipeline no longer uses it.
 
 
 # Installation / shell / environment-setup activities read as "procedural" (they have
@@ -143,17 +129,14 @@ def is_setup_or_cli(quote: str, canon: str, section_text: str = "") -> bool:
     return bool(_SETUP_CLI_RE.search(quote or "") or _SETUP_CLI_RE.search(canon or ""))
 
 
-# --- LO grounding-DEPTH signals (V12: over-reach beyond what's taught) ------- #
-# An outcome's cognitive demand must match what the material TEACHES, not merely
-# mention. These measure taught depth + whether a comparison is explicitly taught, so
-# the validator can flag over-reach (e.g. "differentiate Flask and FastAPI" minted from
-# a one-line overview that never contrasts them).
+# --- taught-DEPTH signal (DepthProfiler fallback ONLY) ---------------------- #
+# `concept_depth` is a crude sentence-count proxy for how deeply a concept is taught.
+# It is used ONLY as the deterministic fallback inside the DepthProfiler (profile_coverage)
+# node when the LLM depth call is unavailable — it is NOT a binding validator (the unified
+# Judge's R2 owns depth). The old English contrast-cue regex (`_CONTRAST_CUE` /
+# `has_explicit_contrast`, used by the deleted V12) was domain-biased and was removed.
 _SENT_RE = re.compile(r"[.!?\n]+")
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#.]{2,}")
-_CONTRAST_CUE = re.compile(
-    r"\b(?:but|whereas|while|unlike|versus|vs|compared|contrast|contrasts|differ|"
-    r"differs|different|differences?|rather than|instead of|than|more|less|faster|"
-    r"slower|lighter|heavier|simpler|smaller|larger|better|worse|prefer|over)\b", re.I)
 _DEPTH_STOP = {
     "the", "a", "an", "of", "for", "and", "or", "to", "in", "on", "with", "as", "is",
     "are", "be", "its", "their", "this", "that", "these", "those", "by", "from", "into",
@@ -177,17 +160,6 @@ def concept_depth(name: str, source_text: str) -> int:
         return 0
     return sum(1 for s in _SENT_RE.split((source_text or "").lower())
                if any(t in s for t in toks))
-
-
-def has_explicit_contrast(text: str, source_text: str) -> bool:
-    """True when the source EXPLICITLY contrasts the outcome's entities — a contrast
-    cue in a sentence that mentions one of them. Distinguishes a genuinely taught
-    comparison from items the material only mentions separately (one line each)."""
-    toks = _depth_tokens(text)
-    if not toks:
-        return False
-    rel = [s for s in _SENT_RE.split((source_text or "").lower()) if any(t in s for t in toks)]
-    return any(_CONTRAST_CUE.search(s) for s in rel)
 
 
 def canonical_name(name: str) -> str:

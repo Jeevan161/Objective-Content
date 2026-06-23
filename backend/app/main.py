@@ -33,11 +33,23 @@ app.include_router(llm_providers_router)
 
 
 @app.on_event("startup")
+def _disable_external_tracing() -> None:
+    """We use our own node-span tracing (McqTrace); force LangSmith/LangChain auto-export OFF so it
+    never ships runs out (or hits the LangSmith rate limit), regardless of what's in .env."""
+    try:
+        from app.mcq_pipeline.utils.tracing import disable_langsmith
+
+        disable_langsmith()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@app.on_event("startup")
 def _seed_mcq_prompts() -> None:
     """Seed the editable MCQ prompts from code defaults on boot (idempotent,
     best-effort — a no-op if the pipeline deps or table aren't available)."""
     try:
-        from app.mcq_pipeline.prompt_store import seed_prompts
+        from app.mcq_pipeline.prompts.store import seed_prompts
 
         seed_prompts()
     except Exception:  # noqa: BLE001
@@ -49,7 +61,7 @@ def _seed_llm_providers() -> None:
     """Seed the LLM connectors on boot: an active 'openrouter' mirroring the current
     settings (zero behavior change) + an inactive 'proxy' preset. Idempotent / best-effort."""
     try:
-        from app.mcq_pipeline.llm_factory import seed_providers
+        from app.mcq_pipeline.utils.llm import seed_providers
 
         seed_providers()
     except Exception:  # noqa: BLE001

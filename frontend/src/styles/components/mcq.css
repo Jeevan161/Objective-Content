@@ -486,6 +486,7 @@
 
 .mcq-lo-bloom.b-remember, .mcq-lo-bloom.b-understand { color: var(--cyan); background: var(--cyan-soft, var(--bg-active)); }
 .mcq-lo-bloom.b-apply, .mcq-lo-bloom.b-implement { color: var(--violet); background: var(--violet-soft); }
+.mcq-lo-bloom.b-scenario { color: var(--amber); background: var(--amber-soft); }
 
 /* ---------- MCQ: LO-spec status, banner, validation report, LO detail ---------- */
 .mcq-banner {
@@ -862,5 +863,103 @@
     overflow-wrap: anywhere;
     min-width: 0;
   }
+}
+
+/* --- HITL review gate (Gate 1 division / Gate 2 outcomes) --- */
+.mcq-review {
+  margin-top: var(--sp-4);
+  padding: var(--sp-4);
+  border: 1px solid var(--amber);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.mcq-review-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.mcq-review-head h3 { margin: 0; font-family: var(--font-display); font-size: 15px; }
+.mcq-review-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--text-2); }
+.mcq-review-section { display: flex; flex-direction: column; gap: 4px; }
+.mcq-review-tiers { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.mcq-review-flags { display: flex; flex-wrap: wrap; gap: 6px; }
+.mcq-review-fail { color: var(--red); }
+.mcq-review-note { width: 100%; resize: vertical; font-family: inherit; }
+.mcq-review-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+.mcq-review .mcq-lo-main input[type='checkbox'] { accent-color: var(--brand); }
+
+/* --- generate options (budget + human-review toggle) --- */
+.mcq-options { display: inline-flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.mcq-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.mcq-opt-budget { width: 72px; }
+.mcq-opt-check { cursor: pointer; }
+.mcq-opt-check input { accent-color: var(--brand); }
+
+/* --- node-by-node trace (our own tracing) --- */
+.mcq-trace { margin-top: var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-2); }
+.mcq-trace-head { display: flex; align-items: center; gap: var(--sp-3); }
+.mcq-trace-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.mcq-trace-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) 1fr auto;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12px;
+  padding: 2px 0;
+}
+.mcq-trace-row.err .mcq-trace-node { color: var(--red); }
+.mcq-trace-node {
+  display: inline-flex; align-items: center; gap: 4px; color: var(--text);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcq-trace-bar { height: 6px; border-radius: var(--r-full); background: var(--bg-active); overflow: hidden; }
+.mcq-trace-fill { display: block; height: 100%; min-width: 2px; border-radius: var(--r-full); background: var(--brand); }
+.mcq-trace-ms { justify-self: end; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
+.mcq-trace-detail { grid-column: 1 / -1; font-size: 11px; color: var(--text-3); padding-left: 4px; }
+
+/* --- Runs page (every saved run + its trace) --- */
+.runs-page { display: flex; flex-direction: column; gap: var(--sp-4); }
+.runs-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) 1fr;
+  gap: var(--sp-4);
+  align-items: start;
+}
+.runs-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: calc(100vh - 220px); overflow-y: auto;
+}
+.runs-item {
+  width: 100%; text-align: left;
+  display: flex; flex-direction: column; gap: 5px;
+  padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-raised); cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.runs-item:hover { border-color: var(--border-strong); }
+.runs-item.active {
+  border-color: var(--brand); background: var(--brand-soft); box-shadow: var(--shadow-accent);
+}
+.runs-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
+.runs-item-course {
+  font-weight: 600; font-size: 13px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.runs-item-date { font-size: 11px; color: var(--text-3); white-space: nowrap; flex-shrink: 0; }
+.runs-item-stats { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: 11.5px; color: var(--text-2); }
+.runs-item-review { color: var(--amber); }
+.runs-item-approved { display: inline-flex; align-items: center; gap: 3px; color: var(--green); }
+.runs-detail { min-width: 0; }
+
+@media (max-width: 860px) {
+  .runs-layout { grid-template-columns: 1fr; }
+  .runs-list { max-height: none; flex-direction: row; flex-wrap: wrap; }
+  .runs-item { width: auto; flex: 1 1 220px; }
 }
 

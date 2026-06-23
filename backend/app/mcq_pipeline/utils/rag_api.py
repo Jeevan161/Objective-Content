@@ -9,7 +9,7 @@ courses. No global, multi-course-leaking state.
 
 from __future__ import annotations
 
-from . import scope
+from app.mcq_pipeline.utils import scope
 
 
 def search_reading_material(query: str, *, top_k: int = 6) -> list[dict]:
