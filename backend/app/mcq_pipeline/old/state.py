@@ -42,11 +42,6 @@ class LOState(TypedDict, total=False):
     coverage_profile: dict                 # breadth x depth manifest (profile_coverage node)
     allocation_plan: dict
     division_proposal: dict                # Planner output, shown to the human at HITL Gate 1
-    # v1 LO-first planning: the enumerate→plan stage records WHAT it generated and which
-    # outcomes it pre-selected toward the (soft) default budget, for the freeze gate + portal.
-    selection_summary: dict
-    frozen_selected_ids: list              # outcome ids the human froze at the LO review gate
-    lo_feedback_log: Annotated[list, operator.add]   # per-LO human feedback (persisted as McqQuestionFeedback stage='lo')
     outcomes: list
 
     # ---- validation / repair loop ----------------------------------------- #
@@ -131,9 +126,6 @@ def new_state(session_id: str, title: str, source_text: str) -> LOState:
         "concept_graph": {"nodes": [], "edges": [], "_adj": {},
                           "assumed_prior": [], "acyclic": True},
         "allocation_plan": {},
-        "selection_summary": {},
-        "frozen_selected_ids": [],
-        "lo_feedback_log": [],
         "outcomes": [],
         "validation_report": {},
         "lo_reviews": {},
