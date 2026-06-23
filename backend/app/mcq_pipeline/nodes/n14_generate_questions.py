@@ -199,7 +199,11 @@ The correct answer must not stand out because of:
 
 All options should appear equally credible at first glance.
 
-Vary the position of the correct answer across questions.""")
+Vary the position of the correct answer across questions.
+
+Avoid absolute qualifiers in options ('always', 'never', 'all', 'none') — they read as giveaways or are unfalsifiable. Do NOT use 'All of the above' or 'None of the above' as options unless the Learning Outcome specifically requires that judgment; prefer concrete, comparable alternatives.
+
+The correct option must be the most TECHNICALLY ACCURATE answer the material supports — not the 'commonly recommended' or 'best-practice' one — UNLESS the stem explicitly asks for the standard/recommended practice. (A distractor that is also defensible as 'best practice' would create a second valid answer.)""")
 
 _TRUE_FALSE_RULES = register("gen.true_false_rules", """\
 TRUE/FALSE RULES
@@ -210,7 +214,7 @@ The statement must be:
 - concise
 - focused on one concept
 
-Do not write a question. Do not prefix with 'True or False' or 'The following statement'.
+The statement must be DECLARATIVE — it must not contain 'what', 'which', or 'select', and must not end with '?'. Do not prefix with 'True or False' or 'The following statement'.
 
 Each statement must test exactly one idea. Avoid combining multiple facts into a single statement.
 
@@ -266,7 +270,9 @@ Every item must be a CONCRETE, executable step or a real line of code — an act
 
 Provide 3-6 steps. Each step must be distinct, non-overlapping, a single action, and grounded in the material (no invented steps).
 
-The correct order must be unambiguous — no two steps interchangeable. Do not number the steps or otherwise reveal the order in the text.""")
+The correct order must be unambiguous — no two steps interchangeable. Do not number the steps or otherwise reveal the order in the text.
+
+Present the steps in an order DIFFERENT from the correct sequence — never list them already sorted (that would make the item trivial). The correct sequence must be the one unique right ordering.""")
 
 _EXPLANATION_RULES = register("gen.explanation_rules", (
     "EXPLANATION RULES:\n"
@@ -315,6 +321,10 @@ Avoid:
 - artificial complexity
 
 The code should resemble realistic learner-facing examples. Use ONLY constructs taught in the material. Do NOT wrap the code in backticks. Do not give the answer away in the code.
+
+When the question asks for a program's result, say "prints" or "the output" — never "displays", "shows", "on the screen", or "on the console". The expected output is exactly the program's stdout.
+
+If a snippet is provided in the `code` field, the stem must REFER to it (e.g. "the given code snippet") and must NOT repeat the code inline in the question text.
 
 ERROR/FIX RULES
 

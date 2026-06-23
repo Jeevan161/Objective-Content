@@ -154,6 +154,7 @@ Question Quality
 
 Answer Quality
 - Correct answer is uniquely correct
+- Correct answer is the most TECHNICALLY ACCURATE option (not merely 'best-practice'/conventional, unless the stem asks for the standard) — no distractor is also defensibly correct
 - Incorrect answers are genuinely incorrect
 - Distractors are plausible
 - Distractors are conceptually related
@@ -211,7 +212,10 @@ Reject (flag) distractors that are:
 - unrelated
 - untaught
 - obviously wrong
-- accidentally correct""")
+- accidentally correct
+- a giveaway via an absolute qualifier ('always', 'never', 'all', 'none')
+
+Also flag 'All of the above' / 'None of the above' options unless the Learning Outcome specifically requires that judgment — prefer concrete, comparable alternatives.""")
 
 _TYPE_CHECKLIST = {
     "MULTIPLE_CHOICE": (
@@ -239,16 +243,23 @@ _TYPE_CHECKLIST = {
         "- The blank targets the LO concept.\n"
         "- The blank is not boilerplate.\n"
         "- The answer is not revealed elsewhere.\n"
+        "- The expected result is described as what the program 'prints' / its 'output' "
+        "(literal stdout) — never 'displays' / 'shows' / 'on screen'.\n"
         "- Exactly one valid completion exists.\n"
         "Fail if multiple completions could work, equivalent alternatives exist, or "
         "the blank can be solved by guesswork rather than understanding the LO."),
     "CODE_ANALYSIS_MULTIPLE_CHOICE": (
         "Confirm the code is essential, not in backticks, does not disclose the "
-        "correct output, exactly one option is correct, and all options are grounded."),
+        "correct output, exactly one option is correct, and all options are grounded. "
+        "The stem must REFER to the given code (not repeat it inline) and say 'prints' / "
+        "'output' — never 'displays' / 'shows' / 'on screen'."),
     "CODE_ANALYSIS_TEXTUAL": (
         "Confirm:\n"
         "- Code is essential.\n"
         "- Code is not wrapped in backticks.\n"
+        "- The stem REFERS to the given code and does NOT repeat it inline.\n"
+        "- The stem says 'prints' / 'the output' (never 'displays' / 'shows' / 'on screen'); "
+        "the expected answer is the program's literal stdout.\n"
         "- Output is a single short value or line.\n"
         "- Exactly one output representation exists.\n"
         "- Output is not formatting-sensitive.\n"
@@ -257,7 +268,8 @@ _TYPE_CHECKLIST = {
     "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE": (
         "Confirm the code is essential, not in backticks, does not disclose the "
         "answers, at least 2 statements are true and at least 1 is false, and each "
-        "statement is independently evaluable."),
+        "statement is independently evaluable. The stem must REFER to the given code "
+        "(not repeat it inline)."),
     "TEXTUAL": (
         "Confirm:\n"
         "- Answer is one word OR two words maximum OR a numeric value.\n"
@@ -277,8 +289,9 @@ _TYPE_CHECKLIST = {
         "- The items form a genuine ordered procedure with ONE canonical sequence.\n"
         "- There are 3-6 distinct, non-overlapping steps.\n"
         "- The order is unambiguous and grounded in the material.\n"
-        "Fail if any item is conceptual, if the order is not unique, or if the material "
-        "defines no strict sequence (then REARRANGE is the wrong type)."),
+        "- The steps are PRESENTED in an order different from the correct sequence (not pre-sorted).\n"
+        "Fail if any item is conceptual, if the order is not unique, if the steps are shown already "
+        "sorted, or if the material defines no strict sequence (then REARRANGE is the wrong type)."),
 }
 for _k, _v in _TYPE_CHECKLIST.items():
     register(f"review.type_checklist.{_k}", _v)

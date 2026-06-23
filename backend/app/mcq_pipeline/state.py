@@ -49,6 +49,8 @@ class LOState(TypedDict, total=False):
     frozen_selected_ids: list              # outcome ids the human froze at the LO review gate
     lo_feedback_log: Annotated[list, operator.add]   # per-LO human feedback (persisted as McqQuestionFeedback stage='lo')
     outcomes: list
+    backfill_pool: list                    # ranked UNSELECTED candidates (plan_outcomes) — used to
+                                           # top the set back up to budget after dedup / R1-drop
 
     # ---- validation / repair loop ----------------------------------------- #
     validation_report: dict

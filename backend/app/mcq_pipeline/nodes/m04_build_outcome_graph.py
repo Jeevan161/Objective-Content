@@ -24,7 +24,7 @@ import re
 from collections import Counter, defaultdict
 
 from app.mcq_pipeline.utils.concurrency import pmap
-from app.mcq_pipeline.config import K_SAMPLES, MAJORITY, TEMP_GRAPH
+from app.mcq_pipeline.config import GRAPH_K_SAMPLES, GRAPH_MAJORITY, TEMP_GRAPH
 from app.mcq_pipeline.utils.concept_graph import reachable
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
@@ -58,6 +58,34 @@ _GRAPH_SYS = register("lo.graph_sys", (
 
     "Return ONLY valid JSON. No explanation, no markdown.\n"
 ))
+
+
+def _line(c: dict) -> str:
+    return f'{c["concept_id"]}: {c["canonical_name"]} (evidence: "{(c.get("evidence") or {}).get("quote", "")[:100]}")'
+
+
+def _concept_votes(c: dict, inv: list, idset: set) -> tuple:
+    """K-sample prerequisite / procedural / assumed-prior vote for ONE concept. Pure + isolated, so
+    concepts are voted on IN PARALLEL (pmap) rather than one-at-a-time. Returns
+    (concept_id, prereq_vote_counter, applied_skill_count, assumed_prior_terms)."""
+    cid = c["concept_id"]
+    others = "\n".join(_line(o) for o in inv if o["concept_id"] != cid) or "(none)"
+    usr = f"TARGET CONCEPT:\n{_line(c)}\n\nOTHER CONCEPTS IN THIS SESSION:\n{others}"
+    pv, skill, prior_terms = Counter(), 0, []
+    for _ in range(GRAPH_K_SAMPLES):
+        d = parse_json(chat([{"role": "system", "content": get_prompt("lo.graph_sys", _GRAPH_SYS)},
+                             {"role": "user", "content": usr}], temperature=TEMP_GRAPH)) or {}
+        if not isinstance(d, dict):
+            continue
+        for p in d.get("prerequisites", []):
+            if p in idset and p != cid:
+                pv[p] += 1
+        if d.get("applied_skill") is True:
+            skill += 1
+        for ap in d.get("assumed_prior", []):
+            if isinstance(ap, str) and ap.strip():
+                prior_terms.append(re.sub(r"\s+", " ", ap.strip().lower()))
+    return cid, pv, skill, prior_terms
 
 
 def _concept_metrics(graph: dict) -> dict:
@@ -102,40 +130,29 @@ def build_outcome_graph(state, config) -> dict:
     ids = [c["concept_id"] for c in inv]
     idset = set(ids)
 
-    def _line(c):
-        return f'{c["concept_id"]}: {c["canonical_name"]} (evidence: "{(c.get("evidence") or {}).get("quote", "")[:100]}")'
-
     on_done = prog.counter("build_outcome_graph", len(inv))
+
+    def _work(c):
+        r = _concept_votes(c, inv, idset)
+        on_done()
+        return r
+
+    # Probe concepts IN PARALLEL (was a sequential per-concept loop — the dominant latency cost);
+    # GRAPH_K_SAMPLES votes each (fewer than extraction, since a DAG is far less drift-prone) also
+    # cuts the token cost. Aggregate the per-concept votes back into the tallies.
     prereq_votes: dict = {}
     skill_votes, prior = Counter(), Counter()
-    for c in inv:
-        cid = c["concept_id"]
-        others = "\n".join(_line(o) for o in inv if o["concept_id"] != cid) or "(none)"
-        usr = f"TARGET CONCEPT:\n{_line(c)}\n\nOTHER CONCEPTS IN THIS SESSION:\n{others}"
-
-        def _vote(_i, _usr=usr):
-            return parse_json(chat([{"role": "system", "content": get_prompt("lo.graph_sys", _GRAPH_SYS)},
-                                    {"role": "user", "content": _usr}], temperature=TEMP_GRAPH)) or {}
-
-        pv = Counter()
-        for d in pmap(_vote, list(range(K_SAMPLES))):
-            if not isinstance(d, dict):
-                continue
-            for p in d.get("prerequisites", []):
-                if p in idset and p != cid:
-                    pv[p] += 1
-            if d.get("applied_skill") is True:
-                skill_votes[cid] += 1
-            for ap in d.get("assumed_prior", []):
-                if isinstance(ap, str) and ap.strip():
-                    prior[re.sub(r"\s+", " ", ap.strip().lower())] += 1
+    for cid, pv, skill, prior_terms in pmap(_work, inv):
         prereq_votes[cid] = pv
-        on_done()
+        if skill:
+            skill_votes[cid] = skill
+        for t in prior_terms:
+            prior[t] += 1
 
     # majority-voted prerequisite edges P->C, stronger-edge-first, cycle-guarded.
     adj, edges, logs = defaultdict(set), [], []
     candidates = sorted(((p, cid, v) for cid, pv in prereq_votes.items()
-                         for p, v in pv.items() if v >= MAJORITY),
+                         for p, v in pv.items() if v >= GRAPH_MAJORITY),
                         key=lambda e: (-e[2], e[0], e[1]))
     for (p, cid, v) in candidates:
         if not reachable(adj, cid, p):
@@ -143,7 +160,7 @@ def build_outcome_graph(state, config) -> dict:
             edges.append({"from": p, "to": cid, "relation": "depends_on"})
         else:
             logs.append({"node": "build_outcome_graph", "dropped_edge": [p, cid], "reason": "would_create_cycle"})
-    assumed = [p for p, v in prior.items() if v >= MAJORITY]
+    assumed = [p for p, v in prior.items() if v >= GRAPH_MAJORITY]
 
     # topic-level DAG (lifted from concept edges), cycle-guarded independently.
     topic_of = {c["concept_id"]: c["topic_id"] for c in inv}
@@ -161,7 +178,7 @@ def build_outcome_graph(state, config) -> dict:
              "assumed_prior": assumed, "acyclic": True}
 
     # procedurality = the LLM applied_skill majority vote (no regex floor).
-    procedural_ids = {cid for cid, v in skill_votes.items() if v >= MAJORITY}
+    procedural_ids = {cid for cid, v in skill_votes.items() if v >= GRAPH_MAJORITY}
     new_inv = [{**c, "procedural": c["concept_id"] in procedural_ids} for c in inv]
 
     # Per-concept weight + dag_depth, then stamp every outcome with its concept's metrics.

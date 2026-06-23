@@ -32,6 +32,12 @@ DROP_NAMED_ONLY = True
 
 K_SAMPLES = 3                       # self-consistency samples (NFR2)
 MAJORITY = (K_SAMPLES // 2) + 1     # = 2 — a concept/edge is "stable" at this vote count
+
+# build_outcome_graph uses FEWER samples than extraction — a prerequisite DAG is far less
+# drift-prone, so 2 votes (both must agree, GRAPH_MAJORITY=2) keep only high-confidence edges
+# while halving the per-concept LLM calls + tokens. Concepts are also probed in parallel.
+GRAPH_K_SAMPLES = 2
+GRAPH_MAJORITY = 2
 MAX_RETRIES = 3                     # regenerate-repair loop cap
 
 TEMP_EXTRACT = 0.3

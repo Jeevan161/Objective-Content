@@ -26,6 +26,7 @@ from app.mcq_pipeline.config import TIER_ORDER
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
 from app.mcq_pipeline.nodes._common import _ctx, _prog
+from app.mcq_pipeline.nodes.m06_plan_outcomes import backfill_to_budget
 
 _RANK = {t: i for i, t in enumerate(TIER_ORDER)}
 
@@ -118,6 +119,12 @@ def review_outcomes_quality(state, config) -> dict:
     outcomes, dropped = _dedupe(state["outcomes"])
     if dropped:
         prog.detail("review_outcomes_quality", f"dropped {len(dropped)} duplicate outcome(s)")
+    # dedup may have dropped us below budget — top back up with the next-weighted taught candidates
+    # (budget is a TARGET, not just a ceiling). Backfilled outcomes are new, so they get judged below.
+    budget = (state.get("allocation_plan") or {}).get("question_budget") or len(outcomes)
+    outcomes, backfilled = backfill_to_budget(outcomes, state.get("backfill_pool") or [], budget)
+    if backfilled:
+        prog.detail("review_outcomes_quality", f"backfilled {len(backfilled)} to reach budget {budget}")
 
     if ctx is not None and not getattr(ctx, "run_coverage_gate", True):
         prog.done("review_outcomes_quality", detail=f"dedup only ({len(dropped)} dropped)",

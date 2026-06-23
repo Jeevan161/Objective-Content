@@ -130,8 +130,18 @@ class RagAdapter:
                 res = rag_search.check_concept(
                     session, course_ids=self.course_ids, topic=topic, syntax=syntax
                 )
+            verdict = res.get("verdict", "")
+            # GUARANTEE the CURRENT session is never missed: pgvector retrieval can fail to surface a
+            # concept that IS taught here (a canonical name embeds poorly, or the treatment is brief).
+            # If RAG didn't already find it but the concept is present in THIS session's reading
+            # material, treat it as explained — a concept drawn from the current session must NOT be
+            # marked NOT EXPLAINED (which would wrongly flag it external / an uncovered prerequisite).
+            head = verdict.split("\n", 1)[0].upper()
+            if not (head.startswith("EXPLAINED") or head.startswith("PARTIALLY")) \
+                    and self._present(topic) and (not syntax or self._present(syntax)):
+                verdict = "EXPLAINED — present in the current session's reading material."
             return {
-                "topic": topic, "syntax": syntax, "verdict": res.get("verdict", ""),
+                "topic": topic, "syntax": syntax, "verdict": verdict,
                 "files": [],
                 "sources": [
                     {"seq": 0, "unit_name": s.get("unit_label"), "section": s.get("section")}

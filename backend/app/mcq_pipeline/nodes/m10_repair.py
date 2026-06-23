@@ -11,6 +11,7 @@ from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
 from app.mcq_pipeline.nodes._common import _bind_rag, _prog
 from app.mcq_pipeline.nodes.m02_generate_outcomes import _coerce_outcome
+from app.mcq_pipeline.nodes.m06_plan_outcomes import backfill_to_budget
 
 
 # ── Node 9 · repair (A · loop) ────────────────────────────────────────────── #
@@ -146,6 +147,7 @@ def repair(state, config) -> dict:
     failing = set()
     for rid in ("V13", "V8", "V9", "V10", "V5", "V6", "V15"):
         failing.update(rep.get(rid, {}).get("failing", []))
+    drop_ids, dropped_concepts = set(), set()
     for oid in failing:
         o = by_id.get(oid)
         if not o:
@@ -153,6 +155,14 @@ def repair(state, config) -> dict:
         tier, cid = o["bloom_level"], o["concept_id"]
         name = name_of.get(cid, o.get("title", "this concept"))
         rv = reviews.get(oid) or {}
+        # R1-DROP: the judge says this concept is NOT TAUGHT in the material — neither re-authoring
+        # nor a tier downgrade can ground an absent concept (this is what made earlier runs ship
+        # rubric-failing LOs as NEEDS_REVIEW). Drop it; the backfill below pulls a taught replacement.
+        if (rv.get("rubric") or {}).get("R1_present") is False:
+            drop_ids.add(oid)
+            dropped_concepts.add(cid)
+            logs.append({"node": "repair", "fix": "drop_not_taught", "id": oid, "concept": cid})
+            continue
         rubric_fail = oid in rep.get("V13", {}).get("failing", [])
         # An apply outcome with an uncovered prerequisite (V15/V6) that survives to the final attempt
         # is grounded down to a tier the material fully supports — same terminal path as a rubric fail.
@@ -194,6 +204,18 @@ def repair(state, config) -> dict:
             merged["id"] = o["id"]
             o.update(merged)
             logs.append({"node": "repair", "fix": "regenerate", "id": oid, "rules": reasons})
+
+    # Apply R1 drops, then top the set back up toward budget with the next-weighted TAUGHT candidate
+    # (best-effort 20). On the FINAL attempt we drop-only — a fresh backfill couldn't be re-judged —
+    # so the run ships FEWER all-passing outcomes rather than rubric-failing ones.
+    if drop_ids:
+        outcomes = [o for o in outcomes if o["id"] not in drop_ids]
+        if not last_attempt:
+            budget = (state.get("allocation_plan") or {}).get("question_budget") or len(outcomes)
+            outcomes, added = backfill_to_budget(outcomes, state.get("backfill_pool") or [], budget,
+                                                 exclude_concepts=frozenset(dropped_concepts))
+            if added:
+                logs.append({"node": "repair", "fix": "backfill", "ids": added})
 
     # Reconcile allocation_plan with the repaired outcome set. Structural retargets (V4/V14) and
     # the terminal recall can move an LO's tier/topic; recomputing tier_counts + per-topic slots

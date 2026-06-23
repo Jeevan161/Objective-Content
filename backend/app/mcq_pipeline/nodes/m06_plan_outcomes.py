@@ -22,7 +22,7 @@ Output: outcomes (the SELECTED set), allocation_plan, division_proposal, selecti
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from app.mcq_pipeline.config import (BUDGET_STEP, MAX_LOS_PER_CONCEPT, MIN_BUDGET, QUESTION_BUDGET,
                                      SKILL_TYPES, TIER_ORDER, VERBS, feasible_tiers)
@@ -115,6 +115,38 @@ def _select(candidates: list, budget: int) -> list:
     return selected
 
 
+def backfill_to_budget(outcomes: list, pool: list, budget: int,
+                       exclude_concepts: frozenset = frozenset()) -> tuple[list, list]:
+    """Top the outcome set back up toward `budget` using the highest-weighted UNSELECTED candidates
+    from `pool` — keeping budget a TARGET, not just a ceiling. Used after dedup drops a duplicate and
+    after repair drops a not-taught (R1) outcome. Skips: ids already present, a `(concept, Bloom)`
+    pair already present (so it can't reintroduce a just-deduped twin), concepts over the per-concept
+    cap, and `exclude_concepts` (e.g. concepts the judge said aren't taught). Best-effort — returns
+    (outcomes, added_ids); FEWER than budget if the pool is exhausted (quality over count)."""
+    if len(outcomes) >= budget or not pool:
+        return list(outcomes), []
+    present_ids = {o["id"] for o in outcomes}
+    present_pairs = {(o["concept_id"], o["bloom_level"]) for o in outcomes}
+    used = Counter(o["concept_id"] for o in outcomes)
+    ranked = sorted(pool, key=lambda o: (-o.get("weight", 0), -_RANK.get(o.get("bloom_level"), 0),
+                                         o.get("dag_depth", 0), o.get("id", "")))
+    out, added = list(outcomes), []
+    for cand in ranked:
+        if len(out) >= budget:
+            break
+        cid, pair = cand.get("concept_id"), (cand.get("concept_id"), cand.get("bloom_level"))
+        if cand.get("id") in present_ids or pair in present_pairs:
+            continue
+        if cid in exclude_concepts or used[cid] >= MAX_LOS_PER_CONCEPT:
+            continue
+        out.append(dict(cand))
+        added.append(cand["id"])
+        present_ids.add(cand["id"])
+        present_pairs.add(pair)
+        used[cid] += 1
+    return out, added
+
+
 def plan_outcomes(state, config) -> dict:
     prog = _prog(config)
     prog.start("plan_outcomes")
@@ -201,6 +233,9 @@ def plan_outcomes(state, config) -> dict:
               detail=f"{len(selected)}/{len(all_cands)} kept · {len(apply_ids)} apply · "
                      + "/".join(f"{k[:3]}:{tier_counts[k]}" for k in TIER_ORDER),
               snapshot=snapshot)
-    return {"outcomes": selected, "allocation_plan": allocation,
+    # the unselected (but in-scope, feasibility-clamped) candidates, kept as the backfill pool so
+    # dedup / R1-drop can top the set back up toward budget with the next-weighted taught concept.
+    backfill_pool = [o for o in candidates if o["id"] not in selected_ids]
+    return {"outcomes": selected, "allocation_plan": allocation, "backfill_pool": backfill_pool,
             "division_proposal": division_proposal, "selection_summary": selection_summary,
             "overrides": overrides, "log": logs}
