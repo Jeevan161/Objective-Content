@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  CheckCircle2, AlertTriangle, ListChecks, Activity,
+  CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight,
   FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck,
 } from 'lucide-react'
 import { Spinner } from './ui'
 import { useToast } from './Toast'
+import NodeSnapshot from './NodeSnapshot'
 import { regenerateMcqQuestion, submitMcqFeedback, approveMcqRun, getMcqTrace } from '../api'
 
 const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer', 'LO drift', 'too easy', 'too hard']
@@ -343,25 +344,51 @@ function TracePanel({ jobId }) {
       <div className="mcq-trace-head">
         <span className="mcq-spec-k">{spans.length} node steps</span>
         <span className="mcq-lo-tag">total {fmtMs(total)}</span>
+        <span className="mcq-lo-tag">click a step to inspect its state &amp; LLM I/O</span>
       </div>
       <ol className="mcq-trace-list">
         {spans.map((s, i) => (
-          <li key={i} className={`mcq-trace-row ${s.status === 'error' ? 'err' : ''}`}>
-            <span className="mcq-trace-node">
-              {s.status === 'error' && <AlertTriangle size={11} />} {s.label || s.node}
-            </span>
-            <span className="mcq-trace-bar">
-              <span
-                className="mcq-trace-fill"
-                style={{ width: `${Math.round(((s.duration_ms || 0) / max) * 100)}%` }}
-              />
-            </span>
-            <span className="mcq-trace-ms">{fmtMs(s.duration_ms || 0)}</span>
-            {s.detail && <span className="mcq-trace-detail">{s.detail}</span>}
-          </li>
+          <TraceRow key={i} span={s} max={max} />
         ))}
       </ol>
     </div>
+  )
+}
+
+// One trace span: a clickable header (node · duration · detail) that expands to show the node's
+// captured STATE DETAILS and the LLM calls (prompt + response) it made.
+function TraceRow({ span: s, max }) {
+  const [open, setOpen] = useState(false)
+  const snap = s.snapshot || {}
+  const nCalls = Array.isArray(snap.llm_calls) ? snap.llm_calls.length : 0
+  const hasDetails = Object.keys(snap).length > 0
+  return (
+    <li className={`mcq-trace-item ${s.status === 'error' ? 'err' : ''} ${open ? 'open' : ''}`}>
+      <div
+        className={`mcq-trace-row ${hasDetails ? 'clickable' : ''}`}
+        onClick={hasDetails ? () => setOpen((o) => !o) : undefined}
+        role={hasDetails ? 'button' : undefined}
+      >
+        <span className="mcq-trace-node">
+          {hasDetails && <ChevronRight size={12} className="mcq-trace-chevron" />}
+          {s.status === 'error' && <AlertTriangle size={11} />} {s.label || s.node}
+        </span>
+        <span className="mcq-trace-bar">
+          <span
+            className="mcq-trace-fill"
+            style={{ width: `${Math.round(((s.duration_ms || 0) / max) * 100)}%` }}
+          />
+        </span>
+        <span className="mcq-trace-ms">{fmtMs(s.duration_ms || 0)}</span>
+        {nCalls > 0 && <span className="mcq-trace-llm">{nCalls} LLM</span>}
+        {s.detail && <span className="mcq-trace-detail">{s.detail}</span>}
+      </div>
+      {open && hasDetails && (
+        <div className="mcq-trace-snapshot">
+          <NodeSnapshot snapshot={snap} />
+        </div>
+      )}
+    </li>
   )
 }
 

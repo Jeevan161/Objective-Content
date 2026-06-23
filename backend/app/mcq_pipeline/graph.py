@@ -1,15 +1,14 @@
 """
 app/mcq_pipeline/lo_graph.py
 ----------------------------
-The LangGraph pipeline. The LO-creation stage is the deterministic 10-node flow
-(`lo_nodes` + `lo_artifact.finalize`); a `lo_to_legacy` bridge maps its frozen
-outcomes onto the legacy LearningOutcome shape, and the (unchanged) question
-stage follows:
+The LangGraph pipeline. The LO-creation stage is the LO-first flow (`nodes` +
+`artifact.finalize`); a `lo_to_legacy` bridge maps its frozen outcomes onto the
+legacy LearningOutcome shape, and the (unchanged) question stage follows:
 
-    START → parse_structure → extract_concepts → canonicalize_concepts
-          → build_dependency_graph → profile_coverage → plan_allocation → author_outcomes
-          → resolve_prerequisites → coverage_gate (strict coverage rubric) → validate ─cond─┐
-                pass / retries-exhausted → finalize │  still-fixable → repair → resolve_prerequisites
+    START → parse_structure → generate_outcomes → map_concepts → build_outcome_graph
+          → profile_depth → plan_outcomes → review_division (Gate 1)
+          → resolve_prerequisites → review_outcomes_quality (dedup + R1–R8) → validate ─cond─┐
+                pass / retries-exhausted → review_outcomes (Gate 2) │ still-fixable → repair ↺
           → finalize → lo_to_legacy → sequence_outcomes (deep-dive order)
           → recommend_question_types → generate_questions → review_questions → END
 
@@ -28,7 +27,7 @@ from app.mcq_pipeline.prompts import rules as lo_rules  # noqa: F401 — registe
 from app.mcq_pipeline.utils import scope
 from app.mcq_pipeline.artifact import build_final_los, finalize as _finalize_artifact
 from app.mcq_pipeline.config import MAX_RETRIES
-from app.mcq_pipeline.nodes import author_outcomes, build_dependency_graph, canonicalize_concepts, extract_concepts, judge_outcomes, parse_structure, plan_allocation, profile_coverage, repair, resolve_prerequisites, sequence_outcomes, validate
+from app.mcq_pipeline.nodes import build_outcome_graph, generate_outcomes, map_concepts, parse_structure, plan_outcomes, profile_depth, repair, resolve_prerequisites, review_outcomes_quality, sequence_outcomes, validate
 from app.mcq_pipeline.state import LOState, run_ctx
 from app.mcq_pipeline.nodes._common import _prog
 from app.mcq_pipeline.nodes.n14_generate_questions import generate_for_los
@@ -42,7 +41,13 @@ def finalize(state, config) -> dict:
     ctx.progress.start("finalize")
     out = _finalize_artifact(state)
     art = out["artifact"]
-    ctx.progress.done("finalize", detail=f"{art['status']} · {len(art['outcomes'])} LOs")
+    snapshot = {"status": art.get("status"), "lo_count": len(art.get("outcomes", [])),
+                "bloom_split": art.get("effective_bloom_split"), "spec_hash": art.get("spec_hash"),
+                "validation_failed": [k for k, v in (art.get("validation_report") or {}).items()
+                                      if not v.get("pass")],
+                "escalation": (art.get("escalation") or {}).get("reason")}
+    ctx.progress.done("finalize", detail=f"{art['status']} · {len(art['outcomes'])} LOs",
+                      snapshot=snapshot)
     return out
 
 
@@ -50,7 +55,10 @@ def lo_to_legacy(state, config) -> dict:
     ctx = run_ctx(config)
     ctx.progress.start("lo_to_legacy")
     final_los = build_final_los(state, ctx.db_prereq_units)
-    ctx.progress.done("lo_to_legacy", detail=f"{len(final_los)} outcomes bridged")
+    snapshot = {"final_los": len(final_los),
+                "outcomes": [{"outcome": lo.get("outcome"), "bloom": lo.get("bloom_category"),
+                              "concept": lo.get("concept")} for lo in final_los]}
+    ctx.progress.done("lo_to_legacy", detail=f"{len(final_los)} outcomes bridged", snapshot=snapshot)
     return {"final_los": final_los}
 
 
@@ -61,7 +69,12 @@ def recommend_question_types(state, config) -> dict:
     los = state["final_los"]
     on_progress = ctx.progress.counter("recommend_question_types", len(los))
     los = recommend_for_los(los, max_seq=None, on_progress=on_progress)
-    ctx.progress.done("recommend_question_types")
+    from collections import Counter as _Counter
+    types = _Counter(lo.get("question_type", "?") for lo in los)
+    ctx.progress.done("recommend_question_types",
+                      snapshot={"count": len(los), "by_type": dict(types),
+                                "outcomes": [{"outcome": lo.get("outcome"),
+                                              "question_type": lo.get("question_type")} for lo in los]})
     return {"final_los": los}
 
 
@@ -74,7 +87,10 @@ def generate_questions_node(state, config) -> dict:
     los = state["final_los"]
     on_progress = ctx.progress.counter("generate_questions", len(los))
     questions = generate_for_los(los, max_seq=None, on_progress=on_progress)
-    ctx.progress.done("generate_questions")
+    gen = [q for q in questions if q.get("status") == "generated"]
+    ctx.progress.done("generate_questions",
+                      snapshot={"total": len(questions), "generated": len(gen),
+                                "skipped": len(questions) - len(gen)})
     return {"questions": questions}
 
 
@@ -104,7 +120,9 @@ def review_questions_node(state, config) -> dict:
                   "review": r.get("review")} for r in reviewed]
     notes = [f"reviewed {len(reviewed)} questions; "
              f"{sum(1 for s in summaries if s['needs_human'])} still need human review"]
-    ctx.progress.done("review_questions", needs_human=counters["nh"])
+    ctx.progress.done("review_questions", needs_human=counters["nh"],
+                      snapshot={"reviewed": len(reviewed), "needs_human": counters["nh"],
+                                "summaries": summaries})
     return {"questions": reviewed, "question_reviews": summaries, "notes": notes}
 
 
@@ -180,11 +198,11 @@ def route_after_validate(state) -> str:
 
 
 def route_after_division(state) -> str:
-    """approve / inert → author ; reject → re-plan (Planner re-proposes; the note is recorded)."""
+    """approve / inert → resolve prerequisites ; reject → re-plan (re-selects; the note is recorded)."""
     d = state.get("gate_decision") or {}
     if d.get("gate") == "division" and d.get("action") == "reject":
-        return "plan_allocation"
-    return "author_outcomes"
+        return "plan_outcomes"
+    return "resolve_prerequisites"
 
 
 def route_after_outcomes(state) -> str:
@@ -244,15 +262,14 @@ def get_checkpointer():
 def build_lo_graph(*, checkpointer=None):
     g = StateGraph(LOState)
     g.add_node("parse_structure", parse_structure)
-    g.add_node("extract_concepts", extract_concepts)
-    g.add_node("canonicalize_concepts", canonicalize_concepts)
-    g.add_node("build_dependency_graph", build_dependency_graph)
-    g.add_node("profile_coverage", profile_coverage)
-    g.add_node("plan_allocation", plan_allocation)
+    g.add_node("generate_outcomes", generate_outcomes)
+    g.add_node("map_concepts", map_concepts)
+    g.add_node("build_outcome_graph", build_outcome_graph)
+    g.add_node("profile_depth", profile_depth)
+    g.add_node("plan_outcomes", plan_outcomes)
     g.add_node("review_division", review_division)        # HITL Gate 1 (inert unless hitl_enabled)
-    g.add_node("author_outcomes", author_outcomes)
     g.add_node("resolve_prerequisites", resolve_prerequisites)
-    g.add_node("judge_outcomes", judge_outcomes)
+    g.add_node("review_outcomes_quality", review_outcomes_quality)
     g.add_node("validate", validate)
     g.add_node("repair", repair)
     g.add_node("review_outcomes", review_outcomes)        # HITL Gate 2 (inert unless hitl_enabled)
@@ -264,17 +281,16 @@ def build_lo_graph(*, checkpointer=None):
     g.add_node("review_questions", review_questions_node)
 
     g.add_edge(START, "parse_structure")
-    g.add_edge("parse_structure", "extract_concepts")
-    g.add_edge("extract_concepts", "canonicalize_concepts")
-    g.add_edge("canonicalize_concepts", "build_dependency_graph")
-    g.add_edge("build_dependency_graph", "profile_coverage")
-    g.add_edge("profile_coverage", "plan_allocation")
-    g.add_edge("plan_allocation", "review_division")
+    g.add_edge("parse_structure", "generate_outcomes")
+    g.add_edge("generate_outcomes", "map_concepts")
+    g.add_edge("map_concepts", "build_outcome_graph")
+    g.add_edge("build_outcome_graph", "profile_depth")
+    g.add_edge("profile_depth", "plan_outcomes")
+    g.add_edge("plan_outcomes", "review_division")
     g.add_conditional_edges("review_division", route_after_division,
-                            {"plan_allocation": "plan_allocation", "author_outcomes": "author_outcomes"})
-    g.add_edge("author_outcomes", "resolve_prerequisites")
-    g.add_edge("resolve_prerequisites", "judge_outcomes")
-    g.add_edge("judge_outcomes", "validate")
+                            {"plan_outcomes": "plan_outcomes", "resolve_prerequisites": "resolve_prerequisites"})
+    g.add_edge("resolve_prerequisites", "review_outcomes_quality")
+    g.add_edge("review_outcomes_quality", "validate")
     g.add_conditional_edges("validate", route_after_validate,
                             {"repair": "repair", "finalize": "review_outcomes"})
     g.add_conditional_edges("review_outcomes", route_after_outcomes,

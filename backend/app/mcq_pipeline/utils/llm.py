@@ -192,11 +192,31 @@ def _model(temperature: float = 0.2):
     return make_chat_model(temperature=temperature)
 
 
+_LLM_REC_CAP = 8000   # per-message / per-response char cap when recording LLM I/O for the trace
+
+
+def _rec_messages(messages: list[dict]) -> list[dict]:
+    out = []
+    for m in messages if isinstance(messages, list) else []:
+        if isinstance(m, dict):
+            out.append({"role": str(m.get("role", "")),
+                        "content": str(m.get("content", ""))[:_LLM_REC_CAP]})
+    return out
+
+
 def chat(messages: list[dict], *, temperature: float = 0.2) -> str:
     """Run a chat completion and return the assistant text. `messages` is a list of
-    ``{"role": ..., "content": ...}`` dicts (LangChain accepts this form directly)."""
+    ``{"role": ..., "content": ...}`` dicts (LangChain accepts this form directly). Every call is
+    recorded (prompt + response, truncated) into the active per-node recorder, if one is in effect,
+    so the pipeline trace can show each node's LLM I/O."""
+    from app.mcq_pipeline.utils import scope   # local import avoids a module-load cycle
+
     resp = _model(temperature).invoke(messages)
-    return getattr(resp, "content", None) or str(resp)
+    text = getattr(resp, "content", None) or str(resp)
+    scope.record_llm_call({"temperature": temperature,
+                           "messages": _rec_messages(messages),
+                           "response": str(text)[:_LLM_REC_CAP]})
+    return text
 
 
 def parse_json(text):

@@ -297,6 +297,9 @@ class McqTrace(Base):
     status: Mapped[str] = mapped_column(String(16), default="ok")   # ok | error
     detail: Mapped[str] = mapped_column(Text, default="")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    # Compact, JSON-safe snapshot of what this node produced (counts + small samples), surfaced in
+    # the UI when a node is expanded. Deliberately small — NOT the full checkpoint state.
+    snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = created_at_col()

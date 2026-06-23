@@ -334,6 +334,7 @@ def _make_trace_sink(thread_id: str):
                     label=(span.get("label") or "")[:160], status=span.get("status", "ok"),
                     detail=(span.get("detail") or "")[:2000],
                     duration_ms=int(span.get("duration_ms", 0)),
+                    snapshot=(span.get("snapshot") or {}),
                     started_at=span.get("started_at"), ended_at=span.get("ended_at"),
                 ))
                 session.commit()

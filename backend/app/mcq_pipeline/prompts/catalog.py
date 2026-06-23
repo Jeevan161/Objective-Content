@@ -17,12 +17,14 @@ from app.mcq_pipeline.utils.progress import STAGE_DEFS
 # deterministic 10-node LO pipeline's agent stages.
 _LO_STAGE = {
     "lo.segment_sys": "parse_structure",
-    "lo.extract_sys": "extract_concepts",
-    "lo.topic_desc_sys": "extract_concepts",
-    "lo.depth_profile": "profile_coverage",
-    "lo.graph_sys": "build_dependency_graph",
-    "lo.author_sys": "author_outcomes",
+    "lo.generate_sys": "generate_outcomes",
+    "lo.depth_profile": "profile_depth",
+    "lo.graph_sys": "build_outcome_graph",
+    "lo.coverage_plan": "resolve_prerequisites",
+    "lo.coverage_judge": "resolve_prerequisites",
+    "lo.rubric": "review_outcomes_quality",
     "lo.repair_sys": "repair",
+    "lo.sequence_sys": "sequence_outcomes",
 }
 
 # Short explanatory notes shown under a stage in the UI. The LO pipeline's
@@ -34,9 +36,8 @@ _STAGE_NOTES = {
     "parse_structure": ("Hybrid — an LLM (lo.segment_sys) proposes the topic boundaries; a "
                         "deterministic line-split enforces them losslessly and falls back to "
                         "the heading rules below if the LLM is unavailable."),
-    "canonicalize_concepts": _DETERMINISTIC_NOTE,
-    "plan_allocation": _DETERMINISTIC_NOTE,
-    "resolve_prerequisites": _DETERMINISTIC_NOTE,
+    "map_concepts": _DETERMINISTIC_NOTE,
+    "plan_outcomes": _DETERMINISTIC_NOTE,
     "validate": _DETERMINISTIC_NOTE,
     "finalize": _DETERMINISTIC_NOTE,
     "lo_to_legacy": _DETERMINISTIC_NOTE,

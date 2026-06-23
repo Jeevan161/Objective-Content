@@ -922,6 +922,63 @@
 .mcq-trace-ms { justify-self: end; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
 .mcq-trace-detail { grid-column: 1 / -1; font-size: 11px; color: var(--text-3); padding-left: 4px; }
 
+/* --- Collapsible per-node STATE DETAILS (snapshot + LLM I/O) --- */
+.mcq-stage-head.clickable { cursor: pointer; }
+.mcq-stage-chevron { margin-left: auto; color: var(--text-3); transition: transform var(--t-fast); flex-shrink: 0; }
+.mcq-stage.open .mcq-stage-chevron { transform: rotate(90deg); }
+.mcq-stage-snapshot { margin-top: var(--sp-2); padding-left: 22px; }
+
+.mcq-trace-item { border-radius: var(--r-sm); }
+.mcq-trace-item.open { background: var(--bg-active); padding: 2px var(--sp-2); }
+.mcq-trace-row.clickable { cursor: pointer; }
+.mcq-trace-chevron { color: var(--text-3); transition: transform var(--t-fast); flex-shrink: 0; }
+.mcq-trace-item.open .mcq-trace-chevron { transform: rotate(90deg); }
+.mcq-trace-llm {
+  grid-column: 1 / -1; justify-self: start; font-size: 10.5px; font-weight: 600;
+  color: var(--brand); background: var(--bg-active); border-radius: var(--r-full); padding: 0 7px;
+}
+.mcq-trace-item.open .mcq-trace-llm { background: var(--bg-raised); }
+.mcq-trace-snapshot { padding: var(--sp-2) 0 var(--sp-3) 18px; }
+
+/* NodeSnapshot — the rendered state details */
+.node-snapshot { display: flex; flex-direction: column; gap: var(--sp-3); font-size: 12px; }
+.nsv-empty, .nsv-muted { color: var(--text-3); font-size: 12px; }
+.nsv-fields { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; }
+.nsv-field { display: grid; grid-template-columns: minmax(110px, 170px) 1fr; gap: var(--sp-2); align-items: start; }
+.nsv-key { color: var(--text-3); font-weight: 600; }
+.nsv-val { color: var(--text); min-width: 0; }
+.nsv-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.nsv-chip { background: var(--bg-active); border-radius: var(--r-full); padding: 0 7px; font-size: 11px; color: var(--text-2); }
+.nsv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.nsv-list-item { padding: 3px 6px; background: var(--bg-active); border-radius: var(--r-sm); }
+.nsv-pairs { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.nsv-pair { font-size: 11.5px; }
+.nsv-pk { color: var(--text-3); }
+
+.nsv-llm { display: flex; flex-direction: column; gap: 4px; }
+.nsv-llm-section { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); font-weight: 600; }
+.nsv-llm-call { border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; background: var(--bg-raised); }
+.nsv-llm-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 8px;
+  background: transparent; border: 0; cursor: pointer; font-size: 12px; color: var(--text); text-align: left;
+}
+.nsv-chevron { color: var(--text-3); transition: transform var(--t-fast); flex-shrink: 0; }
+.nsv-llm-call.open .nsv-chevron { transform: rotate(90deg); }
+.nsv-llm-title { font-weight: 600; flex-shrink: 0; }
+.nsv-llm-temp { font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
+.nsv-llm-peek { color: var(--text-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-family: var(--font-mono); }
+.nsv-llm-body { padding: var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-2); border-top: 1px solid var(--border); }
+.nsv-llm-msg { display: flex; flex-direction: column; gap: 2px; }
+.nsv-llm-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); }
+.nsv-llm-role.role-system { color: var(--violet); }
+.nsv-llm-role.role-user { color: var(--cyan); }
+.nsv-llm-role.role-response { color: var(--green); }
+.nsv-pre {
+  margin: 0; padding: var(--sp-2); background: var(--bg-active); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--text);
+  white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto;
+}
+
 /* --- Runs page (every saved run + its trace) --- */
 .runs-page { display: flex; flex-direction: column; gap: var(--sp-4); }
 .runs-layout {

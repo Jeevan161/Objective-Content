@@ -39,7 +39,8 @@ class LOState(TypedDict, total=False):
     # in_scope, apply_suitable) under replace semantics.
     concept_inventory: list
     concept_graph: dict                    # {nodes, edges, _adj, assumed_prior, acyclic}
-    coverage_profile: dict                 # breadth x depth manifest (profile_coverage node)
+    outcome_graph: dict                    # LO-level graph {nodes, edges, weights} (build_outcome_graph)
+    coverage_profile: dict                 # breadth x depth manifest (profile_depth node)
     allocation_plan: dict
     division_proposal: dict                # Planner output, shown to the human at HITL Gate 1
     # v1 LO-first planning: the enumerate→plan stage records WHAT it generated and which
@@ -130,6 +131,7 @@ def new_state(session_id: str, title: str, source_text: str) -> LOState:
         "concept_inventory": [],
         "concept_graph": {"nodes": [], "edges": [], "_adj": {},
                           "assumed_prior": [], "acyclic": True},
+        "outcome_graph": {"nodes": [], "edges": [], "weights": {}},
         "allocation_plan": {},
         "selection_summary": {},
         "frozen_selected_ids": [],

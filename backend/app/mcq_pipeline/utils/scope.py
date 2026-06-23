@@ -19,6 +19,9 @@ _adapter_var: contextvars.ContextVar = contextvars.ContextVar("mcq_rag_adapter",
 # Optional per-thread sink that collects every RAG call made through `rag_api`,
 # so each outcome/question can report exactly which RAG calls grounded it.
 _rag_calls_var: contextvars.ContextVar = contextvars.ContextVar("mcq_rag_calls", default=None)
+# Optional per-thread sink that collects every LLM call made through `utils.llm.chat`
+# (prompt messages + response), so each pipeline node's trace span can show its LLM I/O.
+_llm_calls_var: contextvars.ContextVar = contextvars.ContextVar("mcq_llm_calls", default=None)
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -44,6 +47,27 @@ def record_rag_call(entry: dict) -> None:
         sink.append(entry)
 
 
+def record_llm_call(entry: dict) -> None:
+    """Append one LLM call (prompt + response) to the active recorder, if recording is in
+    effect for this thread. A no-op otherwise, so `utils.llm.chat` can always call it safely.
+    `list.append` is atomic under the GIL, so it is safe to share one list across pmap workers."""
+    sink = _llm_calls_var.get()
+    if sink is not None:
+        sink.append(entry)
+
+
+def start_llm_recording() -> tuple:
+    """Begin collecting LLM calls on this thread. Returns (calls_list, token); pass the token to
+    :func:`stop_llm_recording`. Used by the ProgressReporter to scope LLM I/O to one node span."""
+    calls: list = []
+    token = _llm_calls_var.set(calls)
+    return calls, token
+
+
+def stop_llm_recording(token) -> None:
+    _llm_calls_var.reset(token)
+
+
 class recording:
     """Context manager that collects every RAG call made on this thread while
     active. Yields the list the calls accumulate into::
@@ -63,15 +87,22 @@ class recording:
 
 
 def with_current_adapter(fn: Callable[[T], R]) -> Callable[[T], R]:
-    """Wrap ``fn`` so it runs with the CURRENT thread's adapter re-bound — used by
-    `pmap` so worker threads inherit the scope captured at fan-out time."""
-    current = _adapter_var.get()
+    """Wrap ``fn`` so it runs with the CURRENT thread's run scope re-bound — used by `pmap` so
+    worker threads inherit the adapter AND the active RAG/LLM recorders captured at fan-out time
+    (so LLM/RAG calls made inside a parallel node are still attributed to that node's trace span)."""
+    adapter = _adapter_var.get()
+    rag_calls = _rag_calls_var.get()
+    llm_calls = _llm_calls_var.get()
 
     def wrapped(x: T) -> R:
-        token = _adapter_var.set(current)
+        ta = _adapter_var.set(adapter)
+        tr = _rag_calls_var.set(rag_calls)
+        tl = _llm_calls_var.set(llm_calls)
         try:
             return fn(x)
         finally:
-            _adapter_var.reset(token)
+            _adapter_var.reset(ta)
+            _rag_calls_var.reset(tr)
+            _llm_calls_var.reset(tl)
 
     return wrapped

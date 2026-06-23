@@ -17,17 +17,16 @@ from typing import Callable
 # The pipeline's stages, in order. `parallel_group` marks branches the UI renders
 # side by side; per-LO stages carry done/total.
 STAGE_DEFS = [
-    # LO-creation stage — the deterministic 10-node pipeline.
+    # LO-creation stage — the LO-first pipeline.
     {"key": "parse_structure", "label": "Parse structure"},
-    {"key": "extract_concepts", "label": "Extract concepts (self-consistency)"},
-    {"key": "canonicalize_concepts", "label": "Canonicalize concepts"},
-    {"key": "build_dependency_graph", "label": "Build dependency graph"},
-    {"key": "profile_coverage", "label": "Profile coverage (breadth & depth)"},
-    {"key": "plan_allocation", "label": "Plan division (feasibility + budget)"},
+    {"key": "generate_outcomes", "label": "Generate all outcomes"},
+    {"key": "map_concepts", "label": "Map concepts (consistent across outcomes)"},
+    {"key": "build_outcome_graph", "label": "Build outcome graph (weights)"},
+    {"key": "profile_depth", "label": "Profile depth (feasibility)"},
+    {"key": "plan_outcomes", "label": "Plan outcomes (budget + identify apply)"},
     {"key": "review_division", "label": "Review division (human gate 1)"},
-    {"key": "author_outcomes", "label": "Author outcomes"},
-    {"key": "resolve_prerequisites", "label": "Resolve prerequisites"},
-    {"key": "judge_outcomes", "label": "Judge outcomes (R1–R8 rubric)"},
+    {"key": "resolve_prerequisites", "label": "Resolve prerequisites (apply)"},
+    {"key": "review_outcomes_quality", "label": "Dedup & judge (R1–R8 rubric)"},
     {"key": "validate", "label": "Validate (structural + rubric gate)"},
     {"key": "repair", "label": "Repair (regenerate, if needed)"},
     {"key": "review_outcomes", "label": "Review outcomes (human gate 2)"},
@@ -39,6 +38,31 @@ STAGE_DEFS = [
     {"key": "generate_questions", "label": "Generate questions"},
     {"key": "review_questions", "label": "Review & fix"},
 ]
+
+
+# Cap LLM calls recorded per node span so a fan-out node (e.g. K-sample voting over many
+# concepts) can't bloat the trace row. The detail string still reports totals.
+_LLM_CALLS_CAP = 60
+
+
+def _start_llm_recording() -> tuple:
+    """Begin per-node LLM-I/O recording. Best-effort: returns (None, None) if scope is unavailable
+    so progress can never crash a run."""
+    try:
+        from app.mcq_pipeline.utils import scope
+        return scope.start_llm_recording()
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def _stop_llm_recording(token) -> None:
+    if token is None:
+        return
+    try:
+        from app.mcq_pipeline.utils import scope
+        scope.stop_llm_recording(token)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _now_iso() -> str:
@@ -83,17 +107,27 @@ class ProgressReporter:
                 stage.update(fields)
                 new_state = fields.get("state")
                 now = datetime.now(timezone.utc)
-                # First transition into "running" opens a span (covers start()/counter()/tick());
-                # the matching "done"/"error" closes it and emits the span. A node re-entered by
-                # the repair loop / resume re-opens, so each entry is its own span.
+                # First transition into "running" opens a span (covers start()/counter()/tick())
+                # and begins recording this node's LLM I/O; the matching "done"/"error" closes the
+                # span, attaches the recorded LLM calls to its snapshot, and emits it. A node
+                # re-entered by the repair loop / resume re-opens, so each entry is its own span.
                 if new_state == "running" and key not in self._open:
-                    self._open[key] = (now, perf_counter())
+                    calls, token = _start_llm_recording()
+                    self._open[key] = (now, perf_counter(), calls, token)
                 elif new_state in ("done", "error"):
-                    started_dt, started_perf = self._open.pop(key, (now, perf_counter()))
+                    started_dt, started_perf, calls, token = self._open.pop(
+                        key, (now, perf_counter(), None, None))
+                    _stop_llm_recording(token)
+                    snapshot = dict(stage.get("snapshot") or {})
+                    if calls:
+                        snapshot["llm_calls"] = calls[:_LLM_CALLS_CAP]
+                        if len(calls) > _LLM_CALLS_CAP:
+                            snapshot["llm_calls_truncated"] = len(calls) - _LLM_CALLS_CAP
                     span = {
                         "node": key, "label": stage.get("label", ""),
                         "status": "error" if new_state == "error" else "ok",
                         "detail": stage.get("detail", "") or "",
+                        "snapshot": snapshot,
                         "started_at": started_dt, "ended_at": now,
                         "duration_ms": int(max(0.0, perf_counter() - started_perf) * 1000),
                     }

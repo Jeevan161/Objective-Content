@@ -271,6 +271,7 @@ def serialize_mcq_trace(t) -> dict:
         "status": t.status,
         "detail": t.detail,
         "duration_ms": t.duration_ms,
+        "snapshot": getattr(t, "snapshot", None) or {},
         "started_at": t.started_at,
         "ended_at": t.ended_at,
     }
