@@ -7,10 +7,35 @@ import { Spinner } from './ui'
 import { useToast } from './Toast'
 import NodeSnapshot from './NodeSnapshot'
 import { regenerateMcqQuestion, submitMcqFeedback, approveMcqRun, getMcqTrace } from '../api'
+import ReactMarkdown from 'react-markdown'
 
 const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer', 'LO drift', 'too easy', 'too hard']
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+// Markdown previewer — the portal renders the question text + explanation as Markdown, so we show
+// the same rendered preview here. Options / code / exact answers stay literal (rendered elsewhere)
+// so code and program output are never mangled by Markdown.
+function Md({ children }) {
+  const text = typeof children === 'string' ? children : (children ?? '')
+  if (!text.trim()) return null
+  return <div className="md"><ReactMarkdown>{text}</ReactMarkdown></div>
+}
+
+// Inline Markdown — for option text, list items, and other content that sits INSIDE a flex row.
+// Paragraphs render as <span> (not block <p>) so inline code / bold / emphasis work without
+// breaking the layout. Reuses the `.md code` / `.md strong` styles.
+function MdInline({ children }) {
+  const text = typeof children === 'string' ? children : (children ?? '')
+  if (!text.trim()) return null
+  return (
+    <span className="md md-inline">
+      <ReactMarkdown components={{ p: ({ node, ...props }) => <span {...props} /> }}>
+        {text}
+      </ReactMarkdown>
+    </span>
+  )
+}
 
 const TYPE_ICON = {
   MULTIPLE_CHOICE: FileQuestion,
@@ -178,7 +203,7 @@ function QuestionCard({ q, lo, index, review }) {
       ) : (
         <>
           <Field label="Question">
-            <p className="qc-stem">{lean.question || lean.statement}</p>
+            <div className="qc-stem"><Md>{lean.question || lean.statement}</Md></div>
             {code && <pre className="qc-code">{code}</pre>}
           </Field>
 
@@ -188,7 +213,7 @@ function QuestionCard({ q, lo, index, review }) {
                 {lean.options.map((o, i) => (
                   <li key={i} className={`qc-opt ${o.is_correct ? 'correct' : ''}`}>
                     <span className="qc-opt-letter">{LETTERS[i] || '•'}</span>
-                    <span className="qc-opt-text">{o.content}</span>
+                    <span className="qc-opt-text"><MdInline>{o.content}</MdInline></span>
                     {o.is_correct && <CheckCircle2 size={14} className="qc-opt-tick" />}
                   </li>
                 ))}
@@ -199,7 +224,7 @@ function QuestionCard({ q, lo, index, review }) {
           {Array.isArray(lean.ordered_items) && lean.ordered_items.length > 0 && (
             <Field label="Correct order">
               <ol className="qc-rearrange">
-                {lean.ordered_items.map((it, i) => <li key={i}>{it}</li>)}
+                {lean.ordered_items.map((it, i) => <li key={i}><MdInline>{it}</MdInline></li>)}
               </ol>
             </Field>
           )}
@@ -218,7 +243,7 @@ function QuestionCard({ q, lo, index, review }) {
           )}
 
           {lean.explanation && (
-            <Field label="Explanation"><p className="qc-expl">{lean.explanation}</p></Field>
+            <Field label="Explanation"><div className="qc-expl"><Md>{lean.explanation}</Md></div></Field>
           )}
         </>
       )}

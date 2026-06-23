@@ -169,6 +169,10 @@ Grading Reliability
 - No multiple interpretations
 - No alternate valid answers
 
+Formatting (Markdown)
+- Stem and explanation are valid Markdown with a BLANK LINE between every block (paragraph / list / code)
+- CODE_ANALYSIS_* options are PLAIN text (no Markdown, no backticks); exact-answer values and the code field are literal
+
 Type-Specific Rules
 - All rules for the question type are satisfied""")
 

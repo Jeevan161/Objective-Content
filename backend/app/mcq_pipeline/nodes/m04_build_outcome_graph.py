@@ -200,7 +200,7 @@ def build_outcome_graph(state, config) -> dict:
     outcome_graph = {"nodes": [o["id"] for o in outcomes], "edges": o_edges,
                      "weights": {o["id"]: o["weight"] for o in outcomes}}
 
-    logs.append({"node": "build_outcome_graph", "k": K_SAMPLES, "edges": len(edges),
+    logs.append({"node": "build_outcome_graph", "k": GRAPH_K_SAMPLES, "edges": len(edges),
                  "assumed_prior": assumed, "procedural": sorted(procedural_ids)})
     name_of = {c["concept_id"]: c["canonical_name"] for c in new_inv}
     snapshot = {"concept_count": len(ids), "edge_count": len(edges),

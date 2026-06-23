@@ -149,6 +149,20 @@ SELF-CONTAINED — the question is an INDEPENDENT resource. The learner sees ONL
 
 Do not reveal the answer in the stem.""")
 
+_MARKDOWN_RULES = register("gen.markdown_rules", """\
+MARKDOWN FORMATTING
+
+The portal renders the question text and the explanation as MARKDOWN. Write them as clean Markdown:
+- Use inline `code` for code identifiers, values, commands, and outputs referenced in prose; **bold** sparingly for key terms; '-' bullet lists for enumerations.
+- Separate EVERY block-level element (each paragraph, each list, each fenced code block) with a BLANK LINE. The portal's renderer needs a blank line between blocks — without it, adjacent blocks merge or fail to render.
+- Keep the stem a short prose block; do not use a Markdown heading (#) in the stem.
+
+OPTIONS:
+- Prose/conceptual options MAY use light inline Markdown (`code`, **bold**).
+- For CODE_ANALYSIS_* question types, options are literal code or program output — keep them PLAIN TEXT (no Markdown, no backticks) so the portal shows them verbatim.
+
+NEVER apply Markdown to a graded exact-answer value (a TEXTUAL / FIB answer or expected output) or to the `code` field — those must stay literal.""")
+
 _OPTION_RULES = register("gen.option_rules", """\
 OPTION RULES
 
@@ -359,6 +373,7 @@ def _sys_for(qtype: str, lo: dict) -> str:
         f"{get_prompt('gen.header', _HEADER).format(qtype=qtype)}",
         get_prompt("gen.grounding_rules", _GROUNDING_RULES),
         get_prompt("gen.question_text_rules", _QUESTION_TEXT_RULES),
+        get_prompt("gen.markdown_rules", _MARKDOWN_RULES),
         get_prompt("gen.option_rules", _OPTION_RULES),
         get_prompt("gen.explanation_rules", _EXPLANATION_RULES),
     ]
