@@ -137,8 +137,7 @@ def run_build_rag_job(
 
         job.status = SyncJob.SUCCESS
         job.message = (
-            f"Indexed {created} chunk(s) from {len(rows)} reading material(s) "
-            f"across {len(courses)} course(s)."
+            f"Indexed {created} chunks from {len(rows)} materials."
         )
         job.updated_at = _now()
         session.commit()

@@ -6,7 +6,7 @@ from collections import Counter
 from app.mcq_pipeline.utils import rag_api
 from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.config import DEPTH_CATEGORIES, DROP_NAMED_ONLY
-from app.mcq_pipeline.utils.concept_graph import concept_depth
+from app.mcq_pipeline.utils.concept_graph import concept_depth, loosen_text
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
 from app.mcq_pipeline.nodes._common import _bind_rag, _prog
@@ -20,12 +20,18 @@ from app.mcq_pipeline.nodes._common import _bind_rag, _prog
 # (lo_config.allowed_verbs_for), which plan_allocation and author_outcomes obey — so depth
 # is established ONCE here instead of being reverse-engineered by V12/coverage_gate repairs.
 _DEPTH_PROFILE_SYS = register("lo.depth_profile", (
-    "You evaluate how COMPLETELY a concept is TAUGHT in the given instructional section.\n"
+    "You evaluate how COMPLETELY a concept is TAUGHT in the instructional reading.\n"
     "This score determines whether the concept is assessable and what level of learning "
     "outcomes can be generated later.\n\n"
 
+    "Judge against the WHOLE reading provided, not just one section — a concept may be NAMED in one "
+    "place but EXPLAINED in another; use the deepest treatment found anywhere in the reading.\n\n"
+
     "Return ONLY JSON:\n"
-    '{"depth": "mention|moderate|deep", "why": "<one line>"}\n\n'
+    '{"depth": "named|mention|moderate|deep", '
+    '"evidence": "<the exact verbatim sentence(s) from the reading that TEACH this concept; '
+    'empty string if the concept is only named with no explanation>", '
+    '"why": "<one line>"}\n\n'
 
     "----------------------------\n"
     "PRIMARY OBJECTIVE\n"
@@ -37,11 +43,18 @@ _DEPTH_PROFILE_SYS = register("lo.depth_profile", (
     "DEPTH DEFINITIONS (STRICT)\n"
     "----------------------------\n"
 
+    "0. named\n"
+    "- Concept is ONLY named, referenced, or listed in passing (e.g. 'tools like X, Y, Z')\n"
+    "- NO definition and NO explanation ANYWHERE in the reading — not even one sentence\n"
+    "- Cannot be assessed at all (there is nothing to ask a grounded question about)\n"
+    "- 'evidence' MUST be an empty string\n\n"
+
     "1. mention\n"
-    "- Concept is ONLY named, referenced, or listed\n"
-    "- No explanation of how or why it works\n"
-    "- No steps, reasoning, or example-based teaching\n"
-    "- Cannot be assessed beyond recall (recognize/identify only)\n\n"
+    "- Concept is DEFINED or stated in about ONE sentence (a definition or a single explanatory "
+    "statement) somewhere in the reading\n"
+    "- No deeper reasoning, steps, or example-based teaching\n"
+    "- Assessable at RECALL only (recognize/identify/define)\n"
+    "- 'evidence' = the defining sentence, verbatim\n\n"
 
     "2. moderate\n"
     "- Concept is explained with SOME reasoning OR description\n"
@@ -68,6 +81,7 @@ _DEPTH_PROFILE_SYS = register("lo.depth_profile", (
     "----------------------------\n"
     "BOUNDARY RULE (VERY IMPORTANT)\n"
     "----------------------------\n"
+    "- A name with NO definition anywhere = named\n"
     "- A single sentence definition = mention\n"
     "- A definition + example = usually moderate (only if example is explained)\n"
     "- A procedural walkthrough or multi-step reasoning = deep\n\n"
@@ -76,7 +90,8 @@ _DEPTH_PROFILE_SYS = register("lo.depth_profile", (
     "ASSESSMENT LINK RULE\n"
     "----------------------------\n"
     "Think in terms of what a learner could be tested on:\n"
-    "- mention → recognition only\n"
+    "- named → nothing (not assessable)\n"
+    "- mention → recognition / recall only\n"
     "- moderate → explanation questions\n"
     "- deep → application / problem-solving questions\n\n"
 
@@ -94,11 +109,16 @@ _DEPTH_PROFILE_SYS = register("lo.depth_profile", (
 ))
 
 
-def _profile_one(concept: dict, section_text: str) -> dict:
+def _profile_one(concept: dict, section_text: str, source_text: str) -> dict:
+    """Score taught DEPTH for one concept against the WHOLE reading (the section it was drawn from is
+    the anchor; the rest of the reading is supporting context — a concept may be named in one section
+    and explained in another). Also returns the verbatim span that TEACHES it (for evidence)."""
     name = concept.get("canonical_name", "")
     ev = (concept.get("evidence") or {}).get("quote", "")
-    usr = (f'CONCEPT: {name}\n\nEVIDENCE (where it was drawn from):\n"{ev}"\n\n'
-           f"SECTION TEXT:\n{(section_text or '')[:8000]}")
+    usr = (f'CONCEPT: {name}\n\nEVIDENCE (where it was first drawn from):\n"{ev}"\n\n'
+           f"SECTION it was drawn from (anchor):\n{(section_text or '')[:6000]}\n\n"
+           f"WHOLE READING (consider the concept may be explained elsewhere here):\n"
+           f"{(source_text or '')[:12000]}")
     data = {}
     try:
         data = parse_json(chat([{"role": "system", "content": get_prompt("lo.depth_profile", _DEPTH_PROFILE_SYS)},
@@ -107,9 +127,14 @@ def _profile_one(concept: dict, section_text: str) -> dict:
         data = {}
     depth = str(data.get("depth", "")).strip().lower()
     if depth not in DEPTH_CATEGORIES:
-        d = concept_depth(name, section_text)
-        depth = "mention" if d <= 1 else ("moderate" if d <= 3 else "deep")
-    return {"depth_category": depth, "depth_why": str(data.get("why", ""))[:200]}
+        d = concept_depth(name, source_text)   # count over the WHOLE reading now
+        depth = "named" if d == 0 else ("mention" if d <= 1 else ("moderate" if d <= 3 else "deep"))
+    # the verbatim teaching span (kept only if it actually resolves to the reading, so it can later
+    # serve as grounded evidence). Empty for a bare 'named' reference.
+    span = str(data.get("evidence", "") or "").strip()
+    span_ok = bool(span) and loosen_text(span)[:60] in loosen_text(source_text)
+    return {"depth_category": depth, "depth_why": str(data.get("why", ""))[:200],
+            "depth_evidence": span if span_ok else ""}
 
 
 def profile_depth(state, config) -> dict:
@@ -121,10 +146,11 @@ def profile_depth(state, config) -> dict:
     prog = _prog(config)
     inv = [dict(c) for c in state["concept_inventory"]]
     sec_text = {s["topic_id"]: s.get("text", "") for s in state.get("sections", [])}
+    source_text = state.get("source_text", "")
     on_done = prog.counter("profile_depth", len(inv))
 
     def _one(c):
-        prof = _profile_one(c, sec_text.get(c.get("topic_id"), ""))
+        prof = _profile_one(c, sec_text.get(c.get("topic_id"), ""), source_text)
         external = False
         try:  # scope-closure: is this concept actually taught in the course scope?
             verdict = (rag_api.check_concept(c["canonical_name"]).get("verdict") or "").split("\n", 1)[0].upper()
@@ -137,21 +163,30 @@ def profile_depth(state, config) -> dict:
     by_id = {cid: (prof, ext) for cid, prof, ext in pmap(_one, inv)}
     named_only = []
     for c in inv:
-        prof, ext = by_id.get(c["concept_id"], ({"depth_category": "moderate", "depth_why": ""}, False))
+        prof, ext = by_id.get(c["concept_id"],
+                              ({"depth_category": "moderate", "depth_why": "", "depth_evidence": ""}, False))
         c["depth_category"] = prof["depth_category"]
         c["depth_why"] = prof["depth_why"]
-        # Quality model: taught_depth + explained describe HOW the session teaches the
-        # concept. "mention" = named/stated only, no real explanation → not explained.
+        # Quality model: taught_depth + explained describe HOW the session teaches the concept.
+        # "explained" = taught with real reasoning (moderate/deep); a one-sentence "mention" is
+        # assessable at recall but not "explained" in depth; "named" is a bare reference.
         c["taught_depth"] = prof["depth_category"]
-        c["explained"] = prof["depth_category"] != "mention"
+        c["explained"] = prof["depth_category"] in ("moderate", "deep")
+        # Attach the verbatim teaching span as grounded evidence (the "how it was explained" capture).
+        span = prof.get("depth_evidence", "")
+        if span:
+            c["evidence"] = {"quote": span, "section": c.get("topic_id", "")}
+            if span not in c.setdefault("evidence_quotes", []):
+                c["evidence_quotes"].append(span)
         if ext:
             c["in_scope"] = False
             c["out_of_scope_reason"] = "named in passing; not taught in course scope (external)"
-        elif DROP_NAMED_ONLY and not c["explained"] and c["in_scope"]:
-            # Identify-but-don't-explain: a bare mention is not assessable, so it must NOT
-            # seed an outcome. Drop it from scope rather than mint a recall LO on a name.
+        elif DROP_NAMED_ONLY and c["depth_category"] == "named" and c["in_scope"]:
+            # BARE reference: named/listed with no definition anywhere → nothing to ground a question
+            # on, so drop it. (A one-sentence "mention" is KEPT and assessed at recall — we downgrade
+            # the tier / reframe the LO downstream rather than drop it.)
             c["in_scope"] = False
-            c["out_of_scope_reason"] = "named in passing; not substantively explained in this session"
+            c["out_of_scope_reason"] = "named in passing; no definition or explanation in the reading"
             named_only.append(c["concept_id"])
 
     cats = Counter(c["depth_category"] for c in inv if c["in_scope"])

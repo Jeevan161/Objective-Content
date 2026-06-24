@@ -22,9 +22,9 @@ Output: outcomes (the SELECTED set), allocation_plan, division_proposal, selecti
 """
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 
-from app.mcq_pipeline.config import (BUDGET_STEP, MAX_LOS_PER_CONCEPT, MIN_BUDGET, QUESTION_BUDGET,
+from app.mcq_pipeline.config import (BUDGET_STEP, MIN_BUDGET, QUESTION_BUDGET,
                                      SKILL_TYPES, TIER_ORDER, VERBS, feasible_tiers)
 from app.mcq_pipeline.nodes._common import _ctx, _prog
 from app.mcq_pipeline.nodes.m02_generate_outcomes import _DEFAULT_VERB
@@ -59,7 +59,9 @@ def _clamp_to_feasible(o: dict, concept: dict) -> dict:
 
 def _quantize_budget(requested: int, capacity: int, n_concepts: int) -> tuple:
     """Budget is a CEILING (step DOWN to a multiple of BUDGET_STEP, capped by capacity), with a hard
-    coverage floor: never fewer outcomes than in-scope concepts. Returns (final_budget, flags)."""
+    coverage floor: never fewer outcomes than in-scope BROAD concepts (so the ~20 ceiling holds even
+    when there are many fine sub-concepts; the floor only rises if there are >budget broad concepts).
+    `n_concepts` here is the count of in-scope broad concepts. Returns (final_budget, flags)."""
     flags = []
     target = max(0, min(requested, capacity))
     final = max(MIN_BUDGET, (target // BUDGET_STEP) * BUDGET_STEP)
@@ -69,46 +71,52 @@ def _quantize_budget(requested: int, capacity: int, n_concepts: int) -> tuple:
     if final < n_concepts:
         final = min(capacity, ((n_concepts + BUDGET_STEP - 1) // BUDGET_STEP) * BUDGET_STEP)
         flags.append({"flag": "budget_raised_for_coverage", "final": final,
-                      "reason": f"{n_concepts} in-scope concepts must each be covered"})
+                      "reason": f"{n_concepts} in-scope broad concepts must each be covered"})
     if final <= 10:
         flags.append({"flag": "low_budget_review", "final": final,
                       "reason": "thin material — recommend human review at Gate 1"})
     return final, flags
 
 
-def _select(candidates: list, budget: int) -> list:
-    """Pick up to `budget` outcomes: (a) coverage — each concept's top non-scenario candidate;
-    (b) fill remaining slots by weight (then tier, then shallower dag_depth), capped per concept."""
-    by_concept: dict = defaultdict(list)
+def _select(candidates: list, budget: int, parent_of: dict) -> list:
+    """Pick up to `budget` outcomes. Coverage is keyed on the BROAD concept (parent_concept), NOT the
+    fine sub-concept: (a) one outcome per broad concept at its top non-scenario tier — guarantees
+    every taught concept is represented while keeping the floor ~= #concepts (not #sub-concepts);
+    (b) fill remaining slots by weight (then tier, then shallower dag_depth) across distinct
+    sub-concepts. No per-concept cap; the (concept_id, Bloom) dedup bounds each sub-concept to one
+    outcome per tier. `parent_of` maps concept_id (sub-concept) -> its broad concept."""
+    by_parent: dict = defaultdict(list)
     for o in candidates:
-        by_concept[o["concept_id"]].append(o)
+        by_parent[parent_of.get(o["concept_id"], o["concept_id"])].append(o)
 
-    selected, used, picked_ids = [], defaultdict(int), set()
+    selected, picked_ids = [], set()
 
     def take(o):
         selected.append(o)
-        used[o["concept_id"]] += 1
         picked_ids.add(o["id"])
 
-    # (a) coverage: one outcome per concept at its highest non-scenario tier (fallback: any).
-    for cid, group in by_concept.items():
+    # (a) coverage: one outcome per BROAD concept at its highest non-scenario tier (fallback: any).
+    # Process broad concepts HEAVIEST-FIRST so the most foundational concepts are guaranteed a slot
+    # even if the budget is tight (then fill picks the next-best outcomes by weight).
+    def _group_weight(item):
+        return max((o.get("weight", 0) for o in item[1]), default=0)
+    for parent, group in sorted(by_parent.items(), key=_group_weight, reverse=True):
         non_scenario = [o for o in group if o["bloom_level"] != "scenario"] or group
         best = max(non_scenario, key=lambda o: (_RANK[o["bloom_level"]], o.get("weight", 0)))
         take(best)
 
-    # (b) fill to budget by foundational-ness, respecting the per-concept cap.
+    # (b) fill to budget by foundational-ness (weight, then tier, then shallower dag_depth).
     rest = sorted((o for o in candidates if o["id"] not in picked_ids),
                   key=lambda o: (-o.get("weight", 0), -_RANK[o["bloom_level"]],
                                  o.get("dag_depth", 0), o["id"]))
     for o in rest:
         if len(selected) >= budget:
             break
-        if used[o["concept_id"]] >= MAX_LOS_PER_CONCEPT:
-            continue
         take(o)
 
-    # If coverage alone already exceeded the budget, keep the heaviest ones (every concept still
-    # appears at least once because coverage picks are added first and sorted stably).
+    # If coverage alone already exceeded the budget (more broad concepts than budget — the budget
+    # floor should have prevented this), keep the heaviest; every broad concept still appears once
+    # because coverage picks are added first and sorted stably.
     if len(selected) > budget:
         selected = sorted(selected, key=lambda o: (-o.get("weight", 0), -_RANK[o["bloom_level"]],
                                                    o.get("dag_depth", 0), o["id"]))[:budget]
@@ -120,14 +128,14 @@ def backfill_to_budget(outcomes: list, pool: list, budget: int,
     """Top the outcome set back up toward `budget` using the highest-weighted UNSELECTED candidates
     from `pool` — keeping budget a TARGET, not just a ceiling. Used after dedup drops a duplicate and
     after repair drops a not-taught (R1) outcome. Skips: ids already present, a `(concept, Bloom)`
-    pair already present (so it can't reintroduce a just-deduped twin), concepts over the per-concept
-    cap, and `exclude_concepts` (e.g. concepts the judge said aren't taught). Best-effort — returns
-    (outcomes, added_ids); FEWER than budget if the pool is exhausted (quality over count)."""
+    pair already present (so it can't reintroduce a just-deduped twin), and `exclude_concepts` (e.g.
+    concepts the judge said aren't taught). No per-concept cap — the `(concept, Bloom)` pair guard is
+    the bound. Best-effort — returns (outcomes, added_ids); FEWER than budget if the pool is exhausted
+    (quality over count)."""
     if len(outcomes) >= budget or not pool:
         return list(outcomes), []
     present_ids = {o["id"] for o in outcomes}
     present_pairs = {(o["concept_id"], o["bloom_level"]) for o in outcomes}
-    used = Counter(o["concept_id"] for o in outcomes)
     ranked = sorted(pool, key=lambda o: (-o.get("weight", 0), -_RANK.get(o.get("bloom_level"), 0),
                                          o.get("dag_depth", 0), o.get("id", "")))
     out, added = list(outcomes), []
@@ -137,13 +145,12 @@ def backfill_to_budget(outcomes: list, pool: list, budget: int,
         cid, pair = cand.get("concept_id"), (cand.get("concept_id"), cand.get("bloom_level"))
         if cand.get("id") in present_ids or pair in present_pairs:
             continue
-        if cid in exclude_concepts or used[cid] >= MAX_LOS_PER_CONCEPT:
+        if cid in exclude_concepts:
             continue
         out.append(dict(cand))
         added.append(cand["id"])
         present_ids.add(cand["id"])
         present_pairs.add(pair)
-        used[cid] += 1
     return out, added
 
 
@@ -155,8 +162,12 @@ def plan_outcomes(state, config) -> dict:
 
     inv = state["concept_inventory"]
     inv_by_id = {c["concept_id"]: c for c in inv}
+    # concept_id is the fine (sub-concept) unit; parent_of maps it to its BROAD concept (coverage key).
+    parent_of = {c["concept_id"]: (c.get("parent_concept") or c["concept_id"]) for c in inv}
     in_scope_ids = {c["concept_id"] for c in inv if c.get("in_scope")}
-    n = len(in_scope_ids)
+    # coverage floor keys on BROAD concepts, not sub-concepts, so the ~20 budget isn't blown up by a
+    # topic that decomposes into many fine steps (every broad concept still gets >=1 outcome).
+    n = len({parent_of[cid] for cid in in_scope_ids})
 
     all_cands = state["outcomes"]
     # keep candidates whose concept is in-scope, then clamp each to its feasibility ceiling.
@@ -164,10 +175,12 @@ def plan_outcomes(state, config) -> dict:
                   for o in all_cands if o.get("concept_id") in in_scope_ids]
     dropped_oos = [o["id"] for o in all_cands if o.get("concept_id") not in in_scope_ids]
 
-    capacity = max(MIN_BUDGET, min(n * MAX_LOS_PER_CONCEPT, len(candidates) or MIN_BUDGET))
+    # capacity is now bounded by how many DISTINCT grounded outcomes the material actually supports
+    # (one per sub-concept per feasible tier), not an arbitrary per-concept multiple.
+    capacity = max(MIN_BUDGET, len(candidates) or MIN_BUDGET)
     final_budget, flags = _quantize_budget(requested, capacity, n)
 
-    selected = _select(candidates, final_budget)
+    selected = _select(candidates, final_budget, parent_of)
     selected_ids = {o["id"] for o in selected}
     dropped_unselected = [o["id"] for o in candidates if o["id"] not in selected_ids]
     apply_ids = [o["id"] for o in selected if o["bloom_level"] in ("apply", "scenario")]

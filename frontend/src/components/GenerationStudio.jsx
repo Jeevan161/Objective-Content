@@ -9,14 +9,14 @@ const TOOLS = [
     icon: ListChecks,
     accent: 'var(--violet)',
     title: 'MCQ Generation',
-    desc: 'Generate multiple-choice practice from a course topic and session using its ingested reading material.',
+    desc: 'Generate MCQ practice from a topic and session.',
   },
   {
     key: 'coding',
     icon: Code2,
     accent: 'var(--cyan)',
     title: 'Coding Practice',
-    desc: 'Generate hands-on coding problems and starter scaffolds from session content.',
+    desc: 'Generate coding problems from a session.',
     soon: true,
   },
   {
@@ -24,7 +24,7 @@ const TOOLS = [
     icon: Layers,
     accent: 'var(--amber)',
     title: 'Flashcards',
-    desc: 'Turn key concepts in a session into spaced-repetition flashcards.',
+    desc: 'Turn session concepts into flashcards.',
     soon: true,
   },
 ]
@@ -38,7 +38,7 @@ function GenerationStudio({ onNavigate }) {
         <div>
           <h1>Generation Studio</h1>
           <p className="topbar-sub">
-            Generate practice content from your ingested courses. Pick a tool to get started.
+            Pick a tool to generate practice content.
           </p>
         </div>
       </header>

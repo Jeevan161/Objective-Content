@@ -17,7 +17,16 @@ from pydantic import BaseModel, Field
 from app.mcq_pipeline.utils import rag_api, scope
 from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.prompts.store import get_prompt, register
-from app.mcq_pipeline.nodes.n14_generate_questions import CODE_PATH_TYPES, OPTION_TYPES, _CODE_RULES, _EXACT_ANSWER_RULES, _EXPLANATION_RULES, _FIB_RULES, _GROUNDING_RULES, _MORE_THAN_ONE_RULES, _OPTION_RULES, _QUESTION_TEXT_RULES, _REARRANGE_RULES, _TRUE_FALSE_RULES, _TYPED_ANSWER_TYPES, _ground, _lo_block, _model, fix_lean
+from app.mcq_pipeline.nodes.n14_generate_questions import CODE_PATH_TYPES, OPTION_TYPES, _CODE_RULES, _EXACT_ANSWER_RULES, _EXPLANATION_RULES, _FIB_RULES, _GROUNDING_RULES, _MORE_THAN_ONE_RULES, _OPTION_RULES, _QUESTION_TEXT_RULES, _REARRANGE_RULES, _TRUE_FALSE_RULES, _TYPED_ANSWER_TYPES, _ground, _lo_block, fix_lean
+
+
+def _review_model(temp: float = 0):
+    # Question REVIEW agent. Built on the active connector (OpenRouter) but with the
+    # review model id (settings.mcq_review_model — GPT-4o); empty -> the connector's own
+    # model. Distinct from generation (n14._model), which runs on Sonnet 4.6.
+    from app.core.config import settings
+    from app.mcq_pipeline.utils.llm import make_chat_model
+    return make_chat_model(temperature=temp, model=settings.mcq_review_model or None)
 
 
 class ReviewIssue(BaseModel):
@@ -443,7 +452,7 @@ def _audit_distractor_depth(lo: dict, qtype: str, lean: dict, ctx: str) -> list[
         usr = (f"TARGET CONCEPT: {concept}\nREQUIRED DEPTH to judge a distractor: {depth}\n\n"
                f"DISTRACTOR (a wrong option): {content}\n\nMATERIAL (ground truth):\n{(ctx or '')[:8000]}")
         try:
-            v = _model(0).with_structured_output(_DistractorVerdict).invoke(
+            v = _review_model(0).with_structured_output(_DistractorVerdict).invoke(
                 [{"role": "system", "content": get_prompt("review.distractor_depth_audit", _DISTRACTOR_DEPTH_AUDIT)},
                  {"role": "user", "content": usr}])
         except Exception:  # noqa: BLE001 — never block review on the audit
@@ -467,7 +476,7 @@ def _review_lean(lo: dict, qtype: str, lean: dict, ctx: str) -> dict:
         f"COURSE MATERIAL (ground truth):\n{ctx}\n\n"
         f"GENERATED {qtype} QUESTION (review this):\n{lean}"
     )
-    review: QuestionReview = _model(0).with_structured_output(QuestionReview).invoke(
+    review: QuestionReview = _review_model(0).with_structured_output(QuestionReview).invoke(
         [{"role": "system", "content": _review_sys(qtype)},
          {"role": "user", "content": user}]
     )

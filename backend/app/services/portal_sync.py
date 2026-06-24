@@ -185,7 +185,7 @@ def run_sync_job(session: Session, job_id: uuid.UUID) -> None:
         topic_count = len(data.get("topics", []))
         unit_count = sum(len(t.get("units", [])) for t in data.get("topics", []))
         job.status = SyncJob.SUCCESS
-        job.message = f"Saved {topic_count} topic(s) and {unit_count} unit(s)."
+        job.message = f"Saved {topic_count} topics, {unit_count} units."
         job.updated_at = _now()
         session.commit()
     except Exception as err:  # noqa: BLE001 — report any failure onto the job row

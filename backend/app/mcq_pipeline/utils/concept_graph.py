@@ -25,17 +25,34 @@ def slugify(name: str) -> str:
     return re.sub(r"_+", "_", s) or "x"
 
 
+_SENT_BOUND = re.compile(r"[.!?](?=\s|$)|\n")
+
+
 def ground_quote(term: str, text: str, width: int = 180) -> str:
-    """Cut a VERBATIM (whitespace-collapsed) snippet from `text` near `term`, so every
-    evidence quote provably resolves to the source (V9 becomes deterministic)."""
+    """Cut a VERBATIM (whitespace-collapsed) snippet from `text` that teaches `term`, snapped to
+    SENTENCE boundaries — the FULL sentence(s) containing the term, not a fixed-width fragment — so
+    each evidence quote reads as a real teaching sentence/paragraph and still provably resolves to the
+    source (V9 stays deterministic). Falls back to a fixed-width window when the term isn't found."""
     t = text or ""
+    if not t:
+        return ""
     low = t.lower()
+    pos = -1
     for w in sorted(re.findall(r"[A-Za-z_]{3,}", term or ""), key=len, reverse=True):
-        i = low.find(w.lower())
-        if i != -1:
-            start = t.rfind("\n", 0, i) + 1
-            return re.sub(r"\s+", " ", t[start:start + width]).strip()
-    return re.sub(r"\s+", " ", t[:width]).strip()
+        pos = low.find(w.lower())
+        if pos != -1:
+            break
+    if pos == -1:                                   # term not found: first sentence as a fallback
+        rm = _SENT_BOUND.search(t)
+        return re.sub(r"\s+", " ", t[:rm.end() if rm else width]).strip()
+    left = 0                                         # left edge: just after the prior sentence end
+    for m in _SENT_BOUND.finditer(t, 0, pos):
+        left = m.end()
+    rm = _SENT_BOUND.search(t, pos)                  # right edge: through the next sentence end
+    right = rm.end() if rm else min(len(t), pos + width)
+    if right - left > 600:                           # cap a pathologically long run-on
+        right = left + 600
+    return re.sub(r"\s+", " ", t[left:right]).strip()
 
 
 def loosen_text(t: str) -> str:

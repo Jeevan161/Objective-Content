@@ -13,7 +13,16 @@ from __future__ import annotations
 
 # --- question budget (user-supplied; QUESTION_BUDGET is only the default ceiling) --- #
 QUESTION_BUDGET = 20                # default ceiling when the caller supplies no budget
-MAX_LOS_PER_CONCEPT = 2             # capacity = (# in-scope concepts) x this
+# Question types we do NOT generate right now (the recommender remaps them to MULTIPLE_CHOICE).
+# TEXTUAL is graded by exact STRING MATCH (no AI grader), so it is OFF until that is revisited.
+# Empty this set to re-enable. (CODE_ANALYSIS_TEXTUAL = exact code output is NOT excluded.)
+EXCLUDED_QUESTION_TYPES = {"TEXTUAL"}
+# DEPRECATED: the per-concept cap is no longer applied. With concept_id now keyed at SUB-concept
+# granularity (map_concepts), the (concept_id, Bloom) dedup is the natural bound — one outcome per
+# distinct sub-concept per tier — so an arbitrary per-concept ceiling is unnecessary and was the
+# main source of count inconsistency on broad ("umbrella") concepts. Kept defined only so legacy
+# `old/` nodes still import; the active pipeline (m06) no longer references it.
+MAX_LOS_PER_CONCEPT = 2             # (deprecated — see note above)
 MIN_BUDGET = 5                      # floor; budget is quantized to multiples of BUDGET_STEP
 BUDGET_STEP = 5                     # step the budget down to the nearest multiple of 5 when thin
 SCENARIO_TARGET = 2                 # aim for ~this many scenario LOs when feasible (0 is allowed)
@@ -26,8 +35,10 @@ USE_LLM_IMPORTANCE_RANKING = True
 # the retrieved evidence ONLY. Falls back to a single grounded check_concept if disabled/unavailable.
 USE_LLM_COVERAGE_PROBE = True
 
-# Quality: a concept only NAMED in passing (taught_depth "mention") is not assessable beyond
-# bare recall, so it is dropped from scope rather than seeding a recall LO on a bare mention.
+# Quality: a concept that is a BARE passing reference (taught_depth "named" — listed with NO
+# definition/explanation anywhere in the reading) is not assessable at all, so it is dropped from
+# scope. A concept DEFINED in ~one sentence ("mention") is kept and assessed at RECALL (we downgrade
+# the tier / reframe the LO rather than drop it). Only "named" is dropped when this is True.
 DROP_NAMED_ONLY = True
 
 K_SAMPLES = 3                       # self-consistency samples (NFR2)
@@ -40,9 +51,14 @@ GRAPH_K_SAMPLES = 2
 GRAPH_MAJORITY = 2
 MAX_RETRIES = 3                     # regenerate-repair loop cap
 
+# Extraction + graph stages deliberately SAMPLE (K_SAMPLES / GRAPH_K_SAMPLES self-consistency,
+# majority vote) — they need temperature > 0 for sample diversity, so they stay non-zero.
 TEMP_EXTRACT = 0.3
 TEMP_GRAPH = 0.2
-TEMP_AUTHOR = 0.2
+# Authoring (Node 2) is the stage that determines the candidate SET and thus the final count: greedy
+# decoding (temp 0) so the same material yields the same outcomes run-to-run. (LLMs are not perfectly
+# bit-deterministic even at 0, so "exactly similar" is best-effort, but the deliberate jitter is gone.)
+TEMP_AUTHOR = 0.0
 
 # --- controlled action-verb vocabulary, per Bloom TIER (BR11) ---------------------- #
 REMEMBER_VERBS = {"identify", "list", "label", "recognize", "match", "name", "define", "state"}
@@ -61,19 +77,23 @@ VERBS = {"remember": REMEMBER_VERBS, "understand": UNDERSTAND_VERBS,
 
 SKILL_TYPES = {"conceptual", "practical_application", "diagnostic"}
 
-# Pre-authoring DEPTH categories (set per concept by the profile_coverage node). mention =
-# named/stated once, no real explanation; moderate = explained with reasoning across a few
-# sentences; deep = thoroughly developed (explanation PLUS examples/steps/contrast).
-DEPTH_CATEGORIES = ("mention", "moderate", "deep")
+# Pre-authoring DEPTH categories (set per concept by the profile_coverage node). named = bare
+# passing reference, NO definition (not assessable -> dropped); mention = defined/stated in ~one
+# sentence, no deeper reasoning (assessable at RECALL only); moderate = explained with reasoning
+# across a few sentences; deep = thoroughly developed (explanation PLUS examples/steps/contrast).
+DEPTH_CATEGORIES = ("named", "mention", "moderate", "deep")
 
 
 def feasible_tiers(depth: str, procedural: bool) -> tuple[str, ...]:
     """The Bloom tiers a concept taught at this DEPTH (and procedurality) can support.
     Domain-agnostic feasibility ceiling:
+      named              -> () (bare reference, not assessable — dropped in profile_depth)
       mention            -> remember
       moderate           -> remember, understand            (+ apply if procedural)
       deep               -> remember, understand            (+ apply, scenario if procedural)
     """
+    if depth == "named":
+        return ()
     tiers = ["remember"]
     if depth in ("moderate", "deep"):
         tiers.append("understand")

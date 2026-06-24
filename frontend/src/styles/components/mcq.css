@@ -571,7 +571,7 @@
   max-width: 220px; font-size: 12px; font-weight: 600;
   color: var(--brand); text-decoration: none;
   padding: 3px 9px; border-radius: var(--r-full);
-  background: var(--accent-soft); border: 1px solid var(--border);
+  background: var(--brand-soft); border: 1px solid var(--border);
 }
 .mcq-zip-link:hover { text-decoration: underline; }
 .mcq-zip-link svg { flex-shrink: 0; }
@@ -583,9 +583,9 @@
 .mcq-prep-panel {
   margin: var(--sp-2) 0 var(--sp-3); padding: var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--r-md);
-  background: var(--surface-2, var(--accent-soft)); display: flex; flex-direction: column; gap: var(--sp-3);
+  background: var(--bg-inset); display: flex; flex-direction: column; gap: var(--sp-3);
 }
-.mcq-prep-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text-1); }
+.mcq-prep-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text); }
 .mcq-prep-sub { font-weight: 500; font-size: 11.5px; color: var(--text-2); }
 .mcq-prep-fields {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--sp-3);
@@ -684,12 +684,12 @@
 .md code {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.92em;
-  background: var(--bg-sunken, rgba(127, 127, 127, 0.14));
+  background: var(--bg-inset);
   padding: 0.08em 0.35em;
   border-radius: var(--r-sm, 4px);
 }
 .md pre {
-  background: var(--bg-sunken, rgba(127, 127, 127, 0.14));
+  background: var(--bg-inset);
   padding: var(--sp-3, 12px);
   border-radius: var(--r-md, 8px);
   overflow-x: auto;

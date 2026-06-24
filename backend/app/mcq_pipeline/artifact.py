@@ -90,6 +90,7 @@ def finalize(state: dict) -> dict:
                     "description": s.get("description", "")} for s in state.get("sections", [])],
         "topic_edges": graph.get("topic_edges", []),
         "concepts": [{"concept_id": c["concept_id"], "name": c["canonical_name"],
+                      "parent_concept": c.get("parent_concept", c["canonical_name"]),
                       "topic_id": c["topic_id"], "description": c.get("description", ""),
                       "taught_depth": c.get("taught_depth", c.get("depth_category")),
                       "explained": c.get("explained", c.get("in_scope", True)),
@@ -131,7 +132,10 @@ def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
     `recommend_for_los` / `generate_for_los` / `review_and_fix_for_los` expect."""
     cid = outcome.get("concept_id", "")
     inv = inv_by_id.get(cid, {})
-    concept = inv.get("canonical_name") or outcome.get("title") or cid
+    # concept_id is now the FINE (sub-concept) unit: the inventory's canonical_name is the specific
+    # assessable idea, and parent_concept is the broad umbrella. Generation/review key on both.
+    sub_concept = inv.get("canonical_name") or outcome.get("title") or (cid[2:] if cid.startswith("C_") else cid)
+    concept = inv.get("parent_concept") or sub_concept
     bloom = _BLOOM_TO_LEGACY.get(outcome.get("bloom_level", ""), "understand")
     # in-session prerequisite closure -> canonical names (audit-only; not consumed
     # by question generation, which keys off concept/sub_concept/syntax/evidence).
@@ -146,7 +150,7 @@ def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
         "bloom_level": bloom,
         "skill_type": outcome.get("skill_type") or ("practical_application" if bloom == "apply" else "conceptual"),
         "concept": concept,
-        "sub_concept": cid[2:] if cid.startswith("C_") else cid,
+        "sub_concept": sub_concept,
         "description": outcome.get("description") or outcome.get("title") or "",
         "learner_action": outcome.get("learner_action") or "",
         "syntax": outcome.get("syntax") or "",

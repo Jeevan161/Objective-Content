@@ -4,7 +4,7 @@ The deterministic gate over the FROZEN-candidate outcome set. In the LO-first fl
 selection ceiling, not an allocation contract, so the old count/tier/slot checks (V1–V3) are gone;
 what remains are the quality, grounding, coverage, prerequisite, and uniqueness invariants:
 
-  V4  every in-scope concept is targeted by at least one outcome (coverage).
+  V4  every in-scope BROAD concept (parent_concept) is targeted by >=1 outcome (coverage).
   V5  every apply/scenario outcome carries a non-empty prerequisite set.
   V6  apply/scenario prerequisite closure is fully in-scope or assumed (RAG-verified scope).
   V7  the concept dependency graph is acyclic.
@@ -41,10 +41,25 @@ def validate(state, config) -> dict:
     def rule(rid, ok, detail="", items=None):
         rep[rid] = {"pass": bool(ok), "detail": detail, "failing": items or []}
 
-    covered = {o["concept_id"] for o in O}
-    rule("V4", not (inv_ids - covered),
-         "every in-scope concept must be targeted by at least one outcome (uncovered listed)",
-         sorted(inv_ids - covered))
+    # V4 — coverage is keyed on the BROAD concept (parent_concept), not the fine sub-concept: every
+    # in-scope broad concept must be targeted by >=1 outcome (a topic may decompose into many fine
+    # sub-concepts; we don't require each one covered — that would blow past the budget). `failing`
+    # still lists concept_ids (one in-scope representative per uncovered broad concept) so repair's
+    # donor-retarget can act on it.
+    parent_of = {c["concept_id"]: (c.get("parent_concept") or c["concept_id"]) for c in inv}
+    covered_parents = {parent_of.get(o["concept_id"], o["concept_id"]) for o in O}
+    uncovered_reps, seen_parents = [], set()
+    for c in inv:
+        if not c["in_scope"]:
+            continue
+        p = parent_of[c["concept_id"]]
+        if p not in covered_parents and p not in seen_parents:
+            uncovered_reps.append(c["concept_id"])
+            seen_parents.add(p)
+    rule("V4", not uncovered_reps,
+         "every in-scope broad concept must be targeted by at least one outcome "
+         "(one representative sub-concept id per uncovered broad concept listed)",
+         sorted(uncovered_reps))
     off_scope = [o["id"] for o in O if o["concept_id"] not in inv_ids]
     rule("V14", not off_scope,
          "no outcome may target an out-of-scope (non-explained) concept", off_scope)

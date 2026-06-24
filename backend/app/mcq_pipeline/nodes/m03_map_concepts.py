@@ -14,8 +14,12 @@ environments"). This node is the variance sink:
   * Re-key each outcome's id off its final concept_id (deduping collisions).
 
 Input:  state["outcomes"]  — candidate proto-outcomes (carry `_concept_name`, topic_id, evidence).
-Output: concept_inventory = [{concept_id, canonical_name, topic_id, in_scope, procedural,
-        description, evidence_quotes, evidence}]  +  outcomes stamped with concept_id  +  logs.
+concept_id is now the FINE (sub-concept) unit — canonicalized off each outcome's `sub_concept` —
+while the broad concept is retained as `parent_concept` for grouping/reporting. Everything
+downstream keys on concept_id, so finer ids propagate automatically (one concept per assessable idea).
+
+Output: concept_inventory = [{concept_id, canonical_name, parent_concept, topic_id, in_scope,
+        procedural, description, evidence_quotes, evidence}]  +  outcomes stamped w/ concept_id  + logs.
 Downstream: build_outcome_graph (procedural + weights), profile_depth (taught depth + scope).
 """
 from __future__ import annotations
@@ -34,21 +38,24 @@ def map_concepts(state, config) -> dict:
     outcomes = [dict(o) for o in state["outcomes"]]
     inv: dict = {}
 
-    # (1) Canonicalize each outcome's concept name -> concept_id; accrue the inventory.
+    # (1) Canonicalize each outcome's SUB-concept name -> concept_id (the fine assessable unit);
+    # accrue the inventory. The broad concept is retained as `parent_concept` for grouping/reporting.
     for o in outcomes:
-        name = (o.get("_concept_name") or o.get("title") or "").strip()
-        canon = canonical_name(name)
+        sub_name = (o.get("_sub_concept_name") or o.get("_concept_name") or o.get("title") or "").strip()
+        broad_name = (o.get("_concept_name") or sub_name).strip()
+        canon = canonical_name(sub_name)
         cid = "C_" + slugify(canon)
         o["concept_id"] = cid
         topic_id = o.get("topic_id", "")
         section_text = sec_text.get((o.get("source_evidence") or {}).get("section", topic_id), "")
         ev_quote = (o.get("source_evidence") or {}).get("quote", "")
-        quote = ev_quote if (ev_quote and ev_quote in section_text) else ground_quote(name, section_text)
+        quote = ev_quote if (ev_quote and ev_quote in section_text) else ground_quote(sub_name, section_text)
         desc = (o.get("description") or "").strip()
         if not description_grounded(desc, [ev_quote, quote], section_text):
             desc = ev_quote or quote
         if cid not in inv:
             inv[cid] = {"concept_id": cid, "canonical_name": display_name(canon),
+                        "parent_concept": display_name(canonical_name(broad_name)),
                         "topic_id": topic_id, "in_scope": True, "procedural": False,
                         "description": desc,
                         "evidence_quotes": [q for q in {ev_quote, quote} if q],
@@ -106,6 +113,7 @@ def map_concepts(state, config) -> dict:
     for o in outcomes:
         o["concept_id"] = remap.get(o["concept_id"], o["concept_id"])
         o.pop("_concept_name", None)
+        o.pop("_sub_concept_name", None)
         base = slugify(f'{o["learner_action"]}_{o["concept_id"][2:]}')
         seen[base] += 1
         o["id"] = base if seen[base] == 1 else f"{base}_{seen[base]}"

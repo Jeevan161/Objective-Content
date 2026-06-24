@@ -126,7 +126,7 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
                 job.progress = prog
                 job.status = SyncJob.AWAITING_REVIEW
                 gate = (result.get("review") or {}).get("gate", "review")
-                job.message = f"Awaiting human review (gate: {gate})."
+                job.message = f"Awaiting review: {gate}."
                 job.updated_at = _now()
             session.commit()
             progress_broker.publish(str(job_id))   # push the paused/awaiting state to the socket
@@ -143,9 +143,9 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
         if job is not None:
             job.status = SyncJob.SUCCESS
             job.message = (
-                f"{result.get('question_count', 0)} question(s) from "
-                f"{result.get('lo_count', 0)} LO(s); "
-                f"{result.get('needs_human_count', 0)} need human review."
+                f"{result.get('question_count', 0)} questions, "
+                f"{result.get('lo_count', 0)} LOs, "
+                f"{result.get('needs_human_count', 0)} to review."
             )
             prog = dict(job.progress or {})
             prog.pop("awaiting_review", None)

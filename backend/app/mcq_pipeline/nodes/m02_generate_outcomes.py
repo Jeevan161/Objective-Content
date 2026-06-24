@@ -85,9 +85,11 @@ You author the COMPLETE set of measurable LEARNING OUTCOMES that ONE section of 
 GOAL — be EXHAUSTIVE: enumerate every DISTINCT, assessable outcome the material justifies. Cover every teachable concept in the section. Do NOT pre-filter for a budget; a later stage selects. But every outcome MUST be fully supported by the section — never pad with outcomes the material does not teach.
 
 Return ONLY a JSON list. Each item:
-{"concept","bloom_level","title","learner_action","skill_type","description","syntax","quote","justification"}
+{"concept","sub_concept","bloom_level","title","learner_action","skill_type","description","syntax","quote","justification"}
 
-- "concept": the short, TRANSFERABLE concept name this outcome assesses (a generalized idea/skill/rule — never an example-local label like "Project A" or a sample variable). The same concept may back several outcomes at different levels.
+Think in THREE LEVELS — broad to fine: TOPIC (this whole section) ⊃ CONCEPT ⊃ SUB-CONCEPT.
+- "concept": a BROAD, TRANSFERABLE teachable unit taught within this topic — the umbrella idea/skill, roughly one per thing the section sets out to teach (e.g. "Applying Migrations", "List Comprehensions"). It is broad like the topic, just one level down. Never an example-local label like "Project A" or a sample variable.
+- "sub_concept": the FINE unit that defines GRANULARITY — the single STEP, rule, command, property, distinction, or move WITHIN the concept that THIS outcome tests (e.g. concept "Applying Migrations" → sub_concepts "makemigrations_creates_migration_files", "migrate_applies_migrations", "rollback_to_a_previous_migration"). One outcome assesses ONE sub_concept. Two outcomes under the same `concept` that test genuinely different steps/sub-ideas MUST carry DIFFERENT sub_concepts. Be granular: decompose a broad concept into its distinct assessable sub_concepts (its steps) rather than emitting one umbrella outcome. The same (concept, sub_concept) may still back several outcomes at different Bloom levels.
 - "bloom_level": one of "remember" | "understand" | "apply" | "scenario", chosen to match what the section actually TEACHES about this concept:
     remember   → the section states a fact/term to recall.
     understand → the section explains reasoning/relationships.
@@ -101,12 +103,12 @@ Return ONLY a JSON list. Each item:
     scenario   → one of: <SCENARIO_VERBS>
 - "skill_type": one of "conceptual" | "practical_application" | "diagnostic".
 - "syntax": a code/command reference COPIED VERBATIM from the section (null if none — never invent or guess).
-- "quote": a span copied VERBATIM from the section that supports this outcome.
+- "quote": the COMPLETE sentence(s) — or a short paragraph — copied VERBATIM from the section that TEACHES this outcome. Give the whole teaching sentence as it appears in the material, NOT a truncated fragment or a few keywords.
 - "justification": one line on what in the section grounds this outcome.
 
 RULES:
 - SELF-CONTAINED & TRANSFERABLE: each title/description states the GENERAL concept or skill and stands on its own, independent of this reading. NEVER reference a source-local entity (a scenario label, a sample variable/file/function name, a character, a one-off value). The reading's example is EVIDENCE, not the thing assessed — generalize it. Technologies/tools/commands genuinely taught by name MAY be named.
-- CRISP & DISTINCT: each outcome targets ONE concept with ONE unambiguous correct answer. Two outcomes that test the SAME concept at the SAME level under different wording are duplicates — emit only one. Outcomes that test a genuine SUB-STEP, a different facet, or a different Bloom level of the same concept ARE distinct — keep them.
+- CRISP & DISTINCT: each outcome targets ONE sub_concept with ONE unambiguous correct answer. Two outcomes with the SAME sub_concept at the SAME Bloom level under different wording are duplicates — emit only one. Outcomes on a genuine SUB-STEP, a different facet, or a different Bloom level ARE distinct — give each its own sub_concept and keep them.
 - GROUNDED IN TAUGHT DEPTH: stay within what the section teaches; never require a detail, value, comparison, or sub-topic the material does not cover, and never reference an external resource/tool/dataset absent from the section.
 - Return ONLY valid JSON. No markdown, no commentary.""")
 
@@ -126,6 +128,8 @@ def _proto_outcome(item: dict, topic: dict) -> dict | None:
     cname = (item.get("concept") or "").strip()
     if not cname:
         return None
+    # the fine assessable unit; fall back to the broad concept when the LLM omits it.
+    sub_name = (item.get("sub_concept") or "").strip() or cname
     tier = _tier_of(item) or "understand"
     verb = str(item.get("learner_action", "")).lower().strip()
     if verb not in VERBS[tier]:
@@ -137,7 +141,8 @@ def _proto_outcome(item: dict, topic: dict) -> dict | None:
     # Prefer the LLM's own verbatim quote when it actually grounds in the section; else recover one.
     llm_quote = (item.get("quote") or "").strip()
     quote = llm_quote if (llm_quote and llm_quote in topic["text"]) else ground_quote(cname, topic["text"])
-    return {"_concept_name": cname, "title": title, "topic_id": topic["topic_id"],
+    return {"_concept_name": cname, "_sub_concept_name": sub_name,
+            "title": title, "topic_id": topic["topic_id"],
             "bloom_level": tier, "scenario": tier == "scenario",
             "skill_type": skill, "learner_action": verb,
             "description": (item.get("description") or title).strip(),
@@ -178,7 +183,7 @@ def generate_outcomes(state, config) -> dict:
     # Give each candidate a provisional unique id (final concept-anchored id is set in map_concepts).
     seen = Counter()
     for i, o in enumerate(outcomes):
-        base = slugify(f'{o["learner_action"]}_{o["_concept_name"]}') or f"lo_{i}"
+        base = slugify(f'{o["learner_action"]}_{o["_sub_concept_name"]}') or f"lo_{i}"
         seen[base] += 1
         o["id"] = base if seen[base] == 1 else f"{base}_{seen[base]}"
     snapshot = {"candidates": len(outcomes),

@@ -40,10 +40,12 @@ def difficulty_of(lo: dict) -> str:
 
 
 def _model(temp: float = 0.3):
-    # Build from the active LlmProvider (OpenAI / OpenRouter / Anthropic / proxy); falls
-    # back to the legacy OpenRouter settings when none is configured.
+    # Question GENERATION agent. Built on the active connector (OpenRouter) but with the
+    # generation model id (settings.mcq_generation_model — Sonnet 4.6); empty -> the
+    # connector's own model. Review uses its own model (see n15._review_model).
+    from app.core.config import settings
     from app.mcq_pipeline.utils.llm import make_chat_model
-    return make_chat_model(temperature=temp)
+    return make_chat_model(temperature=temp, model=settings.mcq_generation_model or None)
 
 
 # --- reusable guideline blocks (registered as DB-overridable prompts) -------- #

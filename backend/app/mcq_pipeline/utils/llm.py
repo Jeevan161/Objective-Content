@@ -96,10 +96,10 @@ def _resolve_extra_body(extra_body: dict) -> dict:
     return eb
 
 
-def _legacy(temperature: float):
+def _legacy(temperature: float, model: str | None = None):
     """The original hardcoded OpenRouter client — used when no provider is configured."""
     from langchain_openai import ChatOpenAI
-    return ChatOpenAI(model=AGENT_MODEL, api_key=OPENROUTER_API_KEY,
+    return ChatOpenAI(model=model or AGENT_MODEL, api_key=OPENROUTER_API_KEY,
                       base_url=OPENROUTER_BASE_URL, temperature=temperature)
 
 
@@ -134,19 +134,35 @@ def _build_model(cfg: dict, temperature: float, max_tokens: int | None = None):
     return ChatOpenAI(**kw)
 
 
-def make_chat_model(temperature: float = 0.2, *, max_tokens: int | None = None):
+def _is_openrouter(cfg: dict) -> bool:
+    """Only OpenRouter can serve an arbitrary cross-vendor model slug. A direct vendor
+    key (OpenAI/Anthropic) or a restricted proxy key rejects anything outside its own
+    allowlist — so a per-role model override is honoured ONLY for OpenRouter."""
+    return ("openrouter" in (cfg.get("base_url") or "").lower()
+            or (cfg.get("name") or "").lower() == "openrouter")
+
+
+def make_chat_model(temperature: float = 0.2, *, model: str | None = None,
+                    max_tokens: int | None = None):
     """Build a LangChain chat model from the active provider (or legacy fallback).
 
     If a per-user API key is bound for this run (scope.set_user_api_key), it overrides
     ONLY the key — base_url / model / proxy `extra_body` / headers stay from the shared
-    active provider."""
+    active provider.
+
+    `model` is a per-role override (e.g. generation on Sonnet, review on GPT-4o) applied
+    ONLY when the active connector is OpenRouter — it alone can route an arbitrary slug.
+    For any other connector (direct vendor or restricted proxy) the override is ignored
+    and the connector's own fixed model is used, so a model-locked key can't 401."""
     cfg = _active_config()
     if cfg is None:
-        return _legacy(temperature)
+        return _legacy(temperature, model=model)   # legacy fallback IS OpenRouter
     from app.mcq_pipeline.utils import scope   # local import avoids a module-load cycle
     user_key = scope.get_user_api_key()
     if user_key:
         cfg = {**cfg, "api_key": user_key}
+    if model and _is_openrouter(cfg):
+        cfg = {**cfg, "model": model}
     return _build_model(cfg, temperature, max_tokens)
 
 

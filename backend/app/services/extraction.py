@@ -215,9 +215,7 @@ def run_extraction_job(
 
         job.status = SyncJob.SUCCESS
         job.message = (
-            f"{total} learning set(s): reading material extracted {extracted} "
-            f"({via_admin} via admin), empty {empty}, failed {failed} "
-            f"across {len(courses)} course(s)."
+            f"{total} sets: {extracted} extracted, {empty} empty, {failed} failed."
         )
         job.updated_at = _now()
         session.commit()

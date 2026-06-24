@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, Trash2, Activity } from 'lucide-react'
+import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, ListChecks, Trash2, Activity } from 'lucide-react'
 import { EnvBadge, Spinner, EmptyState } from './ui'
 
 const TERMINAL = ['SUCCESS', 'FAILURE']
@@ -8,6 +8,7 @@ const JOB_TYPE_META = {
   SYNC: { label: 'Course sync', icon: RefreshCw },
   EXTRACT: { label: 'Content extraction', icon: FileText },
   RAG: { label: 'RAG ingestion', icon: Database },
+  MCQ: { label: 'MCQ generation', icon: ListChecks },
 }
 
 function timeAgo(iso) {
@@ -88,7 +89,7 @@ function JobsDrawer({ open, jobs, onClose, onDismiss, onClearFinished }) {
             <EmptyState
               icon={Activity}
               title="No activity yet"
-              hint="Background jobs (syncs, extractions, RAG ingestions) will show up here with live progress."
+              hint="Background jobs show up here with live progress."
             />
           ) : (
             jobs.map((job) => <JobRow key={job.id} job={job} onDismiss={onDismiss} />)

@@ -67,6 +67,7 @@ function StatCard({ label, value, accent, onClick, active }) {
     <Tag
       className={`stat-card ${onClick ? 'clickable' : ''} ${active ? 'active' : ''}`}
       onClick={onClick}
+      style={accent ? { '--stat-accent': accent } : undefined}
       {...(onClick ? { type: 'button', 'data-tip': active ? 'Clear filter' : `Show only ${label} courses` } : {})}
     >
       <div className="stat-value" style={accent ? { color: accent } : undefined}>

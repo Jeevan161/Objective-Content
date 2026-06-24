@@ -13,7 +13,7 @@ from app.mcq_pipeline.nodes._common import _bind_rag, _prog
 # ── Node 7 · resolve_prerequisites (A · LLM writes queries, RAG answers, LLM judges) ── #
 _DEPTH_RANK = {"none": 0, "shallow": 1, "partial": 2, "full": 3}
 # depth grade for a prerequisite taught in THIS session, from the profiler's depth_category.
-_SESSION_DEPTH = {"deep": "full", "moderate": "partial", "mention": "shallow"}
+_SESSION_DEPTH = {"deep": "full", "moderate": "partial", "mention": "shallow", "named": "none"}
 
 # The LLM writes the search queries; the GROUNDED RAG tool answers; the LLM judges coverage+depth
 # from the retrieved evidence ONLY — never from its own knowledge (that would hallucinate coverage).

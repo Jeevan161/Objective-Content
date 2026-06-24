@@ -205,17 +205,21 @@ def repair(state, config) -> dict:
             o.update(merged)
             logs.append({"node": "repair", "fix": "regenerate", "id": oid, "rules": reasons})
 
-    # Apply R1 drops, then top the set back up toward budget with the next-weighted TAUGHT candidate
-    # (best-effort 20). On the FINAL attempt we drop-only — a fresh backfill couldn't be re-judged —
-    # so the run ships FEWER all-passing outcomes rather than rubric-failing ones.
+    # Apply R1 drops, then top the set back up toward budget with the next-weighted TAUGHT candidate.
+    # Budget is a TARGET (~20), not just a ceiling: we ALWAYS backfill — including the final attempt —
+    # so an R1-untaught LO is REPLACED by a different taught sub-concept rather than shrinking the set
+    # (count consistency over re-judging the replacement). We can't ground a question on an absent
+    # concept, but we can hold the count by asking about another sub-concept the material does teach.
+    # Best-effort: still FEWER than budget only if the (now sub-concept-grained) pool is exhausted.
     if drop_ids:
         outcomes = [o for o in outcomes if o["id"] not in drop_ids]
-        if not last_attempt:
-            budget = (state.get("allocation_plan") or {}).get("question_budget") or len(outcomes)
-            outcomes, added = backfill_to_budget(outcomes, state.get("backfill_pool") or [], budget,
-                                                 exclude_concepts=frozenset(dropped_concepts))
-            if added:
-                logs.append({"node": "repair", "fix": "backfill", "ids": added})
+        budget = (state.get("allocation_plan") or {}).get("question_budget") or len(outcomes)
+        outcomes, added = backfill_to_budget(outcomes, state.get("backfill_pool") or [], budget,
+                                             exclude_concepts=frozenset(dropped_concepts))
+        if added:
+            # terminal-attempt backfills ship without a further judge pass (the loop ends here) —
+            # they are in-scope, feasibility-clamped, evidence-grounded candidates from plan_outcomes.
+            logs.append({"node": "repair", "fix": "backfill", "ids": added, "terminal": last_attempt})
 
     # Reconcile allocation_plan with the repaired outcome set. Structural retargets (V4/V14) and
     # the terminal recall can move an LO's tier/topic; recomputing tier_counts + per-topic slots

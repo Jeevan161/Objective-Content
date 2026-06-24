@@ -370,6 +370,26 @@
     box-shadow var(--t-fast), background var(--t-fast);
 }
 
+/* Semantic top-accent: codes each metric by colour and intensifies on
+   hover / active so the row reads as a precise dashboard, not 5 grey boxes. */
+.stat-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--stat-accent, var(--brand));
+  opacity: 0.5;
+  transition: opacity var(--t-fast);
+}
+
+.stat-card.clickable:hover::before {
+  opacity: 0.85;
+}
+
+.stat-card.active::before {
+  opacity: 1;
+}
+
 .stat-card.clickable {
   cursor: pointer;
 }
@@ -380,10 +400,13 @@
   box-shadow: var(--shadow-md);
 }
 
+/* Selection picks up the metric's own accent so a chosen green/amber metric
+   reads as a cohesive colour, not green data inside a violet highlight. */
 .stat-card.active {
-  border-color: var(--brand);
-  background: var(--brand-soft);
-  box-shadow: 0 0 0 3px var(--brand-ring);
+  border-color: var(--stat-accent, var(--brand));
+  background: color-mix(in srgb, var(--stat-accent, var(--brand)) 12%, var(--bg-raised));
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--stat-accent, var(--brand)) 28%, transparent);
 }
 
 .stat-value {

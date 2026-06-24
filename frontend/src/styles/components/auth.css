@@ -1,23 +1,28 @@
-/* ─────────────────────────── Auth gate (login / register / pending) ─────────────────────────── */
+/* ─────────────────────────── Auth gate (login / register / pending) ───────────────────────────
+   Uses the canonical token vocabulary (--bg-raised / --bg-inset / --text …) so
+   every surface actually paints. Earlier this file referenced --surface /
+   --text-1 / --accent-soft, which are not defined → transparent cards. */
 .auth-screen {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
-  padding: var(--sp-4); background: var(--bg, var(--surface));
+  padding: var(--sp-4); background: var(--bg); background-image: var(--glow);
 }
 .auth-card {
-  width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: var(--sp-3);
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg, 16px);
-  padding: var(--sp-5, 28px); box-shadow: var(--shadow-lg, 0 12px 40px rgba(0,0,0,.12)); text-align: center;
+  width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: var(--sp-4);
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-xl);
+  padding: var(--sp-8); box-shadow: var(--shadow-lg); text-align: center;
 }
-.auth-brand { display: flex; align-items: center; gap: 12px; justify-content: center; }
-.auth-title { font-size: 18px; font-weight: 800; color: var(--text-1); }
+.auth-brand { display: flex; align-items: center; gap: var(--sp-3); justify-content: center; }
+.auth-title { font-family: var(--font-display); font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
 .auth-sub { font-size: 13px; color: var(--text-2); line-height: 1.5; }
-.auth-tabs { display: flex; gap: 4px; background: var(--surface-2, var(--accent-soft));
-  padding: 4px; border-radius: var(--r-full); }
+.auth-tabs { display: flex; gap: 3px; background: var(--bg-inset); border: 1px solid var(--border);
+  padding: 3px; border-radius: var(--r-full); }
 .auth-tab {
   flex: 1; border: none; background: transparent; padding: 8px; border-radius: var(--r-full);
   font-size: 13px; font-weight: 700; color: var(--text-2); cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
 }
-.auth-tab.active { background: var(--surface); color: var(--brand); box-shadow: var(--shadow-sm, 0 1px 3px rgba(0,0,0,.1)); }
+.auth-tab:hover { color: var(--text); }
+.auth-tab.active { background: var(--bg-raised); color: var(--brand); box-shadow: var(--shadow-sm); }
 .auth-form { display: flex; flex-direction: column; gap: var(--sp-3); text-align: left; }
 .auth-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .auth-submit { justify-content: center; margin-top: 4px; }
@@ -30,18 +35,18 @@
 
 /* ─────────────────────────── Per-connector API keys ─────────────────────────── */
 .apikey-list { display: flex; flex-direction: column; gap: 10px; text-align: left; }
-.apikey-list-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--text-1); }
+.apikey-list-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--text); }
 .apikey-conn {
   display: flex; flex-direction: column; gap: 7px;
   border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px;
-  background: var(--surface-2, var(--accent-soft));
+  background: var(--bg-inset);
 }
 .apikey-conn.active { border-color: var(--brand); }
 .apikey-conn-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.apikey-conn-name { font-weight: 700; font-size: 13px; color: var(--text-1); display: inline-flex; align-items: center; gap: 6px; }
+.apikey-conn-name { font-weight: 700; font-size: 13px; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
 .apikey-active-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
-  color: var(--brand); background: var(--accent-soft); border-radius: var(--r-full); padding: 1px 7px; }
-.apikey-conn-model { font-size: 11.5px; color: var(--text-2); font-family: var(--font-mono, monospace); }
+  color: var(--brand); background: var(--brand-soft); border-radius: var(--r-full); padding: 1px 7px; }
+.apikey-conn-model { font-size: 11.5px; color: var(--text-2); font-family: var(--font-mono); }
 .apikey-set { display: inline-flex; align-items: center; gap: 3px; margin-left: auto;
   font-size: 11px; font-weight: 700; color: var(--green); }
 .apikey-row { display: flex; gap: 8px; }
@@ -50,7 +55,7 @@
 
 /* ─────────────────────────── Account modal ─────────────────────────── */
 .account-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-3); }
-.account-name { font-weight: 700; color: var(--text-1); }
+.account-name { font-weight: 700; color: var(--text); }
 
 /* ─────────────────────────── Sidebar account button ─────────────────────────── */
 .nav-account-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -58,14 +63,14 @@
 /* ─────────────────────────── Admin dashboard ─────────────────────────── */
 .admin-loading { display: flex; justify-content: center; padding: 60px; }
 .admin-section { margin-top: var(--sp-4); }
-.admin-h2 { font-size: 14px; font-weight: 800; color: var(--text-1); margin-bottom: var(--sp-2); }
-.admin-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.admin-h2 { font-size: 14px; font-weight: 800; color: var(--text); margin-bottom: var(--sp-2); }
+.admin-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-raised); }
 .admin-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
 .admin-table th {
   text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .03em; color: var(--text-2); border-bottom: 1px solid var(--border); background: var(--surface-2, var(--accent-soft));
+  letter-spacing: .03em; color: var(--text-2); border-bottom: 1px solid var(--border); background: var(--bg-inset);
 }
-.admin-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; color: var(--text-1); }
+.admin-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; color: var(--text); }
 .admin-table tr:last-child td { border-bottom: none; }
 .admin-user-name { font-weight: 600; }
 .admin-user-email { font-size: 11.5px; color: var(--text-2); }
@@ -79,6 +84,6 @@
 .admin-log-msg { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-empty { text-align: center; color: var(--text-2); padding: 24px; }
 .log-level { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: var(--r-full); }
-.log-info { color: var(--text-2); background: var(--surface-2, var(--accent-soft)); }
+.log-info { color: var(--text-2); background: var(--bg-active); }
 .log-warning { color: var(--amber); background: var(--amber-soft); }
-.log-error { color: var(--red, #d9534f); background: var(--red-soft, rgba(217,83,79,.12)); }
+.log-error { color: var(--red); background: var(--red-soft); }

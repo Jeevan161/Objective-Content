@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.mcq_pipeline.utils import llm as config, rag_api, scope
 from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.utils.concept_graph import is_setup_or_cli
+from app.mcq_pipeline.config import EXCLUDED_QUESTION_TYPES
 from app.mcq_pipeline.prompts.store import get_prompt, register
 
 CODE_PATH_TYPES = {
@@ -70,7 +71,7 @@ QUESTION TYPE DEFINITIONS (STRICT)
   Multiple correct answers based on conceptual understanding.
 
 - TEXTUAL:
-  Short exact answer (single term, value, or command only). Must be unambiguous and short.
+  Short exact answer of AT MOST ONE OR TWO WORDS (a single term, value, keyword, or command name). The answer is graded by EXACT STRING MATCH — there is NO AI/grader judging equivalence — so the learner must be able to reproduce the EXACT string. Use ONLY when the one correct answer is a single unambiguous token/value the learner cannot phrase more than one way. If the expected answer would be a phrase, a sentence, a definition, an explanation, or more than two words, DO NOT use TEXTUAL — use MULTIPLE_CHOICE instead.
 
 - CODE_ANALYSIS_MULTIPLE_CHOICE:
   Analyze code and choose correct behavior/output/interpretation.
@@ -112,8 +113,12 @@ STEP 3 — ORDERED STRUCTURE DETECTION
 - Do NOT convert ordered processes into MCQ.
 
 STEP 4 — EXACT SHORT ANSWER CHECK
-- If answer is a single token, command, value, or keyword:
-  → TEXTUAL (only if unambiguous and short)
+- If the one correct answer is a single token, command name, value, or keyword that fits in AT MOST
+  TWO WORDS and can only be written ONE way:
+  → TEXTUAL
+- If the answer is longer than two words, or a phrase/definition/explanation, or could be worded in
+  more than one acceptable way: do NOT use TEXTUAL (exact string match would fail a correct learner)
+  → MULTIPLE_CHOICE
 
 STEP 5 — DEFAULT CONCEPTUAL ASSESSMENT
 - Otherwise:
@@ -127,6 +132,10 @@ CRITICAL CONSTRAINTS
 - Choose EXACTLY ONE type per outcome.
 - Never mix reasoning types.
 - Never use TEXTUAL / CODE_ANALYSIS_TEXTUAL / FIB_CODING if multiple valid answers exist.
+- TEXTUAL answers are graded by EXACT STRING MATCH (no AI grader). Use TEXTUAL ONLY when the expected
+  answer is AT MOST TWO WORDS and has exactly one spelling/wording. For anything longer or phrasable
+  more than one way → MULTIPLE_CHOICE. (CODE_ANALYSIS_TEXTUAL likewise only for a short, exact,
+  deterministic output the learner reproduces character-for-character.)
 - Never use FIB_CODING or TEXTUAL for installation / CLI / setup commands (pip, npm, cd, activate, export, etc.) → use MULTIPLE_CHOICE instead.
 - REARRANGE must only be used when a SINGLE canonical order exists.
 - If uncertain, choose MULTIPLE_CHOICE (safe fallback).
@@ -166,10 +175,12 @@ def _fallback_type(lo: dict) -> str:
     if has_syntax and is_setup_or_cli(_lo_text(lo), ""):
         return "MULTIPLE_CHOICE"
     if bloom in ("apply", "implement"):
-        return "FIB_CODING" if has_syntax else "TEXTUAL"
-    if has_syntax:
-        return "CODE_ANALYSIS_MULTIPLE_CHOICE"
-    return "MULTIPLE_CHOICE"
+        t = "FIB_CODING" if has_syntax else "TEXTUAL"
+    elif has_syntax:
+        t = "CODE_ANALYSIS_MULTIPLE_CHOICE"
+    else:
+        t = "MULTIPLE_CHOICE"
+    return t if t not in EXCLUDED_QUESTION_TYPES else "MULTIPLE_CHOICE"
 
 
 def recommend_one(lo: dict, *, max_seq: int | None = None) -> dict:
@@ -185,6 +196,14 @@ def recommend_one(lo: dict, *, max_seq: int | None = None) -> dict:
     except Exception:  # noqa: BLE001 — fall back deterministically if the call fails
         out = {"question_type": _fallback_type(lo),
                "question_type_rationale": "fallback: inferred from bloom level and presence of syntax"}
+
+    # Excluded types (config) are remapped to the safe default regardless of what the LLM picked.
+    # TEXTUAL is OFF for now (exact string-match grading, no AI grader) — never emit it.
+    if out["question_type"] in EXCLUDED_QUESTION_TYPES:
+        out["question_type_rationale"] = (
+            f"[excluded:{out['question_type']}] type disabled -> MULTIPLE_CHOICE. "
+            + out.get("question_type_rationale", ""))
+        out["question_type"] = "MULTIPLE_CHOICE"
 
     # Deterministic backstop — the LLM type rule can drift (reports #3/#4): a setup/CLI
     # concept is never a runnable code/FIB target. (No bloom-based REARRANGE downgrade: an

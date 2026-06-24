@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     # --- MCQ pipeline (LangGraph) ---
     # Strong model drives the LO agents + question generation/review.
     mcq_agent_model: str = "openai/gpt-5o"
+    # Per-role model overrides for the two question agents. These override ONLY the
+    # model id on the ACTIVE connector (currently OpenRouter), reusing its key / base_url
+    # / proxy metadata — so they are OpenRouter slugs. Empty string -> use the connector's
+    # own model. Generation runs on Sonnet 4.6, review on GPT-4o.
+    # NB: OpenRouter slug uses a dot (claude-sonnet-4.6); the native Anthropic id is
+    # claude-sonnet-4-6. We route through OpenRouter, so use the dotted slug.
+    mcq_generation_model: str = "anthropic/claude-sonnet-4.6"
+    mcq_review_model: str = "openai/gpt-4o"
     # Production concurrency knobs (multi-user safety):
     #  - cap simultaneous pipeline jobs so threads/DB connections/LLM rate don't blow up.
     #  - LangGraph checkpointer backend: "postgres" (durable/resumable), "memory", or "none".
