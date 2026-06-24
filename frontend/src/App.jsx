@@ -14,6 +14,10 @@ import McqRunsPage from './components/McqRunsPage'
 import PipelinePage from './components/PipelinePage'
 import LLMProvidersPage from './components/LLMProvidersPage'
 import CourseCard from './components/CourseCard'
+import AdminDashboard from './components/AdminDashboard'
+import AccountModal from './components/AccountModal'
+import AuthGate from './components/AuthGate'
+import { AuthProvider, useAuth } from './auth/AuthContext'
 import { ToastProvider, useToast } from './components/Toast'
 import { EmptyState, Skeleton, Spinner } from './components/ui'
 
@@ -75,9 +79,11 @@ function StatCard({ label, value, accent, onClick, active }) {
 
 function Workspace() {
   const toast = useToast()
+  const { user } = useAuth()
   const [theme, toggleTheme] = useTheme()
   const [navCollapsed, toggleNavCollapsed] = useNavCollapsed()
   const [page, setPage] = useState('courses')
+  const [accountOpen, setAccountOpen] = useState(false)
 
   const [courses, setCourses] = useState(null) // null = first load
   const [query, setQuery] = useState('')
@@ -277,6 +283,8 @@ function Workspace() {
         onClose={() => setNavOpen(false)}
         collapsed={navCollapsed}
         onToggleCollapse={toggleNavCollapsed}
+        user={user}
+        onOpenAccount={() => setAccountOpen(true)}
       />
       <div
         className={`nav-scrim ${navOpen ? 'open' : ''}`}
@@ -303,6 +311,7 @@ function Workspace() {
           />
         )}
         {page === 'runs' && <McqRunsPage courses={courses} />}
+        {page === 'admin' && <AdminDashboard />}
         {page === 'courses' && (
         <>
         <header className="topbar">
@@ -469,6 +478,8 @@ function Workspace() {
           onSubmit={handleIngestSubmit}
         />
       )}
+
+      {accountOpen && <AccountModal onClose={() => setAccountOpen(false)} />}
     </div>
   )
 }
@@ -476,7 +487,11 @@ function Workspace() {
 function App() {
   return (
     <ToastProvider>
-      <Workspace />
+      <AuthProvider>
+        <AuthGate>
+          <Workspace />
+        </AuthGate>
+      </AuthProvider>
     </ToastProvider>
   )
 }

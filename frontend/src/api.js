@@ -1,12 +1,26 @@
-// Client for the Django course API. Dev requests go through Vite's proxy
+// Client for the FastAPI backend. Dev requests go through Vite's proxy
 // (see vite.config.js) to the backend on :8000.
 const BASE = '/api'
 
+const TOKEN_KEY = 'auth_token'
+export const getToken = () => localStorage.getItem(TOKEN_KEY)
+export const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY))
+
 async function request(path, options = {}) {
+  const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
   })
+  if (res.status === 401) {
+    // Token missing/expired — drop it and let the app fall back to the login gate.
+    setToken(null)
+    window.dispatchEvent(new Event('auth:logout'))
+  }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`
     try {
@@ -15,7 +29,7 @@ async function request(path, options = {}) {
     } catch {
       // non-JSON error body; keep the default message
     }
-    throw new Error(detail)
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
   }
   return res.status === 204 ? null : res.json()
 }
@@ -210,3 +224,29 @@ export const testLlmProvider = (name) =>
 // Remove a connector.
 export const deleteLlmProvider = (name) =>
   request(`/llm/providers/${encodeURIComponent(name)}/`, { method: 'DELETE' })
+
+// --- Auth ---
+export const registerUser = (email, password, name = '') =>
+  request('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) })
+
+export const loginUser = (email, password) =>
+  request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) })
+
+export const fetchMe = () => request('/auth/me')
+
+// Per-connector API keys: list all connectors + whether the user has a key for each.
+export const fetchMyKeys = () => request('/auth/me/keys')
+export const setConnectorKey = (providerId, apiKey) =>
+  request(`/auth/me/keys/${providerId}`, { method: 'PUT', body: JSON.stringify({ api_key: apiKey }) })
+export const clearConnectorKey = (providerId) =>
+  request(`/auth/me/keys/${providerId}`, { method: 'DELETE' })
+
+// --- Admin ---
+export const adminListUsers = () => request('/admin/users')
+export const adminApproveUser = (id) => request(`/admin/users/${id}/approve`, { method: 'POST' })
+export const adminDeactivateUser = (id) => request(`/admin/users/${id}/deactivate`, { method: 'POST' })
+export const adminSetRole = (id, role) =>
+  request(`/admin/users/${id}/role`, { method: 'POST', body: JSON.stringify({ role }) })
+export const adminStats = () => request('/admin/stats')
+export const adminLogs = (level = '', limit = 200) =>
+  request(`/admin/logs?limit=${limit}${level ? `&level=${level}` : ''}`)

@@ -18,5 +18,6 @@
 @import './components/mcq.css';
 @import './components/pipeline-page.css';
 @import './components/llm-providers.css';
+@import './components/auth.css';
 
 @import './components/responsive.css';

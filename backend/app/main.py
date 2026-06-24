@@ -9,13 +9,24 @@ Run:  uvicorn app.main:app --reload --port 8000
 
 from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import logging
 
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.api.auth import router as auth_router
 from app.api.courses import router as courses_router
 from app.api.llm_providers import router as llm_providers_router
 from app.api.mcq_prompts import router as mcq_prompts_router
 from app.core.config import settings
+
+# App-level logging to stdout (container logs); per-task rows also land in TaskLog.
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("app")
 
 app = FastAPI(title="Objective Content", version="1.0.0")
 
@@ -27,6 +38,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _log_unhandled_errors(request: Request, call_next):
+    """Log any unhandled exception with request context, then return a clean 500.
+    (HTTPExceptions raised by handlers are NOT caught here — FastAPI handles those.)"""
+    try:
+        return await call_next(request)
+    except Exception:  # noqa: BLE001
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
+
+app.include_router(auth_router)
 app.include_router(courses_router)
 app.include_router(mcq_prompts_router)
 app.include_router(llm_providers_router)

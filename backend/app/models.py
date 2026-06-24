@@ -217,6 +217,11 @@ class SyncJob(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
 
+    # The user who triggered this job (nullable: pre-auth rows + system jobs).
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[datetime] = updated_at_col()
 
@@ -277,6 +282,10 @@ class McqRun(Base):
 
     # final_los + questions + question_reviews + notes + apply_tool_trace + prompt versions.
     result: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # The user who generated this run (nullable for pre-auth rows). Carried from the job.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = created_at_col()
 
 
@@ -363,3 +372,88 @@ class LlmProvider(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[datetime] = updated_at_col()
+
+
+class User(Base):
+    """An application user. Self-registration creates an INACTIVE account; an admin must
+    approve it before it can generate/load. Each user supplies their own LLM API key
+    (Fernet-encrypted in `api_key_enc`) — all other provider settings stay global."""
+
+    __tablename__ = "users"
+
+    ROLE_USER = "user"
+    ROLE_ADMIN = "admin"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), default="")
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(16), default=ROLE_USER)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = created_at_col()
+    updated_at: Mapped[datetime] = updated_at_col()
+
+
+class UserLlmKey(Base):
+    """A user's personal API key for ONE LLM connector. A user supplies a key per
+    connector they use (up to one per `llm_providers` row); only the key is per-user —
+    the connector's model / base_url / proxy `extra_body` / headers stay global."""
+
+    __tablename__ = "user_llm_keys"
+    __table_args__ = (UniqueConstraint("user_id", "provider_id", name="uq_user_llm_key"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("llm_providers.id", ondelete="CASCADE"), index=True
+    )
+    api_key_enc: Mapped[str] = mapped_column(Text, default="")          # Fernet-encrypted; never plaintext
+    created_at: Mapped[datetime] = created_at_col()
+    updated_at: Mapped[datetime] = updated_at_col()
+
+
+class TaskLog(Base):
+    """One backend log line for a task (sync/extract/rag/mcq/export/load), persisted so
+    crashes are diagnosable from the admin dashboard. Also mirrored to stdout."""
+
+    __tablename__ = "task_logs"
+    __table_args__ = (Index("ix_task_logs_job", "job_id"),
+                      Index("ix_task_logs_created", "created_at"))
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    job_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)   # indexed via __table_args__
+    run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    task_type: Mapped[str] = mapped_column(String(16), default="")      # SYNC|EXTRACT|RAG|MCQ|EXPORT|LOAD
+    level: Mapped[str] = mapped_column(String(8), default="INFO")       # INFO|WARNING|ERROR
+    event: Mapped[str] = mapped_column(String(64), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict)           # stack trace / context
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class BetaLoad(Base):
+    """One export/load action against an MCQ run — the per-user audit trail for the beta
+    pipeline (powers the admin dashboard's load counts)."""
+
+    __tablename__ = "beta_loads"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("mcq_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    action: Mapped[str] = mapped_column(String(8), default="load")      # export | load
+    status: Mapped[str] = mapped_column(String(16), default="")         # SUCCESS|FAILURE|INCOMPLETE
+    resource_id: Mapped[str] = mapped_column(String(64), default="")
+    sheet_url: Mapped[str] = mapped_column(Text, default="")
+    s3_url: Mapped[str] = mapped_column(Text, default="")
+    request_id: Mapped[str] = mapped_column(String(64), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = created_at_col()

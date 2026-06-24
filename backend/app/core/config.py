@@ -110,5 +110,14 @@ class Settings(BaseSettings):
     # Max seconds to poll the content-loading task before giving up.
     beta_load_poll_timeout: int = 180
 
+    # --- Auth (JWT bearer) ---
+    # Set JWT_SECRET in any real deployment; the default is for local only.
+    jwt_secret: str = "dev-only-change-me-please-set-JWT_SECRET-in-prod"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60 * 24 * 7   # 7 days
+
+    # App-level logging level for the stdlib logger (stdout → container logs).
+    log_level: str = "INFO"
+
 
 settings = Settings()

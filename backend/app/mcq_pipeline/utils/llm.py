@@ -135,10 +135,18 @@ def _build_model(cfg: dict, temperature: float, max_tokens: int | None = None):
 
 
 def make_chat_model(temperature: float = 0.2, *, max_tokens: int | None = None):
-    """Build a LangChain chat model from the active provider (or legacy fallback)."""
+    """Build a LangChain chat model from the active provider (or legacy fallback).
+
+    If a per-user API key is bound for this run (scope.set_user_api_key), it overrides
+    ONLY the key — base_url / model / proxy `extra_body` / headers stay from the shared
+    active provider."""
     cfg = _active_config()
     if cfg is None:
         return _legacy(temperature)
+    from app.mcq_pipeline.utils import scope   # local import avoids a module-load cycle
+    user_key = scope.get_user_api_key()
+    if user_key:
+        cfg = {**cfg, "api_key": user_key}
     return _build_model(cfg, temperature, max_tokens)
 
 

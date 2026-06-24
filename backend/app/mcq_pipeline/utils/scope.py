@@ -22,6 +22,20 @@ _rag_calls_var: contextvars.ContextVar = contextvars.ContextVar("mcq_rag_calls",
 # Optional per-thread sink that collects every LLM call made through `utils.llm.chat`
 # (prompt messages + response), so each pipeline node's trace span can show its LLM I/O.
 _llm_calls_var: contextvars.ContextVar = contextvars.ContextVar("mcq_llm_calls", default=None)
+# The triggering user's personal LLM API key for this run. Bound at job start and
+# re-bound into pmap workers so EVERY LLM call uses that user's key (all other
+# provider settings stay global). None → fall back to the global provider key.
+_user_api_key_var: contextvars.ContextVar = contextvars.ContextVar("mcq_user_api_key", default=None)
+
+
+def set_user_api_key(key: str | None) -> None:
+    """Bind the current run's per-user LLM API key (None clears it)."""
+    _user_api_key_var.set(key or None)
+
+
+def get_user_api_key():
+    """The per-user LLM API key bound for this thread/run, or None."""
+    return _user_api_key_var.get()
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -93,16 +107,19 @@ def with_current_adapter(fn: Callable[[T], R]) -> Callable[[T], R]:
     adapter = _adapter_var.get()
     rag_calls = _rag_calls_var.get()
     llm_calls = _llm_calls_var.get()
+    user_api_key = _user_api_key_var.get()
 
     def wrapped(x: T) -> R:
         ta = _adapter_var.set(adapter)
         tr = _rag_calls_var.set(rag_calls)
         tl = _llm_calls_var.set(llm_calls)
+        tk = _user_api_key_var.set(user_api_key)
         try:
             return fn(x)
         finally:
             _adapter_var.reset(ta)
             _rag_calls_var.reset(tr)
             _llm_calls_var.reset(tl)
+            _user_api_key_var.reset(tk)
 
     return wrapped

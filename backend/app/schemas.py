@@ -111,6 +111,41 @@ class PrepareSheetRequest(BaseModel):
     reviewer_email: str = ""               # also shared on the prepared sheet, if given
 
 
+# --------------------------------------------------------------------------- #
+# Auth
+# --------------------------------------------------------------------------- #
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ApiKeyRequest(BaseModel):
+    api_key: str
+
+
+class RoleRequest(BaseModel):
+    role: str   # "user" | "admin"
+
+
+def serialize_user(user) -> dict:
+    """Public shape of a User. API keys are per-connector (see /auth/me/keys) and
+    never returned here."""
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "is_active": user.is_active,
+        "created_at": user.created_at,
+    }
+
+
 class RagCheckRequest(BaseModel):
     course_ids: list[str]
     topic: str

@@ -2,14 +2,17 @@ FROM python:3.12-slim
 
 # psycopg[binary] ships its own libpq, so no system postgres client is needed.
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-# Install deps first for better layer caching.
+# Install deps first for better layer caching. The BuildKit cache mount persists
+# pip's downloaded wheels ACROSS builds, so changing requirements.txt re-resolves
+# but reuses what's already downloaded (and a retry after a network blip resumes
+# instead of starting over). --timeout/--retries ride out slow/flaky PyPI links.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 120 --retries 10 -r requirements.txt
 
 # App + portal package + alembic config/migrations.
 COPY app ./app

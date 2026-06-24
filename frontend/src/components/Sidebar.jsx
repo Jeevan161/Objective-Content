@@ -10,6 +10,8 @@ import {
   BookOpenCheck,
   Workflow,
   Plug,
+  ShieldCheck,
+  UserCircle,
   X,
   ChevronsLeft,
   ChevronsRight,
@@ -38,6 +40,8 @@ function Sidebar({
   onClose,
   collapsed = false,
   onToggleCollapse,
+  user = null,
+  onOpenAccount,
 }) {
   // On mobile the sidebar is a drawer: navigating should dismiss it.
   const go = (key) => {
@@ -95,9 +99,30 @@ function Sidebar({
             <span className="activity-count">{activeJobCount}</span>
           )}
         </button>
+
+        {user?.role === 'admin' && (
+          <>
+            <div className="nav-section-label">Admin</div>
+            <button
+              className={`nav-item ${page === 'admin' ? 'active' : ''}`}
+              onClick={() => go('admin')}
+              {...tip('Admin')}
+            >
+              <ShieldCheck size={16} />
+              <span>Admin</span>
+            </button>
+          </>
+        )}
       </nav>
 
       <div className="sidebar-footer">
+        {user && (
+          <button className="nav-item nav-account" onClick={() => { onOpenAccount?.(); onClose?.() }}
+            {...tip(user.name || user.email)}>
+            <UserCircle size={16} />
+            <span className="nav-account-label">{user.name || user.email}</span>
+          </button>
+        )}
         <button
           className="nav-item"
           onClick={onToggleTheme}

@@ -22,7 +22,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_session
-from app.models import Course, McqRun, McqTrace, RagChunk, SyncJob, Topic, Unit, UnitPart
+from app.api.deps import get_current_user, require_active
+from app.models import BetaLoad, Course, McqRun, McqTrace, RagChunk, SyncJob, Topic, Unit, UnitPart, User
+from app.services.task_log import ERROR, log_task
 from app.schemas import (
     ApproveRunRequest,
     BuildRagRequest,
@@ -133,7 +135,8 @@ def lookup_course(body: VersionsRequest) -> dict:
 
 
 @router.post("/courses/sync/", status_code=status.HTTP_202_ACCEPTED)
-def start_sync(body: SyncRequest, session: Session = Depends(get_session)) -> dict:
+def start_sync(body: SyncRequest, session: Session = Depends(get_session),
+               user: User = Depends(require_active)) -> dict:
     """Step 2 / Sync: start a background fetch for a course + chosen version."""
     course_id = (body.course_id or "").strip()
     if not course_id:
@@ -168,6 +171,7 @@ def start_sync(body: SyncRequest, session: Session = Depends(get_session)) -> di
         courseversion_id=courseversion_id,
         version_id=version_id,
         is_latest_version=is_latest,
+        created_by=user.id,
     )
     session.add(job)
     session.commit()
@@ -176,7 +180,8 @@ def start_sync(body: SyncRequest, session: Session = Depends(get_session)) -> di
 
 
 @router.post("/courses/extract/", status_code=status.HTTP_202_ACCEPTED)
-def extract_content(body: ExtractRequest, session: Session = Depends(get_session)) -> dict:
+def extract_content(body: ExtractRequest, session: Session = Depends(get_session),
+                    user: User = Depends(require_active)) -> dict:
     """Start a background reading-material extraction for a course + prerequisites.
 
     Tokens are OPTIONAL: with a Bearer token an environment is extracted via the
@@ -214,7 +219,7 @@ def extract_content(body: ExtractRequest, session: Session = Depends(get_session
             ),
         )
 
-    job = SyncJob(course_id=course_id, job_type=SyncJob.EXTRACT)
+    job = SyncJob(course_id=course_id, job_type=SyncJob.EXTRACT, created_by=user.id)
     session.add(job)
     session.commit()
     start_extraction_job(job.id, tokens, unit_ids or None)
@@ -222,7 +227,8 @@ def extract_content(body: ExtractRequest, session: Session = Depends(get_session
 
 
 @router.post("/courses/build-rag/", status_code=status.HTTP_202_ACCEPTED)
-def build_rag(body: BuildRagRequest, session: Session = Depends(get_session)) -> dict:
+def build_rag(body: BuildRagRequest, session: Session = Depends(get_session),
+              user: User = Depends(require_active)) -> dict:
     """Ingest extracted reading material (course + prerequisites, optionally limited
     to selected reading-material unit_ids) into the RAG vector store."""
     course_id = (body.course_id or "").strip()
@@ -234,7 +240,7 @@ def build_rag(body: BuildRagRequest, session: Session = Depends(get_session)) ->
             status_code=409, detail="Extract the learning resource content first."
         )
 
-    job = SyncJob(course_id=course_id, job_type=SyncJob.RAG)
+    job = SyncJob(course_id=course_id, job_type=SyncJob.RAG, created_by=user.id)
     session.add(job)
     session.commit()
     start_build_rag_job(job.id, body.unit_ids or None)
@@ -325,10 +331,18 @@ def mcq_trace(job_id: uuid.UUID, session: Session = Depends(get_session)) -> lis
 # MCQ generation (LangGraph pipeline) — static /courses/mcq/* before the catch-all
 # --------------------------------------------------------------------------- #
 @router.post("/courses/mcq/generate/", status_code=status.HTTP_202_ACCEPTED)
-def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_session)) -> dict:
+def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_session),
+                 user: User = Depends(require_active)) -> dict:
     """Start a background MCQ-generation run for a selected course/topic/session.
     `unit_id` is a reading-material part's portal unit_id within the session; the
     session must have extracted reading-material content (ingestion not required)."""
+    from app.services.user_keys import active_provider, user_has_active_key
+    if not user_has_active_key(session, user.id):
+        prov = active_provider(session)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Add your API key for the active connector "
+                   f"'{prov.name if prov else ''}' (Account) before generating.")
     course_id = (body.course_id or "").strip()
     unit_id = (body.unit_id or "").strip()
     if not course_id or not unit_id:
@@ -360,7 +374,7 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
     if prereq_unit_ids is not None:
         prereq_unit_ids = [u.strip() for u in prereq_unit_ids if isinstance(u, str) and u.strip()]
 
-    job = SyncJob(course_id=course_id, job_type=SyncJob.MCQ)
+    job = SyncJob(course_id=course_id, job_type=SyncJob.MCQ, created_by=user.id)
     session.add(job)
     session.commit()
     start_mcq_job(
@@ -486,7 +500,8 @@ def _export_filename(run) -> str:
 
 
 @router.post("/courses/mcq/runs/{run_id}/export-beta/")
-def export_mcq_run_to_beta(run_id: uuid.UUID, session: Session = Depends(get_session)) -> dict:
+def export_mcq_run_to_beta(run_id: uuid.UUID, session: Session = Depends(get_session),
+                           user: User = Depends(require_active)) -> dict:
     """Build the portal-format export ZIP for a run (in memory) and upload it to the
     BETA content-loading S3 bucket; return the public URL. Nothing is stored on the
     server — the ZIP is derived on demand from the run's stored questions."""
@@ -507,14 +522,22 @@ def export_mcq_run_to_beta(run_id: uuid.UUID, session: Session = Depends(get_ses
     try:
         url = upload_bytes(data, filename)
     except Exception as err:  # noqa: BLE001 — surface the failing step to the caller
+        log_task(task_type="EXPORT", event="error", level=ERROR, run_id=run_id, user_id=user.id,
+                 message=f"Beta S3 upload failed: {err}")
         raise HTTPException(status_code=502, detail=f"Beta S3 upload failed: {err}") from err
+    session.add(BetaLoad(run_id=run_id, user_id=user.id, action="export", status="SUCCESS",
+                         s3_url=url, message=filename))
+    session.commit()
+    log_task(task_type="EXPORT", event="complete", run_id=run_id, user_id=user.id,
+             message=f"{info['total_questions']} question(s) → {filename}")
     return {"url": url, "filename": filename, "counts": info["counts"],
             "total": info["total_questions"], "batch_id": info["batch_id"]}
 
 
 @router.post("/courses/mcq/runs/{run_id}/prepare-and-load/")
 def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
-                             session: Session = Depends(get_session)) -> dict:
+                             session: Session = Depends(get_session),
+                             user: User = Depends(require_active)) -> dict:
     """Full beta-load pipeline for a run: build + upload the questions ZIP, copy the
     exam-config sheet template and fill its Form tab, submit the SHEET_LOADING task,
     poll it to completion, and (on success) unlock the resource.
@@ -550,6 +573,8 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
     try:
         s3_url = beta_s3.upload_bytes(data, filename)
     except Exception as err:  # noqa: BLE001
+        log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
+                 message=f"Beta S3 upload failed: {err}")
         raise HTTPException(status_code=502, detail=f"Beta S3 upload failed: {err}") from err
 
     # 3. Copy the template + fill the Form tab.
@@ -566,6 +591,8 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
             share_emails=[body.reviewer_email] if body.reviewer_email else None,
         )
     except Exception as err:  # noqa: BLE001
+        log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
+                 message=f"Sheet preparation failed: {err}")
         raise HTTPException(status_code=502, detail=f"Sheet preparation failed: {err}") from err
 
     # 4. Submit the sheet-loading task.
@@ -574,6 +601,8 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
             spreadsheet_id=sheet["spreadsheet_id"],
             spread_sheet_name=sheet["title"], s3_url=s3_url)
     except Exception as err:  # noqa: BLE001
+        log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
+                 message=f"Sheet-loading submit failed: {err}", detail={"sheet_url": sheet["url"]})
         raise HTTPException(status_code=502,
                             detail={"message": f"Sheet-loading submit failed: {err}",
                                     "sheet_url": sheet["url"]}) from err
@@ -586,6 +615,15 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
             unlock_id = beta_s3.submit_unlock(sheet["resource_id"])
         except Exception as err:  # noqa: BLE001
             message = f"Loaded, but unlock failed: {err}"
+
+    # Audit the load action (per-user) + log the outcome.
+    session.add(BetaLoad(run_id=run_id, user_id=user.id, action="load", status=status,
+                         resource_id=sheet["resource_id"], sheet_url=sheet["url"],
+                         s3_url=s3_url, request_id=request_id, message=message))
+    session.commit()
+    log_task(task_type="LOAD", event="complete", run_id=run_id, user_id=user.id,
+             level=(ERROR if status == "FAILURE" else "INFO"),
+             message=f"status={status} resource={sheet['resource_id']} {message}".strip())
 
     return {
         "status": status, "message": message,

@@ -25,6 +25,28 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _bind_user_for_job(job_id: uuid.UUID):
+    """Bind the triggering user's API key FOR THE ACTIVE CONNECTOR on this job thread
+    (so every pipeline LLM call uses it) and return the user id for attribution/logging.
+    Falls back to the global connector key when there's no user or no key."""
+    from app.mcq_pipeline.utils import scope
+    from app.models import SyncJob
+    from app.services.user_keys import active_provider, get_user_key
+    user_id = None
+    try:
+        with SessionLocal() as s:
+            job = s.get(SyncJob, job_id)
+            user_id = getattr(job, "created_by", None) if job is not None else None
+            prov = active_provider(s)
+            if user_id and prov is not None:
+                key = get_user_key(s, user_id, prov.id)
+                if key:
+                    scope.set_user_api_key(key)
+    except Exception:  # noqa: BLE001 — never block a job on key binding
+        pass
+    return user_id
+
+
 # Bound simultaneous MCQ pipeline runs: each fans out per-LO worker threads, K-sample
 # LLM calls, and DB connections, so unbounded concurrent jobs would exhaust threads /
 # the DB pool / OpenRouter rate limits. Queued jobs wait here (their SyncJob row stays
@@ -116,6 +138,7 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
             question_count=result.get("question_count", 0),
             needs_human_count=result.get("needs_human_count", 0),
             result=result,
+            created_by=getattr(job, "created_by", None),   # attribute the run to its user
         ))
         if job is not None:
             job.status = SyncJob.SUCCESS
@@ -149,8 +172,14 @@ def _run_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
                  question_budget: int | None = None, hitl_enabled: bool = False) -> None:
     """Run the MCQ pipeline, streaming progress onto the SyncJob row. May PAUSE at a HITL gate
     (status -> AWAITING_REVIEW) instead of completing. Heavy imports are deferred to here."""
-    from app.mcq_pipeline.runner import run_mcq_pipeline
+    import traceback
 
+    from app.mcq_pipeline.runner import run_mcq_pipeline
+    from app.services.task_log import ERROR, log_task
+
+    user_id = _bind_user_for_job(job_id)
+    log_task(task_type="MCQ", event="start", job_id=job_id, user_id=user_id,
+             message=f"course={course_id} unit={unit_id}")
     try:
         with _MCQ_SEMAPHORE:
             result = run_mcq_pipeline(
@@ -160,7 +189,11 @@ def _run_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
                 progress_sink=_mcq_sink(job_id), thread_id=str(job_id),
             )
         _persist_mcq_result(job_id, result, course_id, topic_id, unit_id)
+        log_task(task_type="MCQ", event="complete", job_id=job_id, user_id=user_id,
+                 message=str(result.get("status", "completed")))
     except Exception as err:  # noqa: BLE001 — surface failure on the job row
+        log_task(task_type="MCQ", event="error", level=ERROR, job_id=job_id, user_id=user_id,
+                 message=str(err), detail={"trace": traceback.format_exc()[:8000]})
         _fail_job(job_id, err)
 
 
@@ -168,8 +201,14 @@ def _resume_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: s
                     decision: dict, prereq_unit_ids: list[str] | None = None,
                     question_budget: int | None = None, review: bool = True) -> None:
     """Resume a HITL-paused MCQ run after a human decision; may pause AGAIN at the next gate."""
-    from app.mcq_pipeline.runner import resume_run
+    import traceback
 
+    from app.mcq_pipeline.runner import resume_run
+    from app.services.task_log import ERROR, log_task
+
+    user_id = _bind_user_for_job(job_id)
+    log_task(task_type="MCQ", event="resume", job_id=job_id, user_id=user_id,
+             message=f"course={course_id} unit={unit_id}")
     try:
         with _MCQ_SEMAPHORE:
             result = resume_run(
@@ -178,7 +217,11 @@ def _resume_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: s
                 progress_sink=_mcq_sink(job_id),
             )
         _persist_mcq_result(job_id, result, course_id, topic_id, unit_id)
+        log_task(task_type="MCQ", event="complete", job_id=job_id, user_id=user_id,
+                 message=str(result.get("status", "completed")))
     except Exception as err:  # noqa: BLE001
+        log_task(task_type="MCQ", event="error", level=ERROR, job_id=job_id, user_id=user_id,
+                 message=str(err), detail={"trace": traceback.format_exc()[:8000]})
         _fail_job(job_id, err)
 
 
