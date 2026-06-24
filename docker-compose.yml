@@ -1,0 +1,57 @@
+# Brings up Postgres (with the pgvector extension) + the single-image app together.
+#
+#   docker compose up --build       # build the image and start the stack
+#   docker compose up -d --build    # ... detached
+#   docker compose logs -f app      # follow the app logs
+#   docker compose down             # stop (add -v to ALSO drop the DB volume)
+#
+# App config (portal creds, S3, LLM keys, JWT/Fernet secrets, …) is read from
+# backend/.env. DATABASE_URL is set here to point at the bundled Postgres and
+# overrides whatever is in backend/.env. The app runs `alembic upgrade head` on
+# start — which also creates the pgvector extension — so no DB init script is needed.
+#
+# The app reaches Postgres over the internal compose network (db:5432), so the DB
+# port is NOT published to the host by default — that avoids clashing with any
+# Postgres you already run locally. The app's own port is overridable:
+#   APP_HOST_PORT=8010 docker compose up -d --build      # if 8000 is taken
+# (or put APP_HOST_PORT in a repo-root .env, which compose auto-reads). To reach the
+# bundled DB from host tools, see the commented `ports:` under the db service below.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: objective_content
+    # Not published to the host by default (the app talks to db:5432 internally).
+    # To connect host DB tools, uncomment and pick a free host port:
+    # ports:
+    #   - "${DB_HOST_PORT:-5546}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d objective_content"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+    env_file:
+      - path: backend/.env      # all other config/secrets; optional so a bare clone still builds
+        required: false
+    environment:
+      # Point at the bundled DB (overrides any DATABASE_URL set in backend/.env).
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/objective_content
+    ports:
+      - "${APP_HOST_PORT:-8000}:8000"  # app + API + WebSocket, all on one origin (override via APP_HOST_PORT)
+    depends_on:
+      db:
+        condition: service_healthy   # wait for Postgres before migrating/serving
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -10,10 +10,13 @@ Run:  uvicorn app.main:app --reload --port 8000
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import router as auth_router
 from app.api.courses import router as courses_router
@@ -95,3 +98,17 @@ def _seed_llm_providers() -> None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+# --- Serve the built frontend (single-container deploy) --------------------- #
+# In production we bundle the React build and serve it from FastAPI so the SPA,
+# the /api routes, and the WebSocket all share one origin and port. The directory
+# only exists inside the Docker image; in local dev the frontend runs on Vite and
+# this mount is skipped. Mounted LAST so /api and /health always take precedence.
+_frontend_dist = os.environ.get(
+    "FRONTEND_DIST_DIR",
+    str(Path(__file__).resolve().parent.parent / "frontend_dist"),
+)
+if os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
+    logger.info("Serving bundled frontend from %s", _frontend_dist)

@@ -1,0 +1,28 @@
+# Keep the build context small and never bake secrets or host build artifacts.
+
+# Dependencies / virtualenvs (reinstalled inside the image).
+**/node_modules
+**/.venv
+venv/
+
+# Python caches.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+
+# Secrets — pass these at runtime via --env-file / -e, do NOT copy into the image.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Host build output (the image rebuilds the frontend itself).
+frontend/dist/
+**/dist/
+
+# VCS, tooling, docs, scratch.
+.git/
+.gitignore
+.dockerignore
+.claude/
+*.md
+**/.DS_Store
