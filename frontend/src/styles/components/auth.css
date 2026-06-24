@@ -64,6 +64,14 @@
 .admin-loading { display: flex; justify-content: center; padding: 60px; }
 .admin-section { margin-top: var(--sp-4); }
 .admin-h2 { font-size: 14px; font-weight: 800; color: var(--text); margin-bottom: var(--sp-2); }
+.admin-count {
+  display: inline-block; margin-left: 6px;
+  font-size: 11px; font-weight: 700; color: var(--text-2);
+  background: var(--bg-inset); border: 1px solid var(--border);
+  border-radius: var(--r-full); padding: 1px 8px;
+}
+.admin-rating { white-space: nowrap; }
+.admin-rating-n { font-size: 11px; color: var(--text-2); }
 .admin-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-raised); }
 .admin-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
 .admin-table th {

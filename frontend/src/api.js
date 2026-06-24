@@ -149,31 +149,49 @@ export const getMcqTrace = (jobId) => request(`/courses/mcq/jobs/${jobId}/trace/
 export const listAllMcqRuns = (limit = 50) => request(`/courses/mcq/runs/?limit=${limit}`)
 
 // --- Human-in-the-loop review (Gate B) ---
+// The reviewer is taken from the authenticated user server-side — never sent from the client.
 // Regenerate ONE question with reviewer feedback injected; returns the new question.
-export const regenerateMcqQuestion = (runId, outcome, feedback, tags = [], reviewer = '') =>
+export const regenerateMcqQuestion = (runId, outcome, feedback, tags = []) =>
   request(`/courses/mcq/runs/${runId}/questions/${encodeURIComponent(outcome)}/regenerate/`, {
     method: 'POST',
-    body: JSON.stringify({ feedback, tags, reviewer }),
+    body: JSON.stringify({ feedback, tags }),
   })
 
 // Record a non-regenerating review action (e.g. accept) on a question.
-export const submitMcqFeedback = (runId, outcome, { action, tags = [], comment = '', reviewer = '' }) =>
+export const submitMcqFeedback = (runId, outcome, { action, tags = [], comment = '' }) =>
   request(`/courses/mcq/runs/${runId}/questions/${encodeURIComponent(outcome)}/feedback/`, {
     method: 'POST',
-    body: JSON.stringify({ action, tags, comment, reviewer }),
+    body: JSON.stringify({ action, tags, comment }),
+  })
+
+// Set a human approval decision (approved | rejected | pending) on one question; the
+// approved count gates loading. Returns { approval, approved_count, eligible_count }.
+export const setMcqQuestionApproval = (runId, outcome, approval) =>
+  request(`/courses/mcq/runs/${runId}/questions/${encodeURIComponent(outcome)}/approval/`, {
+    method: 'POST',
+    body: JSON.stringify({ approval }),
+  })
+
+// Exclude a question from export/load (or include it again). It stays in the list,
+// shaded out, but drops from the approval tally and is never loaded.
+export const setMcqQuestionExclusion = (runId, outcome, excluded) =>
+  request(`/courses/mcq/runs/${runId}/questions/${encodeURIComponent(outcome)}/exclude/`, {
+    method: 'POST',
+    body: JSON.stringify({ excluded }),
   })
 
 // Approve the whole run (review complete).
-export const approveMcqRun = (runId, reviewer = '') =>
+export const approveMcqRun = (runId) =>
   request(`/courses/mcq/runs/${runId}/approve/`, {
     method: 'POST',
-    body: JSON.stringify({ reviewer }),
+    body: JSON.stringify({}),
   })
 
 // Build the portal-format export ZIP for a run and upload it to the beta S3 bucket.
+// `approvedOnly` exports just the approved subset (else every question must be approved).
 // Returns { url, filename, counts, total, batch_id }.
-export const exportMcqRunZip = (runId) =>
-  request(`/courses/mcq/runs/${runId}/export-beta/`, {
+export const exportMcqRunZip = (runId, approvedOnly = false) =>
+  request(`/courses/mcq/runs/${runId}/export-beta/?approved_only=${approvedOnly}`, {
     method: 'POST',
   })
 
@@ -250,3 +268,16 @@ export const adminSetRole = (id, role) =>
 export const adminStats = () => request('/admin/stats')
 export const adminLogs = (level = '', limit = 200) =>
   request(`/admin/logs?limit=${limit}${level ? `&level=${level}` : ''}`)
+// All application-level feedback submissions (admin).
+export const adminAppFeedback = (limit = 200) => request(`/admin/feedback?limit=${limit}`)
+// All MCQ reviewer feedback actions (admin).
+export const adminMcqFeedback = (limit = 300) => request(`/admin/mcq-feedback?limit=${limit}`)
+
+// --- Application feedback (any signed-in user) ---
+// rating: 1–5 (emoji), category, helpful (true/false/null), message.
+export const submitAppFeedback = (payload) =>
+  request('/feedback', { method: 'POST', body: JSON.stringify(payload) })
+
+// Get reading material content for a unit (course + session/unit_id)
+export const getUnitContent = (courseId, unitId) =>
+  request(`/courses/${courseId}/units/${encodeURIComponent(unitId)}/content/`)

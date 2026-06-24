@@ -558,6 +558,14 @@
   color: var(--violet);
   background: var(--violet-soft);
 }
+.content-badge.stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: var(--sp-2);
+  color: var(--amber);
+  background: var(--amber-soft, rgba(245, 158, 11, 0.14));
+}
 
 /* ============================================================
    RESPONSIVE — courses surface

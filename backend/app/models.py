@@ -82,6 +82,11 @@ class Course(Base):
     content_extracted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The user who first added (synced) this course. Gates who may generate MCQs for
+    # it (admins bypass; legacy/unclaimed rows are open and get claimed on next sync).
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     topics: Mapped[list["Topic"]] = relationship(
         back_populates="course",
@@ -276,6 +281,11 @@ class McqRun(Base):
     lo_count: Mapped[int] = mapped_column(Integer, default=0)
     question_count: Mapped[int] = mapped_column(Integer, default=0)
     needs_human_count: Mapped[int] = mapped_column(Integer, default=0)
+    # How many generated questions a human has explicitly approved — drives the load gate.
+    approved_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 1-based generation version within a (course_id, unit_id) session (v1 = oldest); a
+    # session is generated multiple times and this distinguishes the runs.
+    version: Mapped[int] = mapped_column(Integer, default=1)
 
     # Human-in-the-loop review lifecycle: draft → lo_review → question_review → approved.
     review_status: Mapped[str] = mapped_column(String(20), default="draft")
@@ -350,6 +360,25 @@ class McqQuestionFeedback(Base):
     before_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
     after_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     reviewer: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class AppFeedback(Base):
+    """Application-level feedback from any signed-in user — an emoji rating (1–5), a
+    category, an optional 'was this helpful?' vote, and free text. Surfaced in the
+    admin dashboard. Distinct from `McqQuestionFeedback`, which records per-question
+    review actions on a run."""
+
+    __tablename__ = "app_feedback"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    category: Mapped[str] = mapped_column(String(40), default="", index=True)
+    rating: Mapped[int] = mapped_column(Integer, default=0)          # 1–5 (emoji); 0 = unrated
+    helpful: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # True/False/None
+    message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = created_at_col()
 
 

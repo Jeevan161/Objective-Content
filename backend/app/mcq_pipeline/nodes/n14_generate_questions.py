@@ -149,7 +149,9 @@ SELF-CONTAINED — the question is an INDEPENDENT resource. The learner sees ONL
 - Never reference a source-local example entity the learner cannot see — a scenario label ('Project A'/'Project B'), a sample file/variable/function name, or a one-off value from the reading. If a scenario is needed, define it fully and generically IN THE STEM so it stands alone.
 - Test transferable understanding of the concept, not recall of an arbitrary detail from one example.
 
-Do not reveal the answer in the stem.""")
+Do not reveal the answer in the stem.
+
+Do not end the stem with a trailing full stop ('.'). A question mark ('?') or a colon introducing options is fine; a bare trailing period is not.""")
 
 _MARKDOWN_RULES = register("gen.markdown_rules", """\
 MARKDOWN FORMATTING
@@ -160,8 +162,8 @@ The portal renders the question text and the explanation as MARKDOWN. Write them
 - Keep the stem a short prose block; do not use a Markdown heading (#) in the stem.
 
 OPTIONS:
-- Prose/conceptual options MAY use light inline Markdown (`code`, **bold**).
-- For CODE_ANALYSIS_* question types, options are literal code or program output — keep them PLAIN TEXT (no Markdown, no backticks) so the portal shows them verbatim.
+- Prose/conceptual options MAY use light inline Markdown (`code`, **bold**). When an option actually contains such Markdown, set its `content_type` to "MARKDOWN"; otherwise leave it "TEXT".
+- For CODE_ANALYSIS_* question types, options are literal code or program output — keep them PLAIN TEXT (no Markdown, no backticks), `content_type` "TEXT", so the portal shows them verbatim.
 
 NEVER apply Markdown to a graded exact-answer value (a TEXTUAL / FIB answer or expected output) or to the `code` field — those must stay literal.""")
 
@@ -179,6 +181,7 @@ Each option must be:
 - scannable
 - grammatically consistent
 - similar in length
+- NOT terminated by a full stop — an option is a phrase/value, so it must not end with a trailing '.' (other punctuation that is part of the value is fine)
 
 Do NOT use:
 - full explanations
@@ -878,6 +881,33 @@ def _enforce_options(lo: dict, res: dict, max_seq: int | None) -> dict:
     return res
 
 
+def _strip_trailing_period(text: str) -> str:
+    """Remove a single trailing full stop from learner-facing text. Preserves an
+    ellipsis ('...') and leaves all other punctuation untouched — only a bare
+    trailing '.' is dropped (per the no-trailing-period rule for stems/options)."""
+    if not isinstance(text, str):
+        return text
+    t = text.rstrip()
+    if t.endswith(".") and not t.endswith(".."):
+        t = t[:-1].rstrip()
+    return t
+
+
+def _normalize_lean_text(lean: dict) -> dict:
+    """In-place: strip a trailing period from the question stem / statement and from
+    each option's content. Graded values (TEXTUAL/FIB answers, expected output) and
+    `code` are intentionally left literal."""
+    if not isinstance(lean, dict):
+        return lean
+    for fld in ("question", "statement"):
+        if isinstance(lean.get(fld), str):
+            lean[fld] = _strip_trailing_period(lean[fld])
+    for o in (lean.get("options") or []):
+        if isinstance(o, dict) and isinstance(o.get("content"), str):
+            o["content"] = _strip_trailing_period(o["content"])
+    return lean
+
+
 def generate_lean(lo: dict, *, max_seq: int | None = None, ctx: str | None = None,
                   fallback_uncovered: bool = True) -> dict:
     """Route the LO to its type-agent and return the lean content (or skip).
@@ -895,6 +925,8 @@ def generate_lean(lo: dict, *, max_seq: int | None = None, ctx: str | None = Non
             elif res["question_type"] == "CODE_ANALYSIS_TEXTUAL":
                 res = _verify_code_output(lo, res, max_seq)   # set the key to the real stdout
             res = _enforce_options(lo, res, max_seq)
+        if res.get("lean"):
+            _normalize_lean_text(res["lean"])
     res["rag_calls"] = rag_calls
     return res
 
@@ -959,7 +991,7 @@ def fix_lean(lo: dict, ctx: str, prev_lean: dict, issues: list[dict]) -> dict:
         f"(suggested fix: {i.get('suggested_fix')})" for i in issues) or "(none)"
     extra = get_prompt("gen.fix_prefix", _FIX_PREFIX).format(qtype=qtype, prev=prev_lean, issues=issues_txt)
     lean = _invoke(qtype, lo, ctx, schema, extra)
-    return lean.model_dump()
+    return _normalize_lean_text(lean.model_dump())
 
 
 def generate_for_los(los: list[dict], *, max_seq: int | None = None,

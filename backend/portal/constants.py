@@ -22,8 +22,11 @@ ENVIRONMENTS = {
 
 DEFAULT_ENVIRONMENT = "PROD"
 
-# The learning site is shared across environments (used only to build links).
+# The learning site URL (used only to build course/topic/unit links). PROD and BETA
+# have different domains, so the link must match the course's environment — BETA falls
+# back to the PROD url only when its own var is unset.
 LEARNING_COURSE_URL = os.environ.get("PORTAL_LEARNING_COURSE_URL", "")
+LEARNING_COURSE_BETA_URL = os.environ.get("PORTAL_LEARNING_COURSE_BETA_URL", "")
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
 USER_AGENT = (
@@ -55,6 +58,11 @@ class PortalConfig:
         self.base_url = env["base_url"]
         self.username = env["username"]
         self.password = env["password"]
+        # Learning-site URL for THIS environment's links (BETA uses its own domain).
+        self.learning_course_url = (
+            LEARNING_COURSE_BETA_URL if (env_key == "BETA" and LEARNING_COURSE_BETA_URL)
+            else LEARNING_COURSE_URL
+        )
 
         base = self.base_url
         self.login_url = f"{base}/admin/login/"

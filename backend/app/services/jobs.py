@@ -131,12 +131,19 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
             session.commit()
             progress_broker.publish(str(job_id))   # push the paused/awaiting state to the socket
             return
+        # Generation version for this session = (# prior runs of the same course/session) + 1.
+        from sqlalchemy import func, select
+        prior = session.scalar(
+            select(func.count()).select_from(McqRun)
+            .where(McqRun.course_id == course_id, McqRun.unit_id == unit_id)
+        ) or 0
         session.add(McqRun(
             job_id=job_id, course_id=course_id, topic_id=topic_id, unit_id=unit_id,
             langsmith_run_url=result.get("langsmith_run_url", ""),
             lo_count=result.get("lo_count", 0),
             question_count=result.get("question_count", 0),
             needs_human_count=result.get("needs_human_count", 0),
+            version=prior + 1,
             result=result,
             created_by=getattr(job, "created_by", None),   # attribute the run to its user
         ))

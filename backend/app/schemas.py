@@ -100,6 +100,15 @@ class ApproveRunRequest(BaseModel):
     reviewer: str = ""
 
 
+class QuestionApprovalRequest(BaseModel):
+    approval: str = "approved"      # approved | rejected | pending (cleared)
+    reviewer: str = ""
+
+
+class QuestionExcludeRequest(BaseModel):
+    excluded: bool = True           # True = exclude from load; False = include again
+
+
 class PrepareSheetRequest(BaseModel):
     """User-facing fields for the exam-config sheet (Form tab). The rest is derived:
     parent = run.topic_id, number of questions = generated count, name = 'MCQ Practice'."""
@@ -109,6 +118,7 @@ class PrepareSheetRequest(BaseModel):
     show_answer_scoring_mode: str = "INCORRECT"
     should_send_solutions: str = "yes"
     reviewer_email: str = ""               # also shared on the prepared sheet, if given
+    approved_only: bool = False            # load only approved questions (else all must be approved)
 
 
 # --------------------------------------------------------------------------- #
@@ -131,6 +141,15 @@ class ApiKeyRequest(BaseModel):
 
 class RoleRequest(BaseModel):
     role: str   # "user" | "admin"
+
+
+class AppFeedbackRequest(BaseModel):
+    """Application-level feedback: an emoji rating (1–5), a category, an optional
+    'was this helpful?' vote, and free text."""
+    rating: int = 0                 # 1–5 (emoji); 0 = unrated
+    category: str = ""              # Generation Issue | Review | UI Related | Enhancement
+    helpful: bool | None = None     # yes / no / not answered
+    message: str = ""
 
 
 def serialize_user(user) -> dict:
@@ -170,7 +189,8 @@ class RagAnswerRequest(BaseModel):
 # clear and rebuild chunks). Counts are passed in by the routes — keyed by
 # UnitPart.id for parts and by Course.course_id for courses — to avoid loading the
 # (large) embedding vectors just to display a status.
-def serialize_unit_part(part: UnitPart, *, chunk_count: int = 0) -> dict:
+def serialize_unit_part(part: UnitPart, *, chunk_count: int = 0,
+                        ingest_stale: bool = False) -> dict:
     return {
         "label": part.label,
         "unit_id": part.unit_id,
@@ -186,28 +206,37 @@ def serialize_unit_part(part: UnitPart, *, chunk_count: int = 0) -> dict:
         "content_chars": len(part.content or ""),
         "chunk_count": chunk_count,
         "is_ingested": chunk_count > 0,
+        # True when the content was modified after it was last ingested — the part
+        # should be offered for re-ingestion even though it has chunks.
+        "ingest_stale": bool(ingest_stale),
     }
 
 
-def serialize_unit(unit: Unit, *, part_counts: dict | None = None) -> dict:
+def serialize_unit(unit: Unit, *, part_counts: dict | None = None,
+                   stale_part_ids: set | None = None) -> dict:
     part_counts = part_counts or {}
+    stale_part_ids = stale_part_ids or set()
     return {
         "kind": unit.kind,
         "label": unit.label,
         "order": unit.order,
         "parts": [
-            serialize_unit_part(p, chunk_count=part_counts.get(p.id, 0)) for p in unit.parts
+            serialize_unit_part(p, chunk_count=part_counts.get(p.id, 0),
+                                ingest_stale=p.id in stale_part_ids)
+            for p in unit.parts
         ],
     }
 
 
-def serialize_topic(topic: Topic, *, part_counts: dict | None = None) -> dict:
+def serialize_topic(topic: Topic, *, part_counts: dict | None = None,
+                    stale_part_ids: set | None = None) -> dict:
     return {
         "topic_id": topic.topic_id,
         "topic_name": topic.topic_name,
         "topic_link": topic.topic_link,
         "order": topic.order,
-        "units": [serialize_unit(u, part_counts=part_counts) for u in topic.units],
+        "units": [serialize_unit(u, part_counts=part_counts, stale_part_ids=stale_part_ids)
+                  for u in topic.units],
     }
 
 
@@ -231,6 +260,7 @@ def serialize_course_list(
         "is_ingested": ingested_chunk_count > 0,
         # Reading materials that ran extraction but came back EMPTY/ERROR.
         "content_issue_count": content_issue_count,
+        "created_by": getattr(course, "created_by", None),
     }
 
 
@@ -240,6 +270,7 @@ def serialize_course_detail(
     part_counts: dict | None = None,
     course_counts: dict | None = None,
     issue_counts: dict | None = None,
+    stale_part_ids: set | None = None,
 ) -> dict:
     course_counts = course_counts or {}
     issue_counts = issue_counts or {}
@@ -259,6 +290,7 @@ def serialize_course_detail(
         "ingested_chunk_count": course_counts.get(course.course_id, 0),
         "is_ingested": course_counts.get(course.course_id, 0) > 0,
         "content_issue_count": issue_counts.get(course.course_id, 0),
+        "created_by": getattr(course, "created_by", None),
         # Nested prerequisites use the list (summary) shape.
         "prerequisites": [
             serialize_course_list(
@@ -268,7 +300,8 @@ def serialize_course_detail(
             )
             for p in course.prerequisites
         ],
-        "topics": [serialize_topic(t, part_counts=part_counts) for t in course.topics],
+        "topics": [serialize_topic(t, part_counts=part_counts, stale_part_ids=stale_part_ids)
+                   for t in course.topics],
     }
 
 
@@ -290,17 +323,27 @@ def serialize_job(job: SyncJob) -> dict:
 
 
 def serialize_mcq_run(run, *, include_result: bool = True) -> dict:
+    # Eligible = generated questions a reviewer hasn't excluded; the load gate compares
+    # approved_count against this.
+    qs = (run.result or {}).get("questions") or []
+    eligible = sum(1 for q in qs if q.get("status") == "generated" and not q.get("excluded"))
+    excluded = sum(1 for q in qs if q.get("status") == "generated" and q.get("excluded"))
     out = {
         "id": run.id,
         "job_id": run.job_id,
         "course_id": run.course_id,
         "topic_id": run.topic_id,
         "unit_id": run.unit_id,
+        "version": getattr(run, "version", 1),
         "langsmith_run_url": run.langsmith_run_url,
         "lo_count": run.lo_count,
         "question_count": run.question_count,
         "needs_human_count": run.needs_human_count,
+        "approved_count": getattr(run, "approved_count", 0),
+        "eligible_count": eligible,
+        "excluded_count": excluded,
         "review_status": getattr(run, "review_status", "draft"),
+        "created_by": getattr(run, "created_by", None),
         "created_at": run.created_at,
     }
     if include_result:

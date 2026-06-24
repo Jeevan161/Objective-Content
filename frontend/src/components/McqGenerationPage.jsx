@@ -3,6 +3,7 @@ import { ArrowLeft, ListChecks, BookOpen, Layers, FileText, Sparkles, AlertTrian
 import { getCourse, generateMcq, resumeMcq, listMcqRuns, getMcqRun, mcqJobWsUrl } from '../api'
 import { EmptyState, Spinner } from './ui'
 import { useToast } from './Toast'
+import { useAuth } from '../auth/AuthContext'
 import McqProgress from './McqProgress'
 import McqResults from './McqResults'
 import McqReviewGate from './McqReviewGate'
@@ -27,6 +28,7 @@ function sessionUnitId(unit) {
 // (live progress) and render the generated questions + LangSmith trace.
 function McqGenerationPage({ courses, onBack, onTrackJob }) {
   const toast = useToast()
+  const { user } = useAuth()
   const [courseId, setCourseId] = useState('')
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -86,7 +88,11 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   const sessionHasContent = readingParts.some((p) => p.has_content)
   const paused = job?.status === 'AWAITING_REVIEW' // waiting at a HITL gate
   const running = Boolean(job && !TERMINAL.includes(job.status) && !paused)
-  const canGenerate = ready && sessionHasContent && !running && !paused
+  // Only the user who added (synced) this course may generate for it. Admins bypass;
+  // unowned (legacy) courses stay open. `detail.created_by` is null until loaded.
+  const ownsCourse = !detail || user?.role === 'admin'
+    || !detail.created_by || detail.created_by === user?.id
+  const canGenerate = ready && sessionHasContent && ownsCourse && !running && !paused
   // Job is "live" (stream over a socket) while it's neither finished nor paused at a gate.
   const streamable = Boolean(job?.id) && !TERMINAL.includes(job?.status) && !paused
 
@@ -332,15 +338,22 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
             className="btn btn-primary"
             disabled={!canGenerate}
             data-tip={
-              sessionHasContent
-                ? undefined
-                : 'This session has no extracted reading material content — run Extract on the course first'
+              !ownsCourse
+                ? 'Only the user who added this course can generate MCQs for it'
+                : sessionHasContent
+                  ? undefined
+                  : 'This session has no extracted reading material content — run Extract on the course first'
             }
             onClick={() => setScopeOpen(true)}
           >
             {running ? <Spinner size={14} /> : <Sparkles size={15} />}
             {running ? 'Generating…' : run ? 'Re-generate MCQs' : 'Generate MCQs'}
           </button>
+          {!ownsCourse && (
+            <p className="mcq-owner-note">
+              <AlertTriangle size={13} /> Only the user who added this course can generate MCQs for it.
+            </p>
+          )}
         </div>
       )}
 
@@ -366,7 +379,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
         </div>
       )}
 
-      {run && !running && !paused && <McqResults key={run.id} run={run} />}
+      {run && !running && !paused && <McqResults key={run.id} run={run} courseId={courseId} unitId={sessionId} />}
     </div>
   )
 }
@@ -381,8 +394,7 @@ function McqHeader({ onBack }) {
         <div>
           <h1>MCQ Generation</h1>
           <p className="topbar-sub">
-            Pick a course, topic and session to generate multiple-choice practice from its extracted
-            reading material. Ingestion isn't required — the session just needs extracted content.
+            Pick a course, topic and session to generate MCQ practice.
           </p>
         </div>
       </div>

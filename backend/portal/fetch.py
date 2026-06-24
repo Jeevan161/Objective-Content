@@ -34,17 +34,19 @@ def _noop(_message: str) -> None:
 
 
 # ── Link builders ─────────────────────────────────────────────────────────────
-def build_course_link(course_id: str) -> str:
-    return f"{LEARNING_COURSE_URL}?{urlencode([('c_id', course_id)])}"
+def build_course_link(course_id: str, learning_url: str = LEARNING_COURSE_URL) -> str:
+    return f"{learning_url}?{urlencode([('c_id', course_id)])}"
 
 
-def build_topic_link(course_id: str, topic_id: str) -> str:
-    return f"{LEARNING_COURSE_URL}?{urlencode([('c_id', course_id), ('t_id', topic_id)])}"
+def build_topic_link(course_id: str, topic_id: str,
+                     learning_url: str = LEARNING_COURSE_URL) -> str:
+    return f"{learning_url}?{urlencode([('c_id', course_id), ('t_id', topic_id)])}"
 
 
-def build_unit_link(course_id: str, topic_id: str, unit_id: str) -> str:
+def build_unit_link(course_id: str, topic_id: str, unit_id: str,
+                    learning_url: str = LEARNING_COURSE_URL) -> str:
     params = [("c_id", course_id), ("s_id", unit_id), ("t_id", topic_id)]
-    return f"{LEARNING_COURSE_URL}?{urlencode(params)}"
+    return f"{learning_url}?{urlencode(params)}"
 
 
 # ── Generic helpers ─────────────────────────────────────────────────────────────
@@ -315,7 +317,8 @@ def extract_selected_option_text(html: str, select_id: str) -> str:
     return (selected.get_text() or "").strip() if selected else ""
 
 
-def parse_course_details(html: str, course_id: str) -> dict:
+def parse_course_details(html: str, course_id: str,
+                         learning_url: str = LEARNING_COURSE_URL) -> dict:
     return {
         "course_id": course_id,
         "course_name": extract_input_value(html, input_id="id_title") or "",
@@ -323,7 +326,7 @@ def parse_course_details(html: str, course_id: str) -> dict:
         "duration": extract_input_value(html, input_id="id_duration_in_sec") or "",
         "multimedia_url": extract_input_value(html, input_id="id_multimedia_url") or "",
         "course_category": extract_selected_option_text(html, "id_course_category"),
-        "course_link": build_course_link(course_id),
+        "course_link": build_course_link(course_id, learning_url),
     }
 
 
@@ -490,7 +493,7 @@ def fetch_topic_name(client: PortalClient, topic_id: str) -> str:
 def fetch_unit_detail(client: PortalClient, course_id: str, topic_id: str, unit_id: str) -> dict:
     unit_data = {
         "unit_id": unit_id,
-        "unit_link": build_unit_link(course_id, topic_id, unit_id),
+        "unit_link": build_unit_link(course_id, topic_id, unit_id, client.config.learning_course_url),
     }
     try:
         response = client.get(client.config.unit_detail_url_template.format(unit_id))
@@ -538,7 +541,8 @@ def build_course_data(
 
     progress("Fetching course details…")
     course_detail_response = client.get(client.config.course_detail_url_template.format(course_id))
-    course_details = parse_course_details(course_detail_response.text, course_id)
+    course_details = parse_course_details(course_detail_response.text, course_id,
+                                          client.config.learning_course_url)
     if selected_version_row:
         course_details["selected_course_version"] = {
             "courseversion_id": selected_version_row.get("row_id", ""),
@@ -592,7 +596,7 @@ def build_course_data(
             topics_payload.append({
                 "topic_id": topic_id,
                 "topic_name": topic_name_futures[topic_id].result(),
-                "topic_link": build_topic_link(course_id, topic_id),
+                "topic_link": build_topic_link(course_id, topic_id, client.config.learning_course_url),
                 "units": group_units(units_payload),
             })
 

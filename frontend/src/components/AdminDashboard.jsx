@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ShieldCheck, UserCheck, UserX, RefreshCw, KeyRound } from 'lucide-react'
+import { ShieldCheck, UserCheck, UserX, RefreshCw, KeyRound, ThumbsUp, ThumbsDown } from 'lucide-react'
 import {
   adminStats, adminApproveUser, adminDeactivateUser, adminSetRole, adminLogs,
+  adminMcqFeedback, adminAppFeedback,
 } from '../api'
+
+const RATING_EMOJI = { 1: '😞', 2: '😕', 3: '😐', 4: '🙂', 5: '😄' }
 import { useAuth } from '../auth/AuthContext'
 import { useToast } from './Toast'
 import { Spinner, EmptyState } from './ui'
@@ -13,15 +16,21 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState(null)
   const [logs, setLogs] = useState([])
   const [level, setLevel] = useState('')
+  const [appFeedback, setAppFeedback] = useState([])
+  const [mcqFeedback, setMcqFeedback] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, l] = await Promise.all([adminStats(), adminLogs(level)])
+      const [s, l, af, mf] = await Promise.all([
+        adminStats(), adminLogs(level), adminAppFeedback(), adminMcqFeedback(),
+      ])
       setStats(s)
       setLogs(l)
+      setAppFeedback(af)
+      setMcqFeedback(mf)
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not load dashboard', message: e.message })
     } finally {
@@ -149,6 +158,62 @@ export default function AdminDashboard() {
                     </tr>
                   ))}
                   {logs.length === 0 && <tr><td colSpan={5} className="admin-empty">No logs.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="admin-section">
+            <h2 className="admin-h2">Application feedback <span className="admin-count">{appFeedback.length}</span></h2>
+            <div className="admin-table-wrap">
+              <table className="admin-table">
+                <thead>
+                  <tr><th>When</th><th>From</th><th>Rating</th><th>Category</th><th>Helpful</th><th>Message</th></tr>
+                </thead>
+                <tbody>
+                  {appFeedback.map((f) => (
+                    <tr key={f.id}>
+                      <td className="admin-log-time">{new Date(f.created_at).toLocaleString()}</td>
+                      <td>
+                        <div className="admin-user-name">{f.user_name || '—'}</div>
+                        <div className="admin-user-email">{f.user_email}</div>
+                      </td>
+                      <td className="admin-rating">{f.rating ? <>{RATING_EMOJI[f.rating]} <span className="admin-rating-n">{f.rating}/5</span></> : '—'}</td>
+                      <td>{f.category ? <span className="mcq-status-chip">{f.category}</span> : '—'}</td>
+                      <td>{f.helpful === true
+                        ? <span className="admin-key-ok"><ThumbsUp size={12} /> yes</span>
+                        : f.helpful === false
+                          ? <span className="admin-key-missing"><ThumbsDown size={12} /> no</span>
+                          : '—'}</td>
+                      <td className="admin-log-msg" title={f.message}>{f.message || '—'}</td>
+                    </tr>
+                  ))}
+                  {appFeedback.length === 0 && <tr><td colSpan={6} className="admin-empty">No feedback yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="admin-section">
+            <h2 className="admin-h2">Reviewer feedback <span className="admin-count">{mcqFeedback.length}</span></h2>
+            <div className="admin-table-wrap">
+              <table className="admin-table">
+                <thead>
+                  <tr><th>When</th><th>Reviewer</th><th>Action</th><th>Type</th><th>Outcome</th><th>Tags</th><th>Comment</th></tr>
+                </thead>
+                <tbody>
+                  {mcqFeedback.map((f) => (
+                    <tr key={f.id}>
+                      <td className="admin-log-time">{new Date(f.created_at).toLocaleString()}</td>
+                      <td>{f.reviewer || '—'}</td>
+                      <td><span className="mcq-status-chip">{f.action || '—'}</span></td>
+                      <td>{f.question_type || '—'}</td>
+                      <td className="admin-log-msg" title={f.outcome}>{f.outcome || '—'}</td>
+                      <td>{(f.tags || []).join(', ') || '—'}</td>
+                      <td className="admin-log-msg" title={f.comment}>{f.comment || '—'}</td>
+                    </tr>
+                  ))}
+                  {mcqFeedback.length === 0 && <tr><td colSpan={7} className="admin-empty">No reviewer feedback yet.</td></tr>}
                 </tbody>
               </table>
             </div>

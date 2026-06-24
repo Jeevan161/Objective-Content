@@ -158,6 +158,16 @@ def _qtype_for(result: dict, outcome: str) -> str:
     return (result.get("questions") or [{}])[i].get("question_type", "") if i >= 0 else ""
 
 
+def _eligible(qs: list) -> list:
+    """Questions that count toward approval — the ones actually generated, minus any a
+    reviewer has excluded (excluded questions stay in the list but are not loaded)."""
+    return [q for q in qs if q.get("status") == "generated" and not q.get("excluded")]
+
+
+def _approved_count(qs: list) -> int:
+    return sum(1 for q in _eligible(qs) if q.get("approval") == "approved")
+
+
 def regenerate_question(run_id, outcome: str, feedback: str, *,
                         reviewer: str = "", tags: list | None = None) -> dict:
     """Regenerate the question for `outcome`, injecting the human feedback as a
@@ -249,6 +259,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         run.result = fresh
         run.review_status = "question_review"
         run.needs_human_count = sum(1 for q in qs if q.get("needs_human"))
+        run.approved_count = _approved_count(qs)   # a regenerated question is no longer approved
         s.add(McqQuestionFeedback(
             run_id=run_id, stage="question", outcome=outcome, question_type=actual_qtype,
             action="reject_regenerate", tags=tags or [], comment=feedback or "",
@@ -281,12 +292,88 @@ def record_feedback(run_id, outcome: str, *, action: str, tags: list | None = No
     return {"ok": True, "outcome": outcome, "action": action}
 
 
+def set_question_approval(run_id, outcome: str, approval: str, *, reviewer: str = "") -> dict:
+    """Set a human approval decision on one question and recompute the run's approved_count.
+    `approval` is 'approved', 'rejected', or 'pending' (cleared). Serialized via
+    SELECT … FOR UPDATE so a concurrent decision on another question isn't lost."""
+    approval = (approval or "").strip().lower()
+    if approval not in ("approved", "rejected", "pending"):
+        raise ValueError("approval must be 'approved', 'rejected' or 'pending'.")
+    with SessionLocal() as s:
+        run = s.get(McqRun, run_id, with_for_update=True)
+        if run is None:
+            raise ValueError("MCQ run not found.")
+        fresh = dict(run.result or {})
+        qs = list(fresh.get("questions") or [])
+        idx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        if idx < 0:
+            raise ValueError(f"No question found for outcome {outcome!r}.")
+        q = dict(qs[idx])
+        q["approval"] = None if approval == "pending" else approval
+        qs[idx] = q
+        fresh["questions"] = qs
+        run.result = fresh
+        run.approved_count = _approved_count(qs)
+        if run.review_status == "draft":
+            run.review_status = "question_review"
+        s.add(McqQuestionFeedback(
+            run_id=run_id, stage="question", outcome=outcome,
+            question_type=q.get("question_type", ""),
+            action={"approved": "approve", "rejected": "reject"}.get(approval, "unapprove"),
+            tags=[], comment="", before_snapshot={}, reviewer=reviewer or "",
+        ))
+        s.commit()
+        approved_count = run.approved_count
+    return {"ok": True, "outcome": outcome, "approval": q["approval"],
+            "approved_count": approved_count, "eligible_count": len(_eligible(qs))}
+
+
+def set_question_exclusion(run_id, outcome: str, excluded: bool, *, reviewer: str = "") -> dict:
+    """Mark one question excluded (or include it again). Excluded questions remain in
+    the list (shaded out) but drop out of the approval tally and are skipped on
+    export/load. Recomputes approved_count and records the action."""
+    with SessionLocal() as s:
+        run = s.get(McqRun, run_id, with_for_update=True)
+        if run is None:
+            raise ValueError("MCQ run not found.")
+        fresh = dict(run.result or {})
+        qs = list(fresh.get("questions") or [])
+        idx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        if idx < 0:
+            raise ValueError(f"No question found for outcome {outcome!r}.")
+        q = dict(qs[idx])
+        q["excluded"] = bool(excluded)
+        qs[idx] = q
+        fresh["questions"] = qs
+        run.result = fresh
+        run.approved_count = _approved_count(qs)
+        if run.review_status == "draft":
+            run.review_status = "question_review"
+        s.add(McqQuestionFeedback(
+            run_id=run_id, stage="question", outcome=outcome,
+            question_type=q.get("question_type", ""),
+            action="exclude" if excluded else "include",
+            tags=[], comment="", before_snapshot={}, reviewer=reviewer or "",
+        ))
+        s.commit()
+        approved_count = run.approved_count
+    return {"ok": True, "outcome": outcome, "excluded": q["excluded"],
+            "approved_count": approved_count, "eligible_count": len(_eligible(qs))}
+
+
 def approve_run(run_id, *, reviewer: str = "") -> dict:
     with SessionLocal() as s:
         run = s.get(McqRun, run_id)
         if run is None:
             raise ValueError("MCQ run not found.")
         run.review_status = "approved"
+        # Durable audit of the run-level sign-off (per-question actions are already
+        # recorded; this captures "who marked the whole run reviewed").
+        s.add(McqQuestionFeedback(
+            run_id=run_id, stage="run", outcome="", question_type="",
+            action="approve_run", tags=[], comment="", before_snapshot={},
+            reviewer=reviewer or "",
+        ))
         s.commit()
         status = run.review_status
     return {"ok": True, "review_status": status, "reviewer": reviewer}

@@ -11,11 +11,13 @@ import ChatPage from './components/ChatPage'
 import GenerationStudio from './components/GenerationStudio'
 import McqGenerationPage from './components/McqGenerationPage'
 import McqRunsPage from './components/McqRunsPage'
+import ReviewQueuePage from './components/ReviewQueuePage'
 import PipelinePage from './components/PipelinePage'
 import LLMProvidersPage from './components/LLMProvidersPage'
 import CourseCard from './components/CourseCard'
 import AdminDashboard from './components/AdminDashboard'
 import AccountModal from './components/AccountModal'
+import FeedbackForm from './components/FeedbackForm'
 import AuthGate from './components/AuthGate'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { ToastProvider, useToast } from './components/Toast'
@@ -85,6 +87,7 @@ function Workspace() {
   const [navCollapsed, toggleNavCollapsed] = useNavCollapsed()
   const [page, setPage] = useState('courses')
   const [accountOpen, setAccountOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   const [courses, setCourses] = useState(null) // null = first load
   const [query, setQuery] = useState('')
@@ -286,6 +289,7 @@ function Workspace() {
         onToggleCollapse={toggleNavCollapsed}
         user={user}
         onOpenAccount={() => setAccountOpen(true)}
+        onOpenFeedback={() => setFeedbackOpen(true)}
       />
       <div
         className={`nav-scrim ${navOpen ? 'open' : ''}`}
@@ -312,6 +316,7 @@ function Workspace() {
           />
         )}
         {page === 'runs' && <McqRunsPage courses={courses} />}
+        {page === 'review' && <ReviewQueuePage courses={courses} />}
         {page === 'admin' && <AdminDashboard />}
         {page === 'courses' && (
         <>
@@ -481,6 +486,7 @@ function Workspace() {
       )}
 
       {accountOpen && <AccountModal onClose={() => setAccountOpen(false)} />}
+      {feedbackOpen && <FeedbackForm onClose={() => setFeedbackOpen(false)} />}
     </div>
   )
 }

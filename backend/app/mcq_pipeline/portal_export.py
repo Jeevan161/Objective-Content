@@ -59,6 +59,13 @@ def _difficulty(q: dict, lo: dict) -> str:
 
 
 # --- per-type builders ----------------------------------------------------- #
+def _option_ctype(o: dict) -> str:
+    """Render type for an option: the generator now tags each option TEXT/MARKDOWN.
+    Normalize (older runs predate the field → default TEXT)."""
+    ct = str(o.get("content_type") or "TEXT").strip().upper()
+    return "MARKDOWN" if ct == "MARKDOWN" else "TEXT"
+
+
 def _mcq(q, lean, key, tag, diff, *, qtype):
     return GROUP_DEFAULT, {
         "question_id": _uuid(),
@@ -73,7 +80,7 @@ def _mcq(q, lean, key, tag, diff, *, qtype):
             "multimedia": [],
         },
         "options": [
-            {"content": o.get("content", ""), "content_type": "TEXT",
+            {"content": o.get("content", ""), "content_type": _option_ctype(o),
              "is_correct": bool(o.get("is_correct")), "multimedia": []}
             for o in lean.get("options", [])
         ],
@@ -276,7 +283,7 @@ def build_groups(result: dict) -> dict[str, list]:
     los = {lo.get("outcome"): lo for lo in (result.get("final_los") or [])}
     n = 0
     for q in (result.get("questions") or []):
-        if q.get("status") != "generated" or not q.get("lean"):
+        if q.get("status") != "generated" or not q.get("lean") or q.get("excluded"):
             continue
         n += 1
         group, obj = _convert(q, los.get(q.get("outcome"), {}), n)

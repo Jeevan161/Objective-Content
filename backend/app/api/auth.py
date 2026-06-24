@@ -19,13 +19,23 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_active, require_admin
 from app.core.crypto import encrypt
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_session
-from app.models import BetaLoad, LlmProvider, McqRun, TaskLog, User, UserLlmKey
+from app.models import (
+    AppFeedback,
+    BetaLoad,
+    LlmProvider,
+    McqQuestionFeedback,
+    McqRun,
+    TaskLog,
+    User,
+    UserLlmKey,
+)
 from app.schemas import (
     ApiKeyRequest,
+    AppFeedbackRequest,
     LoginRequest,
     RegisterRequest,
     RoleRequest,
@@ -111,6 +121,30 @@ def clear_key(provider_id: uuid.UUID, user: User = Depends(get_current_user),
         session.delete(row)
         session.commit()
     return {"provider_id": provider_id, "has_key": False}
+
+
+_FEEDBACK_CATEGORIES = ("Generation Issue", "Review", "UI Related", "Enhancement")
+
+
+# --- application-level feedback --------------------------------------------- #
+@router.post("/feedback", status_code=status.HTTP_201_CREATED)
+def submit_feedback(body: AppFeedbackRequest, user: User = Depends(require_active),
+                    session: Session = Depends(get_session)) -> dict:
+    """Any signed-in (approved) user can leave product feedback — an emoji rating,
+    a category, a helpful yes/no, and free text. Surfaced in the admin dashboard."""
+    rating = int(body.rating or 0)
+    if rating < 0 or rating > 5:
+        raise HTTPException(status_code=400, detail="rating must be between 1 and 5.")
+    message = (body.message or "").strip()
+    if rating == 0 and not message:
+        raise HTTPException(status_code=400,
+                            detail="Add a rating or a message before submitting.")
+    category = (body.category or "").strip()
+    row = AppFeedback(user_id=user.id, rating=rating, category=category,
+                      helpful=body.helpful, message=message)
+    session.add(row)
+    session.commit()
+    return {"ok": True, "id": row.id}
 
 
 # --- admin ------------------------------------------------------------------ #
@@ -210,3 +244,38 @@ def admin_logs(level: str | None = None, limit: int = 200,
         "message": t.message, "job_id": t.job_id, "run_id": t.run_id,
         "user_id": t.user_id, "detail": t.detail, "created_at": t.created_at,
     } for t in logs]
+
+
+@router.get("/admin/feedback")
+def admin_app_feedback(limit: int = 200, _: User = Depends(require_admin),
+                       session: Session = Depends(get_session)) -> list[dict]:
+    """All application-level feedback submissions, newest first (with submitter info)."""
+    rows = session.scalars(
+        select(AppFeedback).order_by(AppFeedback.created_at.desc()).limit(min(limit, 1000))
+    ).all()
+    users = {u.id: u for u in session.scalars(select(User)).all()}
+    out = []
+    for f in rows:
+        u = users.get(f.user_id)
+        out.append({
+            "id": f.id, "rating": f.rating, "category": f.category,
+            "helpful": f.helpful, "message": f.message, "created_at": f.created_at,
+            "user_name": (u.name if u else "") or "", "user_email": u.email if u else "",
+        })
+    return out
+
+
+@router.get("/admin/mcq-feedback")
+def admin_mcq_feedback(limit: int = 300, _: User = Depends(require_admin),
+                       session: Session = Depends(get_session)) -> list[dict]:
+    """All MCQ reviewer feedback actions (accept / regenerate / approve / reject /
+    run sign-off), newest first — the durable record of every review decision."""
+    rows = session.scalars(
+        select(McqQuestionFeedback).order_by(McqQuestionFeedback.created_at.desc())
+        .limit(min(limit, 2000))
+    ).all()
+    return [{
+        "id": f.id, "run_id": f.run_id, "stage": f.stage, "outcome": f.outcome,
+        "question_type": f.question_type, "action": f.action, "tags": f.tags or [],
+        "comment": f.comment or "", "reviewer": f.reviewer or "", "created_at": f.created_at,
+    } for f in rows]

@@ -15,6 +15,12 @@ from pydantic import BaseModel, Field
 class MCQOption(BaseModel):
     content: str
     is_correct: bool
+    content_type: str = Field(
+        default="TEXT",
+        description="how the portal should render this option: 'TEXT' for a plain value / "
+                    "literal code / output, or 'MARKDOWN' when the option uses inline Markdown "
+                    "(e.g. `code`, **bold**). Default to TEXT unless the option text actually "
+                    "contains Markdown.")
 
 
 # MULTIPLE_CHOICE and MORE_THAN_ONE_MULTIPLE_CHOICE share this shape.

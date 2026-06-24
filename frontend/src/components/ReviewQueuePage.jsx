@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { History, RefreshCw, ListChecks, CheckCircle2 } from 'lucide-react'
+import { ClipboardCheck, RefreshCw, ListChecks, CheckCircle2, ChevronRight } from 'lucide-react'
 import { listAllMcqRuns, getMcqRun } from '../api'
 import { EmptyState, Spinner } from './ui'
 import { useToast } from './Toast'
@@ -15,9 +15,14 @@ function fmtDate(s) {
   )}`
 }
 
-// Runs: every saved MCQ generation run, newest first. Selecting one loads its full result and
-// renders it (outcomes / questions / spec / node-by-node trace) via the shared McqResults viewer.
-function McqRunsPage({ courses }) {
+// A run still needs reviewing until it's marked reviewed AND every generated question is approved.
+function needsReview(r) {
+  return r.review_status !== 'approved' || (r.approved_count ?? 0) < (r.eligible_count ?? 0)
+}
+
+// Review Queue: runs awaiting question review. Open one to Approve/Reject each question and load
+// it to the portal once approved. Shares the McqResults viewer in its interactive 'review' mode.
+function ReviewQueuePage({ courses }) {
   const toast = useToast()
   const [runs, setRuns] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
@@ -32,10 +37,10 @@ function McqRunsPage({ courses }) {
   function load() {
     setRuns(null)
     listAllMcqRuns()
-      .then((rows) => setRuns(rows || []))
+      .then((rows) => setRuns((rows || []).filter(needsReview)))
       .catch((e) => {
         setRuns([])
-        toast.push({ kind: 'error', title: 'Could not load runs', message: e.message })
+        toast.push({ kind: 'error', title: 'Could not load review queue', message: e.message })
       })
   }
   useEffect(() => {
@@ -57,14 +62,13 @@ function McqRunsPage({ courses }) {
     <div className="runs-page">
       <header className="topbar">
         <div>
-          <h1>Runs</h1>
+          <h1>Review Queue</h1>
           <p className="topbar-sub">
-            Every MCQ generation run is saved here — open one to see its outcomes, questions, frozen
-            spec and node-by-node trace.
+            Runs awaiting review. Approve or reject each question, then load the approved set to the portal.
           </p>
         </div>
         <div className="topbar-actions">
-          <button className="btn btn-ghost btn-sm" onClick={load} data-tip="Reload runs">
+          <button className="btn btn-ghost btn-sm" onClick={load} data-tip="Reload queue">
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
@@ -72,21 +76,28 @@ function McqRunsPage({ courses }) {
 
       {runs === null && (
         <div className="mcq-loading">
-          <Spinner size={14} /> Loading runs…
+          <Spinner size={14} /> Loading review queue…
         </div>
       )}
 
       {runs && runs.length === 0 && (
         <EmptyState
-          icon={History}
-          title="No runs yet"
-          hint="Generate MCQs from a session in the Generation Studio — every run is saved here with its trace."
+          icon={ClipboardCheck}
+          title="Nothing to review"
+          hint="When a run finishes generating it shows up here until every question is approved."
         />
       )}
 
       {runs && runs.length > 0 && (
-        <div className="runs-layout">
-          <ul className="runs-list">
+        <div className={`runs-layout queue-layout${selectedId ? ' is-collapsed' : ''}`}>
+          <div className="queue-rail">
+            {selectedId && (
+              <button type="button" className="queue-handle" aria-label="Show run queue">
+                <ChevronRight size={16} />
+                <span className="queue-handle-label">Queue</span>
+              </button>
+            )}
+            <ul className="runs-list">
             {runs.map((r) => (
               <li key={r.id}>
                 <button
@@ -100,21 +111,18 @@ function McqRunsPage({ courses }) {
                     <span className="runs-item-date">{fmtDate(r.created_at)}</span>
                   </div>
                   <div className="runs-item-stats">
-                    <span>{r.lo_count} LOs</span>
-                    <span>{r.question_count} Q</span>
+                    <span className={(r.approved_count ?? 0) === (r.eligible_count ?? 0) ? 'runs-item-approved' : ''}>
+                      {r.approved_count ?? 0} / {r.eligible_count ?? 0} approved
+                    </span>
                     {r.needs_human_count > 0 && (
                       <span className="runs-item-review">{r.needs_human_count} need review</span>
-                    )}
-                    {r.review_status === 'approved' && (
-                      <span className="runs-item-approved">
-                        <CheckCircle2 size={11} /> approved
-                      </span>
                     )}
                   </div>
                 </button>
               </li>
             ))}
-          </ul>
+            </ul>
+          </div>
 
           <div className="runs-detail">
             {loadingRun && (
@@ -122,12 +130,12 @@ function McqRunsPage({ courses }) {
                 <Spinner size={14} /> Loading run…
               </div>
             )}
-            {!loadingRun && run && <McqResults key={run.id} run={run} courseId={run.course_id} unitId={run.unit_id} />}
+            {!loadingRun && run && <McqResults key={run.id} run={run} mode="review" courseId={run.course_id} unitId={run.unit_id} />}
             {!loadingRun && !run && (
               <EmptyState
                 icon={ListChecks}
-                title="Select a run"
-                hint="Pick a run on the left to see its outcomes, questions, spec and trace."
+                title="Select a run to review"
+                hint="Pick a run on the left to approve its questions and load it to the portal."
               />
             )}
           </div>
@@ -137,4 +145,4 @@ function McqRunsPage({ courses }) {
   )
 }
 
-export default McqRunsPage
+export default ReviewQueuePage

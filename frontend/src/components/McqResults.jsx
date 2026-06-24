@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight,
   FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck, Download,
-  FileSpreadsheet, ExternalLink,
+  FileSpreadsheet, ExternalLink, Ban, Undo2,
 } from 'lucide-react'
 import { Spinner } from './ui'
 import { useToast } from './Toast'
+import { useAuth } from '../auth/AuthContext'
+import Modal from './Modal'
 import NodeSnapshot from './NodeSnapshot'
-import { regenerateMcqQuestion, submitMcqFeedback, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace } from '../api'
+import { regenerateMcqQuestion, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace, setMcqQuestionApproval, setMcqQuestionExclusion } from '../api'
 import ReactMarkdown from 'react-markdown'
+import ReadingMaterialPane from './ReadingMaterialPane'
 
 const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer', 'LO drift', 'too easy', 'too hard']
 
@@ -102,29 +105,30 @@ function RagCalls({ calls }) {
   )
 }
 
-// One generated question — all details laid out in clearly-padded sections.
-// Per-question reviewer actions: Accept, or Reject + feedback → regenerate.
-function QuestionReview({ q, busy, onAccept, onRegenerate }) {
+// Per-question reviewer actions (Review Queue only): Approve (persisted, drives the
+// load gate), or Reject → feedback → regenerate (which clears the approval server-side).
+function QuestionReview({ q, busy, onApprove, onRegenerate, onExclude }) {
   const [open, setOpen] = useState(false)
   const [fb, setFb] = useState('')
   const [tags, setTags] = useState([])
   const toggleTag = (t) => setTags((s) => (s.includes(t) ? s.filter((x) => x !== t) : [...s, t]))
+  const approved = q.approval === 'approved'
 
-  if (q._reviewState === 'accepted') {
-    return <div className="qc-review-bar"><span className="qc-rev-accepted"><Check size={13} /> accepted</span></div>
+  // Excluded questions stay visible but only offer "include" (redo) — they're not loaded.
+  if (q.excluded) {
+    return (
+      <div className="qc-review-bar">
+        <span className="qc-rev-excluded"><Ban size={13} /> excluded — won't be loaded</span>
+        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onExclude(false)}>
+          <Undo2 size={13} /> Include again
+        </button>
+      </div>
+    )
   }
-  return (
-    <div className="qc-review-bar">
-      {!open ? (
-        <>
-          <button className="btn btn-soft btn-sm" disabled={busy} onClick={onAccept}>
-            <Check size={13} /> Accept
-          </button>
-          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setOpen(true)}>
-            <RotateCcw size={13} /> Reject &amp; regenerate
-          </button>
-        </>
-      ) : (
+
+  if (open) {
+    return (
+      <div className="qc-review-bar">
         <div className="qc-rev-form">
           <textarea
             className="input qc-rev-text" rows={2} value={fb} spellCheck
@@ -149,8 +153,59 @@ function QuestionReview({ q, busy, onAccept, onRegenerate }) {
             </button>
           </div>
         </div>
+      </div>
+    )
+  }
+  return (
+    <div className="qc-review-bar">
+      {approved ? (
+        <>
+          <span className="qc-rev-accepted"><Check size={13} /> approved</span>
+          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onApprove('pending')}>
+            Undo
+          </button>
+        </>
+      ) : (
+        <button className="btn btn-soft btn-sm" disabled={busy} onClick={() => onApprove('approved')}>
+          <Check size={13} /> Approve
+        </button>
       )}
+      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setOpen(true)}>
+        <RotateCcw size={13} /> Reject &amp; regenerate
+      </button>
+      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onExclude(true)}
+        title="Drop this question from the load — it stays in the list and can be re-included">
+        <Ban size={13} /> Exclude
+      </button>
     </div>
+  )
+}
+
+// Shown before an export/load when some questions are excluded: requires the user to
+// type "confirm" to proceed with only the remaining questions.
+function ConfirmExcludeModal({ excludedCount, proceedingCount, onCancel, onConfirm }) {
+  const [text, setText] = useState('')
+  const ok = text.trim().toLowerCase() === 'confirm'
+  return (
+    <Modal title="Proceed without excluded questions?" size="sm" onClose={onCancel}
+      footer={(
+        <>
+          <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-primary" disabled={!ok} onClick={onConfirm}>
+            <Check size={14} /> Continue
+          </button>
+        </>
+      )}>
+      <p className="confirm-exclude-msg">
+        <strong>{excludedCount}</strong> excluded question{excludedCount === 1 ? '' : 's'} will{' '}
+        <strong>not</strong> be loaded. Proceeding with the remaining{' '}
+        <strong>{proceedingCount}</strong> question{proceedingCount === 1 ? '' : 's'}.
+      </p>
+      <p className="confirm-exclude-hint">Type <code>confirm</code> to continue:</p>
+      <input className="input" autoFocus value={text} spellCheck={false} placeholder="confirm"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && ok) onConfirm() }} />
+    </Modal>
   )
 }
 
@@ -173,18 +228,24 @@ function QuestionCard({ q, lo, index, review }) {
   ;(lean.correct_outputs || []).forEach((c) => answers.push(['Correct', c]))
 
   return (
-    <article className={`qc ${q.needs_human ? 'flagged' : ''}`}>
+    <article className={`qc ${q.needs_human ? 'flagged' : ''} ${q.excluded ? 'excluded' : ''}`}>
       <header className="qc-top">
         <span className="qc-num">{index + 1}</span>
         <span className="qc-type"><Icon size={12} /> {q.question_type.replaceAll('_', ' ')}</span>
         {q.difficulty && <span className={`qc-diff d-${q.difficulty.toLowerCase()}`}>{q.difficulty}</span>}
         <span className="qc-spacer" />
+        {q.excluded && generated && (
+          <span className="qc-badge skip"><Ban size={12} /> excluded</span>
+        )}
         {!generated ? (
           <span className="qc-badge skip">{q.status}</span>
         ) : q.needs_human ? (
           <span className="qc-badge warn"><AlertTriangle size={12} /> needs review</span>
         ) : (
           <span className="qc-badge ok"><CheckCircle2 size={12} /> passed</span>
+        )}
+        {generated && !q.excluded && q.approval === 'approved' && (
+          <span className="qc-badge ok"><Check size={12} /> approved</span>
         )}
       </header>
 
@@ -418,13 +479,18 @@ function TraceRow({ span: s, max }) {
   )
 }
 
-function McqResults({ run }) {
+// `mode`: 'view' (default) shows generation details read-only — used by the generation
+// page and the Runs list. 'review' (Review Queue) adds per-question Approve/Reject and the
+// approval-gated load controls.
+function McqResults({ run, mode = "view", courseId, unitId }) {
+  const review = mode === 'review'
   const toast = useToast()
+  const { user } = useAuth()
   const r = run?.result || {}
   const [questions, setQuestions] = useState(r.questions || [])
-  const [reviewer, setReviewer] = useState('')
   const [busyOutcome, setBusyOutcome] = useState(null)
   const [approved, setApproved] = useState(run?.review_status === 'approved')
+  const [confirm, setConfirm] = useState(null) // { proceed, proceedingCount } when excludes exist
   const [zipBusy, setZipBusy] = useState(false)
   const [zipResult, setZipResult] = useState(null) // { url, filename } of the last generated export
   const [prepOpen, setPrepOpen] = useState(false)
@@ -440,7 +506,7 @@ function McqResults({ run }) {
   async function handleRegenerate(outcome, feedback, tags) {
     setBusyOutcome(outcome)
     try {
-      const { question } = await regenerateMcqQuestion(run.id, outcome, feedback, tags, reviewer)
+      const { question } = await regenerateMcqQuestion(run.id, outcome, feedback, tags)
       setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? question : q)))
       toast.push({ kind: 'success', title: 'Question regenerated', message: `${outcome} updated from your feedback` })
     } catch (e) {
@@ -449,27 +515,41 @@ function McqResults({ run }) {
       setBusyOutcome(null)
     }
   }
-  async function handleAccept(outcome) {
+  async function handleSetApproval(outcome, approval) {
+    setBusyOutcome(outcome)
     try {
-      await submitMcqFeedback(run.id, outcome, { action: 'accept', reviewer })
-      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, _reviewState: 'accepted' } : q)))
+      const res = await setMcqQuestionApproval(run.id, outcome, approval)
+      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, approval: res.approval } : q)))
     } catch (e) {
-      toast.push({ kind: 'error', title: 'Could not save feedback', message: e.message })
+      toast.push({ kind: 'error', title: 'Could not save approval', message: e.message })
+    } finally {
+      setBusyOutcome(null)
+    }
+  }
+  async function handleSetExclusion(outcome, excluded) {
+    setBusyOutcome(outcome)
+    try {
+      const res = await setMcqQuestionExclusion(run.id, outcome, excluded)
+      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, excluded: res.excluded } : q)))
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not update exclusion', message: e.message })
+    } finally {
+      setBusyOutcome(null)
     }
   }
   async function handleApprove() {
     try {
-      await approveMcqRun(run.id, reviewer)
+      await approveMcqRun(run.id)
       setApproved(true)
       toast.push({ kind: 'success', title: 'Run approved', message: 'Questions are ready to export.' })
     } catch (e) {
       toast.push({ kind: 'error', title: 'Approve failed', message: e.message })
     }
   }
-  async function handleGenerateZip() {
+  async function handleGenerateZip(approvedOnly = false) {
     setZipBusy(true)
     try {
-      const { url, filename, total } = await exportMcqRunZip(run.id)
+      const { url, filename, total } = await exportMcqRunZip(run.id, approvedOnly)
       setZipResult({ url, filename })
       window.open(url, '_blank', 'noopener,noreferrer')
       toast.push({ kind: 'success', title: 'ZIP generated', message: `${total} question(s) exported to the portal bucket.` })
@@ -479,7 +559,7 @@ function McqResults({ run }) {
       setZipBusy(false)
     }
   }
-  async function handlePrepareLoad() {
+  async function handlePrepareLoad(approvedOnly = false) {
     if (prepForm.child_order === '' || Number.isNaN(Number(prepForm.child_order))) {
       toast.push({ kind: 'error', title: 'Child order required', message: 'Enter the position under the topic.' })
       return
@@ -493,7 +573,8 @@ function McqResults({ run }) {
         pass_percentage: Number(prepForm.pass_percentage),
         show_answer_scoring_mode: prepForm.show_answer_scoring_mode,
         should_send_solutions: prepForm.should_send_solutions,
-        reviewer_email: reviewer.includes('@') ? reviewer : '',
+        reviewer_email: user?.email || '',
+        approved_only: approvedOnly,
       })
       setPrepResult(res)
       const ok = res.status === 'SUCCESS'
@@ -522,6 +603,21 @@ function McqResults({ run }) {
     () => Object.fromEntries((r.final_los || []).map((lo) => [lo.outcome, lo])), [r.final_los],
   )
   const needsReview = questions.filter((q) => q.needs_human).length
+  // Approval state drives the load gate: every generated question must be approved for the
+  // full load; "load approved only" needs at least one. Mirrors the backend's _result_for_load.
+  // "Remaining" = generated questions the reviewer hasn't excluded; excluded ones stay
+  // in the list (shaded) but drop out of the approval gate and are never loaded.
+  const eligibleQs = questions.filter((q) => q.status === 'generated' && !q.excluded)
+  const excludedCount = questions.filter((q) => q.status === 'generated' && q.excluded).length
+  const approvedCount = eligibleQs.filter((q) => q.approval === 'approved').length
+  const allApproved = eligibleQs.length > 0 && approvedCount === eligibleQs.length
+
+  // When questions are excluded, make the user confirm (type "confirm") before an
+  // export/load proceeds with only the remaining questions.
+  function guardExcluded(proceed, proceedingCount) {
+    if (excludedCount > 0) setConfirm({ proceed, proceedingCount })
+    else proceed()
+  }
   const ragCallCount = useMemo(
     () => (r.questions || []).reduce(
       (n, q) => n + (q.rag_calls?.length || 0) + (q.review_rag_calls?.length || 0), 0),
@@ -533,8 +629,45 @@ function McqResults({ run }) {
 
   const shown = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
 
+  // Reading material sits to the RIGHT of the questions, behind a draggable adjustment bar.
+  // The session is whatever was passed in (generation page) or, in the Runs/Review views,
+  // the run's own course + session ids.
+  const cId = courseId || run?.course_id
+  const uId = unitId || run?.unit_id
+  const showReading = Boolean(cId && uId)
+
+  const splitRef = useRef(null)
+  const [leftPct, setLeftPct] = useState(() => {
+    const saved = Number(localStorage.getItem('mcq-split-left'))
+    return saved >= 30 && saved <= 80 ? saved : 58
+  })
+  const [dragging, setDragging] = useState(false)
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (e) => {
+      const el = splitRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const pct = ((e.clientX - rect.left) / rect.width) * 100
+      setLeftPct(Math.min(80, Math.max(30, pct)))
+    }
+    const onUp = () => setDragging(false)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [dragging])
+  useEffect(() => { localStorage.setItem('mcq-split-left', String(Math.round(leftPct))) }, [leftPct])
+  const onSplitKey = (e) => {
+    if (e.key === 'ArrowLeft') { setLeftPct((p) => Math.max(30, p - 2)); e.preventDefault() }
+    else if (e.key === 'ArrowRight') { setLeftPct((p) => Math.min(80, p + 2)); e.preventDefault() }
+  }
+
   return (
-    <div className="mcq-results">
+    <div className={`mcq-results-split${showReading ? '' : ' no-reading'}${dragging ? ' dragging' : ''}`} ref={splitRef}>
+      <div className="mcq-results" style={showReading ? { flexBasis: `${leftPct}%`, minWidth: 0 } : undefined}>
       {status === 'NEEDS_REVIEW' && (
         <div className="mcq-banner warn">
           <AlertTriangle size={15} />
@@ -554,6 +687,9 @@ function McqResults({ run }) {
           <div className="mcq-tile"><div className="mcq-tile-num">{ragCallCount}</div><div className="mcq-tile-lbl">RAG calls</div></div>
         )}
         <div className="mcq-tile-actions">
+          {run?.version != null && (
+            <span className="mcq-status-chip" title="Generation version for this session">v{run.version}</span>
+          )}
           {status && (
             <span className={`mcq-status-chip ${status === 'FROZEN' ? 'ok' : 'warn'}`}>
               {status === 'FROZEN' ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />} {status}
@@ -597,39 +733,57 @@ function McqResults({ run }) {
                 Needs review {needsReview > 0 && <span className="mcq-chip-n">{needsReview}</span>}
               </button>
             </div>
-            <div className="mcq-review-tools">
-              <input className="input mcq-reviewer" placeholder="Your name (reviewer)"
-                value={reviewer} spellCheck={false} onChange={(e) => setReviewer(e.target.value)} />
-              {approved ? (
-                <span className="mcq-status-chip ok"><ShieldCheck size={12} /> approved</span>
-              ) : (
-                <button className="btn btn-primary btn-sm" onClick={handleApprove}>
-                  <ShieldCheck size={13} /> Approve run
+            {review && (
+              <div className="mcq-review-tools">
+                <span className="mcq-reviewer-as" title="Review actions are attributed to your account">
+                  Reviewing as <strong>{user?.name || user?.email || 'you'}</strong>
+                </span>
+                <span className={`mcq-status-chip ${allApproved ? 'ok' : ''}`} title="Questions you've approved">
+                  {approvedCount} / {eligibleQs.length} approved
+                </span>
+                {excludedCount > 0 && (
+                  <span className="mcq-status-chip" title="Excluded — will not be loaded">
+                    <Ban size={12} /> {excludedCount} excluded
+                  </span>
+                )}
+                {approved ? (
+                  <span className="mcq-status-chip ok"><ShieldCheck size={12} /> run reviewed</span>
+                ) : (
+                  <button className="btn btn-soft btn-sm" onClick={handleApprove}>
+                    <ShieldCheck size={13} /> Mark run reviewed
+                  </button>
+                )}
+                <button className="btn btn-soft btn-sm"
+                  onClick={() => guardExcluded(() => handleGenerateZip(false), eligibleQs.length)}
+                  disabled={zipBusy || !allApproved}
+                  title={allApproved ? '' : 'Approve all remaining questions to export'}>
+                  <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
                 </button>
-              )}
-              <button className="btn btn-primary btn-sm" onClick={handleGenerateZip} disabled={zipBusy}>
-                <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
-              </button>
-              {zipResult && (
-                <a className="mcq-zip-link" href={zipResult.url} target="_blank" rel="noopener noreferrer"
-                  title={zipResult.url}>
-                  <Download size={12} /> <span>{zipResult.filename}</span>
-                </a>
-              )}
-              <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
-                onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy}>
-                <FileSpreadsheet size={13} /> Prepare &amp; Load
-              </button>
-            </div>
+                {zipResult && (
+                  <a className="mcq-zip-link" href={zipResult.url} target="_blank" rel="noopener noreferrer"
+                    title={zipResult.url}>
+                    <Download size={12} /> <span>{zipResult.filename}</span>
+                  </a>
+                )}
+                <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
+                  onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || approvedCount < 1}
+                  title={approvedCount < 1 ? 'Approve at least one question first' : ''}>
+                  <FileSpreadsheet size={13} /> Prepare &amp; Load
+                </button>
+              </div>
+            )}
+            {!review && (
+              <span className="mcq-view-hint">Read-only — approve &amp; load from the Review Queue.</span>
+            )}
           </div>
 
-          {prepOpen && (
+          {review && prepOpen && (
             <div className="mcq-prep-panel">
               <div className="mcq-prep-head">
                 <FileSpreadsheet size={14} />
                 <span>Prepare exam-config sheet &amp; load to beta</span>
                 <span className="mcq-prep-sub">
-                  parent = this session's topic · name = “MCQ Practice” · {questions.filter((q) => q.status === 'generated' || q._reviewState).length || questions.length} question(s)
+                  parent = this session's topic · {approvedCount} of {eligibleQs.length} approved
                 </span>
               </div>
               <div className="mcq-prep-fields">
@@ -663,9 +817,17 @@ function McqResults({ run }) {
                 </label>
               </div>
               <div className="mcq-prep-actions">
-                <button className="btn btn-primary btn-sm" onClick={handlePrepareLoad} disabled={prepBusy}>
+                <button className="btn btn-primary btn-sm"
+                  onClick={() => guardExcluded(() => handlePrepareLoad(false), eligibleQs.length)}
+                  disabled={prepBusy || !allApproved}
+                  title={allApproved ? '' : `Approve all ${eligibleQs.length} remaining questions to enable`}>
                   {prepBusy ? <Spinner size={13} /> : <FileSpreadsheet size={13} />}
-                  {prepBusy ? 'Loading… (up to ~2 min)' : 'Prepare & load'}
+                  {prepBusy ? 'Loading… (up to ~2 min)' : 'Prepare & load all'}
+                </button>
+                <button className="btn btn-soft btn-sm"
+                  onClick={() => guardExcluded(() => handlePrepareLoad(true), approvedCount)}
+                  disabled={prepBusy || approvedCount < 1}>
+                  <FileSpreadsheet size={13} /> Load approved only ({approvedCount})
                 </button>
                 {prepResult && (
                   <span className={`mcq-status-chip ${prepResult.status === 'SUCCESS' ? 'ok' : 'warn'}`}>
@@ -689,13 +851,14 @@ function McqResults({ run }) {
             {shown.map((q) => (
               <QuestionCard key={q.outcome} q={q} lo={loByOutcome[q.outcome]}
                 index={questions.indexOf(q)}
-                review={(
+                review={review && q.status === 'generated' ? (
                   <QuestionReview
                     q={q} busy={busyOutcome === q.outcome}
-                    onAccept={() => handleAccept(q.outcome)}
+                    onApprove={(approval) => handleSetApproval(q.outcome, approval)}
                     onRegenerate={(fb, tags) => handleRegenerate(q.outcome, fb, tags)}
+                    onExclude={(excluded) => handleSetExclusion(q.outcome, excluded)}
                   />
-                )} />
+                ) : null} />
             ))}
             {shown.length === 0 && <p className="muted">No questions in this filter.</p>}
           </div>
@@ -741,6 +904,33 @@ function McqResults({ run }) {
 
       {notes.length > 0 && (
         <div className="mcq-notes">{notes.map((n, i) => <span key={i}>{n}</span>)}</div>
+      )}
+      </div>
+      {showReading && (
+        <>
+          <div
+            className="mcq-splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize reading material panel"
+            aria-valuenow={Math.round(leftPct)}
+            aria-valuemin={30}
+            aria-valuemax={80}
+            tabIndex={0}
+            title="Drag to resize"
+            onMouseDown={(e) => { e.preventDefault(); setDragging(true) }}
+            onKeyDown={onSplitKey}
+          />
+          <ReadingMaterialPane courseId={cId} unitId={uId} />
+        </>
+      )}
+      {confirm && (
+        <ConfirmExcludeModal
+          excludedCount={excludedCount}
+          proceedingCount={confirm.proceedingCount}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => { const p = confirm.proceed; setConfirm(null); p() }}
+        />
       )}
     </div>
   )

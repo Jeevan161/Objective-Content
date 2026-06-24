@@ -5,6 +5,8 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow-x: hidden;   /* never scroll left↔right; wide content scrolls inside its own box */
 }
 
 .mcq-head-left {
@@ -441,7 +443,8 @@
   border-radius: var(--r-full); padding: 0 6px; margin-left: 4px;
 }
 
-.mcq-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.mcq-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
+.mcq-view-hint { font-size: 11.5px; color: var(--text-3); }
 .mcq-filters { display: flex; gap: var(--sp-2); }
 .mcq-chip {
   background: none; border: 1px solid var(--border); border-radius: var(--r-full);
@@ -564,8 +567,34 @@
 .qc-rag-res.bad { color: var(--red); font-weight: 600; }
 
 /* ---------- MCQ: human-in-the-loop review actions ---------- */
-.mcq-review-tools { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+.mcq-review-tools { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-width: 0; }
 .mcq-reviewer { width: 180px; max-width: 40vw; }
+.mcq-reviewer-as { font-size: var(--fs-sm); color: var(--text-3); white-space: nowrap; }
+.mcq-reviewer-as strong { color: var(--text-2); font-weight: 600; }
+
+/* Excluded question — shaded out but kept in the list. */
+.qc.excluded { opacity: 0.55; filter: grayscale(0.4); }
+.qc.excluded:hover { opacity: 0.85; }
+.qc-rev-excluded {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 600; color: var(--text-3);
+}
+
+/* Course-ownership notice on the generation page. */
+.mcq-owner-note {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--amber);
+}
+
+/* Confirm-before-load (excluded questions) dialog. */
+.confirm-exclude-msg { margin-bottom: var(--sp-3); line-height: 1.5; }
+.confirm-exclude-hint { margin-bottom: var(--sp-2); color: var(--text-2); font-size: var(--fs-sm); }
+
+/* "N up-to-date hidden" tag in the ingest modal group header. */
+.ingest-hidden-note {
+  margin-left: var(--sp-2); font-size: 11px; color: var(--text-3);
+  font-weight: 600; white-space: nowrap;
+}
 .mcq-zip-link {
   display: inline-flex; align-items: center; gap: 5px;
   max-width: 220px; font-size: 12px; font-weight: 600;
@@ -1069,14 +1098,244 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .runs-item-date { font-size: 11px; color: var(--text-3); white-space: nowrap; flex-shrink: 0; }
+.runs-item-ver {
+  font-size: 10.5px; font-weight: 600; color: var(--brand); flex-shrink: 0;
+  padding: 1px 6px; border-radius: 999px; background: var(--bg-inset); margin-left: auto;
+}
 .runs-item-stats { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: 11.5px; color: var(--text-2); }
 .runs-item-review { color: var(--amber); }
 .runs-item-approved { display: inline-flex; align-items: center; gap: 3px; color: var(--green); }
 .runs-detail { min-width: 0; }
 
+/* ---------- Review Queue: collapse the run list once a run is open ---------- */
+/* While choosing, the list sits in its column. Once a run is selected the list is hidden
+   behind a small arrow handle; hovering/focusing the handle slides the list out OVER the
+   content, freeing the full width for the questions + reading split until then. */
+.queue-layout.is-collapsed {
+  grid-template-columns: 1fr;
+  position: relative;
+  padding-left: 34px;        /* gutter that holds the collapsed handle, clear of the content */
+}
+.queue-rail { min-width: 0; }                       /* normal grid column while expanded */
+.queue-layout.is-collapsed .queue-rail {
+  position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; width: 0;
+}
+
+/* The small rectangle handle — the only thing visible while collapsed. */
+.queue-handle { display: none; }
+.queue-layout.is-collapsed .queue-handle {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  position: absolute; left: 0; top: 16px;
+  width: 28px; min-height: 96px; padding: 10px 0;
+  border: 1px solid var(--border); border-left: none;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--bg-raised); color: var(--text-2);
+  cursor: pointer; box-shadow: var(--shadow-sm);
+  transition: color var(--t-fast), background var(--t-fast), opacity var(--t-fast);
+}
+.queue-handle:hover { color: var(--brand); background: var(--bg-active); }
+.queue-handle-label {
+  writing-mode: vertical-rl;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+}
+
+/* The list itself: fully hidden until the rail is hovered/focused. */
+.queue-layout.is-collapsed .runs-list {
+  position: absolute; left: 0; top: 0;
+  width: min(320px, 80vw); max-height: calc(100dvh - 160px);
+  margin: 0; padding: var(--sp-2);
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+  overflow-y: auto;
+  opacity: 0; visibility: hidden; transform: translateX(-12px);
+  transition: opacity var(--t-med), transform var(--t-med), visibility var(--t-med);
+}
+.queue-layout.is-collapsed .queue-rail:hover .runs-list,
+.queue-layout.is-collapsed .queue-rail:focus-within .runs-list {
+  opacity: 1; visibility: visible; transform: translateX(0);
+}
+.queue-layout.is-collapsed .queue-rail:hover .queue-handle,
+.queue-layout.is-collapsed .queue-rail:focus-within .queue-handle {
+  opacity: 0; pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .queue-layout.is-collapsed .runs-list { transition: none; }
+}
+
 @media (max-width: 860px) {
   .runs-layout { grid-template-columns: 1fr; }
   .runs-list { max-height: none; flex-direction: row; flex-wrap: wrap; }
   .runs-item { width: auto; flex: 1 1 220px; }
+  /* On small screens the list just stacks normally instead of overlaying. */
+  .queue-layout.is-collapsed .queue-rail { position: static; width: auto; }
+  .queue-layout.is-collapsed .queue-handle { display: none; }
+  .queue-layout.is-collapsed .runs-list {
+    position: static; opacity: 1; visibility: visible; transform: none;
+    width: auto; max-height: none; box-shadow: none;
+  }
+}
+
+
+/* ---------- MCQ: split-pane layout (questions left · reading material right) ---------- */
+/* With a session attached, results and reading sit side by side, each scrolling on its own,
+   fitted to the viewport — no horizontal page scroll. Without one it's a normal block. */
+.mcq-results-split.no-reading { display: block; }
+
+.mcq-results-split:not(.no-reading) {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Fits the window even where the ancestor chain isn't height-bound. */
+  height: 100%;
+  max-height: calc(100dvh - 140px);
+  overflow: hidden;
+}
+.mcq-results-split:not(.no-reading).dragging { cursor: col-resize; user-select: none; }
+
+/* Left pane: the existing results column, now an independent scroll area. */
+.mcq-results-split:not(.no-reading) > .mcq-results {
+  margin-top: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: var(--sp-4);
+  padding-bottom: var(--sp-4);
+}
+
+/* The draggable adjustment bar between the two panes. */
+.mcq-splitter {
+  flex: 0 0 12px;
+  align-self: stretch;
+  cursor: col-resize;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.mcq-splitter::before {
+  content: '';
+  width: 2px;
+  height: 100%;
+  background: var(--border);
+  border-radius: var(--r-full);
+  transition: background var(--t-fast), width var(--t-fast);
+}
+.mcq-splitter:hover::before,
+.mcq-splitter:focus-visible::before,
+.mcq-results-split.dragging .mcq-splitter::before {
+  background: var(--brand);
+  width: 3px;
+}
+.mcq-splitter::after {                 /* grip handle */
+  content: '⋮';
+  position: absolute;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 5px 2px;
+}
+.mcq-splitter:focus-visible { outline: none; }
+
+/* Right pane: reading material. */
+.mcq-split-reading {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.mcq-reading-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset);
+  flex-shrink: 0;
+}
+.mcq-reading-header h3 {
+  margin: 0; font-size: 13px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcq-reading-meta {
+  margin-left: auto; flex-shrink: 0;
+  font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums;
+}
+.mcq-reading-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-4);
+}
+.mcq-reading-body .md { font-size: 13px; line-height: 1.65; color: var(--text-2); }
+.mcq-reading-loading,
+.mcq-reading-error,
+.mcq-reading-empty {
+  font-size: 12.5px;
+  color: var(--text-3);
+  padding: var(--sp-3);
+}
+.mcq-reading-loading { display: flex; align-items: center; gap: var(--sp-2); }
+.mcq-reading-error {
+  display: flex; align-items: center; gap: var(--sp-2);
+  color: var(--red); background: var(--red-soft);
+  border-radius: var(--r-md); padding: var(--sp-3);
+}
+
+/* Markdown inside the reading pane — never let it force horizontal scroll. */
+.mcq-reading-body .md :is(h1, h2, h3) { margin: var(--sp-3) 0 var(--sp-2); font-weight: 600; line-height: 1.3; }
+.mcq-reading-body .md h1 { font-size: 16px; }
+.mcq-reading-body .md h2 { font-size: 14.5px; }
+.mcq-reading-body .md h3 { font-size: 13.5px; }
+.mcq-reading-body .md p { margin: 0 0 var(--sp-2); }
+.mcq-reading-body .md code {
+  background: var(--bg-active); padding: 1px 5px; border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 12px; word-break: break-word;
+}
+.mcq-reading-body .md pre {
+  background: var(--bg-active); padding: var(--sp-3); border-radius: var(--r-md);
+  overflow-x: auto; font-size: 12px; line-height: 1.5; margin: 0 0 var(--sp-2);
+}
+.mcq-reading-body .md pre code { background: none; padding: 0; }
+.mcq-reading-body .md :is(ul, ol) { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
+.mcq-reading-body .md li { margin-bottom: 4px; }
+.mcq-reading-body .md img { max-width: 100%; height: auto; }
+.mcq-reading-body .md table { display: block; overflow-x: auto; max-width: 100%; }
+.mcq-reading-body .md blockquote {
+  border-left: 3px solid var(--border); padding-left: var(--sp-3);
+  margin: 0 0 var(--sp-2); color: var(--text-3);
+}
+
+/* Stack on narrow screens: reading drops below at full width, drag bar hidden. */
+@media (max-width: 1100px) {
+  .mcq-results-split:not(.no-reading) {
+    flex-direction: column;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+  .mcq-results-split:not(.no-reading) > .mcq-results {
+    flex-basis: auto !important;
+    overflow: visible;
+    padding-right: 0;
+  }
+  .mcq-splitter { display: none; }
+  .mcq-split-reading { max-height: 60vh; }
 }
 

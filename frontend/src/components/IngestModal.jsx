@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Database, ListChecks, CheckCircle2 } from 'lucide-react'
+import { Database, ListChecks, CheckCircle2, RefreshCw } from 'lucide-react'
 import Modal from './Modal'
 import { EnvBadge, Skeleton } from './ui'
 import { getCourse } from '../api'
@@ -21,6 +21,8 @@ function collectRows(detail) {
           chars: part.content_chars,
           extracted: part.content_status === 'EXTRACTED',
           ingested: part.is_ingested,
+          // Content changed since it was last ingested → still offer for re-ingestion.
+          stale: Boolean(part.ingest_stale),
           chunks: part.chunk_count,
         })
       }
@@ -28,6 +30,12 @@ function collectRows(detail) {
   }
   return rows
 }
+
+// Hide resources that are already ingested AND unchanged since — only show what's
+// not yet ingested or was modified after its last ingestion.
+const isVisible = (r) => !(r.ingested && !r.stale)
+// Selectable = visible AND has extracted content.
+const isSelectable = (r) => isVisible(r) && r.extracted
 
 function StatusBadge({ row }) {
   if (row.extracted) {
@@ -62,9 +70,9 @@ function IngestModal({ course, onClose, onSubmit }) {
           rows: collectRows(d),
         }))
         setGroups(built)
-        // Everything that can be ingested starts selected.
+        // Everything that can be ingested (not-yet-ingested or modified) starts selected.
         setSelected(
-          new Set(built.flatMap((g) => g.rows.filter((r) => r.extracted).map((r) => r.id))),
+          new Set(built.flatMap((g) => g.rows.filter(isSelectable).map((r) => r.id))),
         )
       } catch (e) {
         toast.push({
@@ -83,7 +91,11 @@ function IngestModal({ course, onClose, onSubmit }) {
   }, [course.course_id])
 
   const selectableIds = useMemo(
-    () => (groups || []).flatMap((g) => g.rows.filter((r) => r.extracted).map((r) => r.id)),
+    () => (groups || []).flatMap((g) => g.rows.filter(isSelectable).map((r) => r.id)),
+    [groups],
+  )
+  const hiddenCount = useMemo(
+    () => (groups || []).reduce((n, g) => n + g.rows.filter((r) => !isVisible(r)).length, 0),
     [groups],
   )
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
@@ -98,7 +110,7 @@ function IngestModal({ course, onClose, onSubmit }) {
   }
 
   function toggleGroup(group) {
-    const ids = group.rows.filter((r) => r.extracted).map((r) => r.id)
+    const ids = group.rows.filter(isSelectable).map((r) => r.id)
     const everySelected = ids.length > 0 && ids.every((id) => selected.has(id))
     setSelected((prev) => {
       const next = new Set(prev)
@@ -117,6 +129,7 @@ function IngestModal({ course, onClose, onSubmit }) {
   }
 
   const totalRows = (groups || []).reduce((n, g) => n + g.rows.length, 0)
+  const totalVisible = (groups || []).reduce((n, g) => n + g.rows.filter(isVisible).length, 0)
 
   return (
     <Modal
@@ -165,11 +178,18 @@ function IngestModal({ course, onClose, onSubmit }) {
           No learning resources with reading material were found. Sync the course (and extract
           content) first.
         </p>
+      ) : totalVisible === 0 ? (
+        <p className="muted">
+          <CheckCircle2 size={13} /> Everything is already ingested and up to date
+          {hiddenCount > 0 ? ` (${hiddenCount} resource${hiddenCount === 1 ? '' : 's'} hidden)` : ''}.
+          Re-extract a learning set to make it available for re-ingestion.
+        </p>
       ) : (
         <>
           <div className="ingest-toolbar">
             <span className="field-hint">
-              Only extracted resources can be ingested — the rest show why they're unavailable.
+              Already-ingested resources are hidden unless modified
+              {hiddenCount > 0 ? ` — ${hiddenCount} up-to-date one${hiddenCount === 1 ? '' : 's'} hidden` : ''}.
             </span>
             <button
               type="button"
@@ -182,9 +202,13 @@ function IngestModal({ course, onClose, onSubmit }) {
           </div>
 
           {groups.map((g) => {
-            const ids = g.rows.filter((r) => r.extracted).map((r) => r.id)
+            const visibleRows = g.rows.filter(isVisible)
+            const ids = g.rows.filter(isSelectable).map((r) => r.id)
             const groupChecked = ids.length > 0 && ids.every((id) => selected.has(id))
             const groupCount = g.rows.filter((r) => selected.has(r.id)).length
+            const groupHidden = g.rows.length - visibleRows.length
+            // Skip a course entirely when it has nothing left to show.
+            if (visibleRows.length === 0) return null
             return (
               <div className="ingest-group" key={g.courseId}>
                 <label className="ingest-group-head">
@@ -202,38 +226,47 @@ function IngestModal({ course, onClose, onSubmit }) {
                   >
                     {groupCount}/{ids.length}
                   </span>
+                  {groupHidden > 0 && (
+                    <span className="ingest-hidden-note" title="Already ingested and unchanged">
+                      {groupHidden} up-to-date hidden
+                    </span>
+                  )}
                 </label>
-                {g.rows.length === 0 ? (
-                  <p className="ingest-empty muted">No learning resources in this course.</p>
-                ) : (
-                  g.rows.map((r) => (
-                    <label
-                      key={r.id}
-                      className={`ingest-row ${r.extracted ? '' : 'disabled'} ${selected.has(r.id) ? 'selected' : ''}`}
-                    >
-                      <input
-                        type="checkbox"
-                        disabled={!r.extracted}
-                        checked={selected.has(r.id)}
-                        onChange={() => toggleRow(r.id)}
-                      />
-                      <span className="ingest-row-main">
-                        <span className="ingest-row-title">{r.session}</span>
-                        <span className="ingest-row-topic">{r.topic}</span>
+                {visibleRows.map((r) => (
+                  <label
+                    key={r.id}
+                    className={`ingest-row ${r.extracted ? '' : 'disabled'} ${selected.has(r.id) ? 'selected' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={!r.extracted}
+                      checked={selected.has(r.id)}
+                      onChange={() => toggleRow(r.id)}
+                    />
+                    <span className="ingest-row-main">
+                      <span className="ingest-row-title">{r.session}</span>
+                      <span className="ingest-row-topic">{r.topic}</span>
+                    </span>
+                    {r.stale && (
+                      <span
+                        className="content-badge stale"
+                        title="Content changed since last ingested — re-ingest to refresh"
+                      >
+                        <RefreshCw size={10} /> modified
                       </span>
-                      {r.ingested && (
-                        <span
-                          className="content-badge ingested"
-                          title="Already indexed in the RAG store"
-                        >
-                          <CheckCircle2 size={10} /> {Number(r.chunks).toLocaleString()} chunk
-                          {r.chunks === 1 ? '' : 's'}
-                        </span>
-                      )}
-                      <StatusBadge row={r} />
-                    </label>
-                  ))
-                )}
+                    )}
+                    {r.ingested && (
+                      <span
+                        className="content-badge ingested"
+                        title="Already indexed in the RAG store"
+                      >
+                        <CheckCircle2 size={10} /> {Number(r.chunks).toLocaleString()} chunk
+                        {r.chunks === 1 ? '' : 's'}
+                      </span>
+                    )}
+                    <StatusBadge row={r} />
+                  </label>
+                ))}
               </div>
             )
           })}

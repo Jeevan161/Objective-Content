@@ -32,6 +32,8 @@ from app.schemas import (
     McqGenerateRequest,
     McqReviewRequest,
     PrepareSheetRequest,
+    QuestionApprovalRequest,
+    QuestionExcludeRequest,
     QuestionFeedbackRequest,
     RagAnswerRequest,
     RagCheckRequest,
@@ -347,8 +349,16 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
     unit_id = (body.unit_id or "").strip()
     if not course_id or not unit_id:
         raise HTTPException(status_code=400, detail="course_id and unit_id are required.")
-    if session.get(Course, course_id) is None:
+    course = session.get(Course, course_id)
+    if course is None:
         raise HTTPException(status_code=404, detail="Course not found.")
+    # Only the user who added (first synced) the course may generate for it. Admins
+    # bypass; unowned (legacy) courses stay open.
+    owner = getattr(course, "created_by", None)
+    if owner is not None and owner != user.id and user.role != User.ROLE_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the user who added this course can generate MCQs for it.")
 
     # The selected session must have extracted reading-material content somewhere
     # in the unit that owns this part (mirrors the MCQ-page gate).
@@ -473,10 +483,13 @@ async def mcq_job_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
 def list_mcq_runs(
     course_id: str | None = None, unit_id: str | None = None, limit: int = 10,
     session: Session = Depends(get_session),
+    user: User = Depends(require_active),
 ) -> list[dict]:
     """Recent MCQ runs (summaries, no full result), newest first; optionally scoped
-    to a course/session."""
+    to a course/session. Scoped to the current user's own runs (admins see all)."""
     stmt = select(McqRun).order_by(McqRun.created_at.desc()).limit(max(1, min(limit, 50)))
+    if user.role != User.ROLE_ADMIN:
+        stmt = stmt.where(McqRun.created_by == user.id)
     if course_id:
         stmt = stmt.where(McqRun.course_id == course_id)
     if unit_id:
@@ -486,9 +499,15 @@ def list_mcq_runs(
 
 
 @router.get("/courses/mcq/runs/{run_id}/")
-def get_mcq_run(run_id: uuid.UUID, session: Session = Depends(get_session)) -> dict:
+def get_mcq_run(run_id: uuid.UUID, session: Session = Depends(get_session),
+                user: User = Depends(require_active)) -> dict:
     run = session.get(McqRun, run_id)
     if run is None:
+        raise HTTPException(status_code=404, detail="MCQ run not found.")
+    # A user may only open their own runs (admins see all). 404 (not 403) so a run's
+    # existence isn't leaked across users.
+    if (run.created_by is not None and run.created_by != user.id
+            and user.role != User.ROLE_ADMIN):
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     return serialize_mcq_run(run)
 
@@ -499,20 +518,48 @@ def _export_filename(run) -> str:
     return f"{safe}_MCQ_export.zip"
 
 
+def _result_for_load(run, approved_only: bool) -> dict:
+    """Gate loading on human approval and return the result payload to export.
+
+    `approved_only=False` (the default "Load all") requires EVERY generated question to be
+    approved. `approved_only=True` ("Load approved only") loads just the approved subset and
+    only requires at least one. Raises 409 when the gate isn't met."""
+    result = run.result or {}
+    # Excluded questions stay in the run but are never loaded.
+    eligible = [q for q in (result.get("questions") or [])
+                if q.get("status") == "generated" and not q.get("excluded")]
+    approved = [q for q in eligible if q.get("approval") == "approved"]
+    if approved_only:
+        if not approved:
+            raise HTTPException(status_code=409,
+                detail="No questions are approved yet — approve at least one to load.")
+        return {**result, "questions": approved}
+    if not eligible or len(approved) != len(eligible):
+        raise HTTPException(status_code=409,
+            detail=f"Approve all {len(eligible)} questions before loading, "
+                   f"or use 'Load approved only' ({len(approved)} approved).")
+    return result
+
+
 @router.post("/courses/mcq/runs/{run_id}/export-beta/")
-def export_mcq_run_to_beta(run_id: uuid.UUID, session: Session = Depends(get_session),
+def export_mcq_run_to_beta(run_id: uuid.UUID, approved_only: bool = False,
+                           session: Session = Depends(get_session),
                            user: User = Depends(require_active)) -> dict:
     """Build the portal-format export ZIP for a run (in memory) and upload it to the
     BETA content-loading S3 bucket; return the public URL. Nothing is stored on the
-    server — the ZIP is derived on demand from the run's stored questions."""
+    server — the ZIP is derived on demand from the run's stored questions.
+
+    Gated on human approval: by default every question must be approved; pass
+    `approved_only=true` to export just the approved subset."""
     from app.mcq_pipeline.portal_export import ExportValidationError, build_zip_bytes
     from app.services.beta_s3 import upload_bytes
 
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    payload = _result_for_load(run, approved_only)
     try:
-        data, info = build_zip_bytes(run.result or {})
+        data, info = build_zip_bytes(payload)
     except ExportValidationError as err:
         raise HTTPException(status_code=400, detail={"message": "Export validation failed",
                                                      "errors": err.errors}) from err
@@ -559,9 +606,12 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
     # the ZIP, so the loader can match the questions file to the exam unit.
     resource_id = str(uuid.uuid4())
 
+    # Gate on human approval (all approved, or just the approved subset when approved_only).
+    payload = _result_for_load(run, body.approved_only)
+
     # 1. Build the portal-format questions ZIP (in memory), named <resource_id>.json.
     try:
-        data, info = build_zip_bytes(run.result or {}, batch_id=resource_id)
+        data, info = build_zip_bytes(payload, batch_id=resource_id)
     except ExportValidationError as err:
         raise HTTPException(status_code=400, detail={"message": "Export validation failed",
                                                      "errors": err.errors}) from err
@@ -588,7 +638,7 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
             pass_percentage=body.pass_percentage / 100.0,
             show_answer_scoring_mode=body.show_answer_scoring_mode,
             should_send_solutions=body.should_send_solutions,
-            share_emails=[body.reviewer_email] if body.reviewer_email else None,
+            share_emails=[(body.reviewer_email or "").strip() or user.email],
         )
     except Exception as err:  # noqa: BLE001
         log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
@@ -635,13 +685,22 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
 
 
 # --- Human-in-the-loop review (Gate B): feedback + regenerate + approve --------- #
+def _reviewer_name(user: User) -> str:
+    """Attribution for a review action — taken from the authenticated user (we no
+    longer ask the reviewer to type their name). Prefer the display name, fall back
+    to the email so it's never blank."""
+    return (user.name or "").strip() or user.email
+
+
 @router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/regenerate/")
 def regenerate_mcq_question(run_id: uuid.UUID, outcome: str,
                             body: RegenerateQuestionRequest,
-                            session: Session = Depends(get_session)) -> dict:
+                            session: Session = Depends(get_session),
+                            user: User = Depends(require_active)) -> dict:
     """Regenerate one question for its LO with the reviewer's feedback injected,
     re-review it, persist (with revision history), and log the feedback. Synchronous
-    (a few LLM calls) — the reviewer is actively waiting on the screen."""
+    (a few LLM calls) — the reviewer is actively waiting on the screen. The reviewer
+    is taken from the authenticated user, not the request body."""
     if session.get(McqRun, run_id) is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     if not (body.feedback or "").strip():
@@ -649,7 +708,7 @@ def regenerate_mcq_question(run_id: uuid.UUID, outcome: str,
     from app.mcq_pipeline.review import regenerate_question
     try:
         question = regenerate_question(run_id, outcome, body.feedback,
-                                       reviewer=body.reviewer, tags=body.tags)
+                                       reviewer=_reviewer_name(user), tags=body.tags)
     except ValueError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
     except Exception as err:  # noqa: BLE001 — surface generation failure
@@ -660,21 +719,56 @@ def regenerate_mcq_question(run_id: uuid.UUID, outcome: str,
 @router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/feedback/")
 def submit_mcq_feedback(run_id: uuid.UUID, outcome: str,
                         body: QuestionFeedbackRequest,
-                        session: Session = Depends(get_session)) -> dict:
+                        session: Session = Depends(get_session),
+                        user: User = Depends(require_active)) -> dict:
     if session.get(McqRun, run_id) is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     from app.mcq_pipeline.review import record_feedback
     return record_feedback(run_id, outcome, action=body.action, tags=body.tags,
-                           comment=body.comment, reviewer=body.reviewer)
+                           comment=body.comment, reviewer=_reviewer_name(user))
+
+
+@router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/approval/")
+def set_mcq_question_approval(run_id: uuid.UUID, outcome: str,
+                             body: QuestionApprovalRequest,
+                             session: Session = Depends(get_session),
+                             user: User = Depends(require_active)) -> dict:
+    """Set a human approval decision (approved / rejected / pending) on one question.
+    Drives the per-question count that gates loading."""
+    if session.get(McqRun, run_id) is None:
+        raise HTTPException(status_code=404, detail="MCQ run not found.")
+    from app.mcq_pipeline.review import set_question_approval
+    try:
+        return set_question_approval(run_id, outcome, body.approval, reviewer=_reviewer_name(user))
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+@router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/exclude/")
+def set_mcq_question_exclusion(run_id: uuid.UUID, outcome: str,
+                              body: QuestionExcludeRequest,
+                              session: Session = Depends(get_session),
+                              user: User = Depends(require_active)) -> dict:
+    """Exclude a question from export/load (or include it again). It stays in the run,
+    shaded out, but drops from the approval tally and is never loaded."""
+    if session.get(McqRun, run_id) is None:
+        raise HTTPException(status_code=404, detail="MCQ run not found.")
+    from app.mcq_pipeline.review import set_question_exclusion
+    try:
+        return set_question_exclusion(run_id, outcome, body.excluded,
+                                      reviewer=_reviewer_name(user))
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
 
 
 @router.post("/courses/mcq/runs/{run_id}/approve/")
 def approve_mcq_run(run_id: uuid.UUID, body: ApproveRunRequest,
-                    session: Session = Depends(get_session)) -> dict:
+                    session: Session = Depends(get_session),
+                    user: User = Depends(require_active)) -> dict:
     if session.get(McqRun, run_id) is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     from app.mcq_pipeline.review import approve_run
-    return approve_run(run_id, reviewer=body.reviewer)
+    return approve_run(run_id, reviewer=_reviewer_name(user))
 
 
 @router.get("/courses/mcq/feedback/insights/")
@@ -697,6 +791,27 @@ def extract_info(course_id: str, session: Session = Depends(get_session)) -> dic
         "token_required": environments_needing_token(session, course),
     }
 
+
+
+@router.get("/courses/{course_id}/units/{unit_id}/content/")
+def get_unit_content(course_id: str, unit_id: str, session: Session = Depends(get_session)) -> dict:
+    """Get the reading material content for a unit (session).
+    Returns { title, content, content_chars }."""
+    stmt = select(UnitPart).where(
+        UnitPart.unit_id == unit_id,
+        UnitPart.label == READING_MATERIAL_LABEL,
+    )
+    part = session.scalars(stmt).first()
+    if not part or not part.content:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Reading material not found or not extracted.",
+        )
+    return {
+        "title": part.name or "Reading Material",
+        "content": part.content,
+        "content_chars": len(part.content or ""),
+    }
 
 # --------------------------------------------------------------------------- #
 # Listing / detail — declared last
@@ -748,9 +863,32 @@ def course_detail(course_id: str, session: Session = Depends(get_session)) -> di
         ).all()
     )
     issue_counts = _content_issue_counts(session, scope_ids)
+    # "Stale ingest" = a part whose content was extracted AFTER its chunks were built
+    # (i.e. modified since it was last ingested) — those should still be offered for
+    # re-ingestion, while up-to-date ingested parts are hidden.
+    min_chunk_at = dict(
+        session.execute(
+            select(RagChunk.unit_part_id, func.min(RagChunk.created_at))
+            .where(RagChunk.course_id == course.course_id)
+            .group_by(RagChunk.unit_part_id)
+        ).all()
+    )
+    part_extracted = dict(
+        session.execute(
+            select(UnitPart.id, UnitPart.content_extracted_at)
+            .join(Unit, UnitPart.container_id == Unit.id)
+            .join(Topic, Unit.topic_id == Topic.id)
+            .where(Topic.course_id == course.course_id)
+        ).all()
+    )
+    stale_part_ids = {
+        pid for pid, ext in part_extracted.items()
+        if ext is not None and min_chunk_at.get(pid) is not None and ext > min_chunk_at[pid]
+    }
     return serialize_course_detail(
         course,
         part_counts=part_counts,
         course_counts=course_counts,
         issue_counts=issue_counts,
+        stale_part_ids=stale_part_ids,
     )

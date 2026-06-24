@@ -219,3 +219,32 @@
   }
 }
 
+/* ---------- application feedback form ---------- */
+.feedback-form { display: flex; flex-direction: column; gap: var(--sp-4); }
+.feedback-field { display: flex; flex-direction: column; gap: var(--sp-2); }
+.feedback-label { font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
+
+.emoji-rating { display: flex; gap: var(--sp-2); }
+.emoji-btn {
+  font-size: 26px; line-height: 1;
+  width: 46px; height: 46px;
+  display: grid; place-items: center;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
+}
+.emoji-btn:hover { transform: translateY(-2px) scale(1.06); border-color: var(--border-strong); }
+.emoji-btn.selected {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  transform: translateY(-2px) scale(1.08);
+}
+.emoji-btn.dimmed { opacity: 0.45; }
+.emoji-btn.dimmed:hover { opacity: 1; }
+
+.feedback-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.feedback-helpful { display: flex; gap: var(--sp-2); }
+.feedback-textarea { resize: vertical; min-height: 84px; font-family: inherit; }
+

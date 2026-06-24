@@ -12,6 +12,7 @@ import {
   Plug,
   ShieldCheck,
   UserCircle,
+  MessageSquarePlus,
   X,
   ChevronsLeft,
   ChevronsRight,
@@ -26,7 +27,7 @@ const NAV = [
   { key: 'runs', label: 'Runs', icon: History },
   { key: 'pipeline', label: 'MCQ Pipeline', icon: Workflow },
   { key: 'llm-providers', label: 'LLM Connectors', icon: Plug },
-  { key: 'review', label: 'Review Queue', icon: ClipboardCheck, soon: true },
+  { key: 'review', label: 'Review Queue', icon: ClipboardCheck },
 ]
 
 function Sidebar({
@@ -42,6 +43,7 @@ function Sidebar({
   onToggleCollapse,
   user = null,
   onOpenAccount,
+  onOpenFeedback,
 }) {
   // On mobile the sidebar is a drawer: navigating should dismiss it.
   const go = (key) => {
@@ -116,6 +118,11 @@ function Sidebar({
       </nav>
 
       <div className="sidebar-footer">
+        <button className="nav-item" onClick={() => { onOpenFeedback?.(); onClose?.() }}
+          {...tip('Send feedback')}>
+          <MessageSquarePlus size={16} />
+          <span>Feedback</span>
+        </button>
         {user && (
           <button className="nav-item nav-account" onClick={() => { onOpenAccount?.(); onClose?.() }}
             {...tip(user.name || user.email)}>
