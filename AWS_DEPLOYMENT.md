@@ -134,7 +134,7 @@ docker --version && docker compose version
 git clone https://github.com/Jeevan161/Objective-Content.git
 # Username: your GitHub user   |   Password: your fine-grained PAT (Contents: Read)
 cd Objective-Content
-git checkout dev-jeevan
+git checkout main        # deployment branch (skip if main is the repo's default — clone lands on it)
 git config --global credential.helper store   # optional: remember the PAT for next pull
 ```
 
