@@ -8,9 +8,10 @@ legacy LearningOutcome shape, and the (unchanged) question stage follows:
     START → parse_structure → generate_outcomes → map_concepts → build_outcome_graph
           → profile_depth → plan_outcomes
           → resolve_prerequisites → review_outcomes_quality (dedup + R1–R8) → validate ─cond─┐
-                pass / retries-exhausted → review_outcomes (HITL gate) │ still-fixable → repair ↺
-                the gate's per-LO reject → repair (regenerate with feedback) ↺ → ... → gate
-          → finalize → lo_to_legacy → sequence_outcomes (deep-dive order)
+                pass / retries-exhausted → finalize │ still-fixable → repair ↺
+          → finalize → lo_to_legacy → sequence_outcomes (basic→advanced)
+          → review_outcomes (HITL gate — reviewer sees the sequenced order)
+                the gate's per-LO reject → repair (regenerate w/ feedback) ↺ → ... → sequence → gate
           → recommend_question_types → generate_questions → review_questions → END
 
 Run-scoped objects (RagAdapter, ProgressReporter) ride in a RunContext keyed by
@@ -141,8 +142,16 @@ def review_outcomes(state, config) -> dict:
         return {}
     prog = _prog(config)
     prog.start("review_outcomes", detail="awaiting human review")
+    # The gate now runs AFTER sequence_outcomes, so present the outcomes in the
+    # basic→advanced order the questions will follow (clearer to review). final_los[*].outcome
+    # == outcomes[*].id; any id missing from the sequence falls to the end, order preserved.
+    outcomes = state.get("outcomes", [])
+    seq_ids = [lo.get("outcome") for lo in (state.get("final_los") or [])]
+    if seq_ids:
+        rank = {oid: i for i, oid in enumerate(seq_ids)}
+        outcomes = sorted(outcomes, key=lambda o: rank.get(o.get("id"), len(rank)))
     from langgraph.types import interrupt
-    decision = interrupt({"gate": "outcomes", "outcomes": state.get("outcomes", []),
+    decision = interrupt({"gate": "outcomes", "outcomes": outcomes,
                           "reviews": state.get("lo_reviews", {}),
                           "regenerated_ids": list(state.get("last_regenerated_ids") or [])})
     decision = decision if isinstance(decision, dict) else {"action": "approve"}
@@ -194,11 +203,12 @@ def route_after_validate(state) -> str:
 
 
 def route_after_outcomes(state) -> str:
-    """approve / inert → finalize ; per-LO reject → repair (regenerate the rejected LOs)."""
+    """approve / inert → continue to questions ; per-LO reject → repair (regenerate the
+    rejected LOs, which re-runs finalize → sequence → gate)."""
     d = state.get("gate_decision") or {}
     if d.get("gate") == "outcomes" and d.get("action") == "reject" and d.get("rejected_ids"):
         return "repair"
-    return "finalize"
+    return "continue"
 
 
 # --- checkpointer (durable, shared) ---------------------------------------- #
@@ -277,13 +287,14 @@ def build_lo_graph(*, checkpointer=None):
     g.add_edge("resolve_prerequisites", "review_outcomes_quality")
     g.add_edge("review_outcomes_quality", "validate")
     g.add_conditional_edges("validate", route_after_validate,
-                            {"repair": "repair", "finalize": "review_outcomes"})
-    g.add_conditional_edges("review_outcomes", route_after_outcomes,
                             {"repair": "repair", "finalize": "finalize"})
     g.add_edge("repair", "resolve_prerequisites")
     g.add_edge("finalize", "lo_to_legacy")
     g.add_edge("lo_to_legacy", "sequence_outcomes")
-    g.add_edge("sequence_outcomes", "recommend_question_types")
+    # HITL gate now sits AFTER sequencing, so the reviewer sees the basic→advanced order.
+    g.add_edge("sequence_outcomes", "review_outcomes")
+    g.add_conditional_edges("review_outcomes", route_after_outcomes,
+                            {"repair": "repair", "continue": "recommend_question_types"})
     g.add_edge("recommend_question_types", "generate_questions")
     g.add_edge("generate_questions", "review_questions")
     g.add_edge("review_questions", END)

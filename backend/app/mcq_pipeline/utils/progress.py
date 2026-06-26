@@ -35,10 +35,10 @@ STAGE_DEFS = [
     {"key": "review_outcomes_quality", "label": "Dedup & judge (R1–R8 rubric)"},
     {"key": "validate", "label": "Validate (structural + rubric gate)"},
     {"key": "repair", "label": "Repair (regenerate, if needed)"},
-    {"key": "review_outcomes", "label": "Review outcomes (human gate 2)"},
     {"key": "finalize", "label": "Finalize & freeze"},
     {"key": "lo_to_legacy", "label": "Bridge to questions"},
     {"key": "sequence_outcomes", "label": "Sequence outcomes (deep-dive order)"},
+    {"key": "review_outcomes", "label": "Review outcomes (human gate 2)"},
     # Question stage — unchanged.
     {"key": "recommend_question_types", "label": "Pick question types"},
     {"key": "generate_questions", "label": "Generate questions"},
