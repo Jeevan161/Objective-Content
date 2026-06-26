@@ -14,6 +14,7 @@ threadpool — mirrors `app/services/jobs.py`).
 from __future__ import annotations
 
 import re
+import threading
 
 from app.db.session import SessionLocal
 from app.services import rag_search
@@ -89,6 +90,11 @@ class RagAdapter:
         self.unit_ids = unit_ids or None
         # Whether this session actually shows code — gates code-path question types.
         self.has_code = detect_code(self.reading_material)
+        # Per-run memo for idempotent RAG probes (check_concept / code_coverage): the same
+        # term recurs across many LOs/questions in a run, so cache the result on the adapter
+        # (one per run -> dropped with the run). Thread-safe for the per-LO worker pool.
+        self._rag_memo: dict = {}
+        self._rag_memo_lock = threading.Lock()
 
     # --- retrieval ---------------------------------------------------------- #
     def search(self, query: str, *, top_k: int = 6) -> list[dict]:

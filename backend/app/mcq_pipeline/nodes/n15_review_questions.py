@@ -425,26 +425,35 @@ def _external_ref(lean: dict) -> str | None:
 
 
 class _DistractorVerdict(BaseModel):
+    index: int = Field(description="the 1-based index of the distractor being judged "
+                                   "(matches the numbered DISTRACTORS list in the prompt)")
     evaluable: bool = Field(description="true if a learner could tell WHY this distractor is "
                                         "wrong using ONLY the material, at the required depth")
     reason: str = Field(description="one line: what understanding is needed, and whether the material teaches it")
 
 
+class _DistractorBatchVerdict(BaseModel):
+    verdicts: List[_DistractorVerdict] = Field(
+        description="exactly one verdict per numbered distractor, carrying that distractor's index")
+
+
 _DISTRACTOR_DEPTH_AUDIT = register("review.distractor_depth_audit", (
-    "You check whether a learner could tell WHY a wrong answer (distractor) is wrong using "
+    "You check whether a learner could tell WHY each wrong answer (distractor) is wrong using "
     "ONLY the material. You are given the question's target concept, the DEPTH the learner is "
-    "expected to have, the distractor, and the material. Decide whether the concept or "
-    "relationship that makes this distractor WRONG is taught to AT LEAST the required depth "
-    "(recall = the relevant fact is stated; understand = it is explained with reasoning). A "
-    "distractor whose wrongness depends on a concept only mentioned in passing, or on outside "
-    "knowledge, is NOT evaluable. Be strict; when unsure, say NOT evaluable."
+    "expected to have, a NUMBERED LIST of distractors, and the material. For EACH distractor, "
+    "decide whether the concept or relationship that makes it WRONG is taught to AT LEAST the "
+    "required depth (recall = the relevant fact is stated; understand = it is explained with "
+    "reasoning). A distractor whose wrongness depends on a concept only mentioned in passing, or "
+    "on outside knowledge, is NOT evaluable. Be strict; when unsure, say NOT evaluable. Return "
+    "exactly one verdict per distractor, each carrying that distractor's 1-based index."
 ))
 
 
 def _audit_distractor_depth(lo: dict, qtype: str, lean: dict, ctx: str) -> list[dict]:
-    """For understand+/apply LOs, verify each WRONG option is evaluable from taught material
-    at the expected depth (one Bloom level below the LO). One LLM call per distractor; never
-    blocks review on its own failure. Recall-level LOs skip (distractors are recognition)."""
+    """For understand+/apply LOs, verify each WRONG option is evaluable from taught material at
+    the expected depth (one Bloom level below the LO). ONE batched LLM call per question (all
+    distractors judged together) instead of one call per distractor; never blocks review on its
+    own failure. Recall-level LOs skip (distractors are recognition)."""
     if qtype not in OPTION_TYPES:
         return []
     bloom = (lo.get("bloom_category") or "").lower()
@@ -452,31 +461,41 @@ def _audit_distractor_depth(lo: dict, qtype: str, lean: dict, ctx: str) -> list[
         return []
     depth = lo.get("expected_distractor_depth") or ("understand" if bloom != "understand" else "remember")
     concept = lo.get("concept") or lo.get("description") or ""
+
+    # Number the distractors so the batched verdict can map back by index.
+    distractors = [(o.get("content") or "").strip()
+                   for o in (lean.get("options") or []) if not o.get("is_correct")]
+    distractors = [d for d in distractors if d]
+    if not distractors:
+        return []
+
+    numbered = "\n".join(f"{i}. {d}" for i, d in enumerate(distractors, start=1))
+    usr = (f"TARGET CONCEPT: {concept}\nREQUIRED DEPTH to judge a distractor: {depth}\n\n"
+           f"DISTRACTORS (each a wrong option):\n{numbered}\n\n"
+           f"MATERIAL (ground truth):\n{(ctx or '')[:8000]}")
+    try:
+        batch = _review_model(0).with_structured_output(_DistractorBatchVerdict).invoke(
+            [{"role": "system", "content": get_prompt("review.distractor_depth_audit", _DISTRACTOR_DEPTH_AUDIT)},
+             {"role": "user", "content": usr}])
+    except Exception:  # noqa: BLE001 — never block review on the audit
+        return []
+
     issues: list[dict] = []
-    for o in (lean.get("options") or []):
-        if o.get("is_correct"):
+    for v in (batch.verdicts or []):
+        if v.evaluable:
             continue
-        content = (o.get("content") or "").strip()
-        if not content:
+        if not (1 <= v.index <= len(distractors)):   # guard against an out-of-range index
             continue
-        usr = (f"TARGET CONCEPT: {concept}\nREQUIRED DEPTH to judge a distractor: {depth}\n\n"
-               f"DISTRACTOR (a wrong option): {content}\n\nMATERIAL (ground truth):\n{(ctx or '')[:8000]}")
-        try:
-            v = _review_model(0).with_structured_output(_DistractorVerdict).invoke(
-                [{"role": "system", "content": get_prompt("review.distractor_depth_audit", _DISTRACTOR_DEPTH_AUDIT)},
-                 {"role": "user", "content": usr}])
-        except Exception:  # noqa: BLE001 — never block review on the audit
-            continue
-        if not v.evaluable:
-            issues.append({
-                "rule": "DISTRACTOR DEPTH",
-                "problem": f"a learner cannot tell why the option {content!r} is wrong from the material "
-                           f"(needs {depth}-depth understanding the material doesn't give): {v.reason}",
-                "severity": "high",
-                "suggested_fix": "rebuild this distractor so its wrongness rests on a concept the material "
-                                 "teaches to the required depth, or make it a recognition-level wrong option "
-                                 "that needs no untaught reasoning",
-            })
+        content = distractors[v.index - 1]
+        issues.append({
+            "rule": "DISTRACTOR DEPTH",
+            "problem": f"a learner cannot tell why the option {content!r} is wrong from the material "
+                       f"(needs {depth}-depth understanding the material doesn't give): {v.reason}",
+            "severity": "high",
+            "suggested_fix": "rebuild this distractor so its wrongness rests on a concept the material "
+                             "teaches to the required depth, or make it a recognition-level wrong option "
+                             "that needs no untaught reasoning",
+        })
     return issues
 
 
