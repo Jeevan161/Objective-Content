@@ -52,3 +52,5 @@ Thumbs.db
 
 # ───────────────────────────── Claude Code (local only) ──────────────────
 .claude/settings.local.json
+feedback_dump.json
+backend/feedback_dump.json

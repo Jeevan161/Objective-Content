@@ -260,6 +260,12 @@ function QuestionCard({ q, lo, index, review }) {
         </div>
       )}
 
+      {q.lo_alignment_note && (
+        <div className="qc-note">
+          <AlertTriangle size={12} /> {q.lo_alignment_note}
+        </div>
+      )}
+
       {!generated ? (
         <Field label="Status"><p className="qc-muted">{q.reason || 'Not generated.'}</p></Field>
       ) : (
