@@ -59,6 +59,11 @@ export const startSync = (payload) =>
 
 export const getJob = (jobId) => request(`/courses/jobs/${jobId}/`)
 
+// List the caller's jobs (active-only by default) so any browser tab shows the same
+// in-flight Activity, not just the tab that started a job.
+export const listJobs = (activeOnly = true) =>
+  request(`/courses/jobs/?active=${activeOnly ? 1 : 0}`)
+
 // WebSocket URL for live job progress (replaces polling). Same `/api` prefix, so Vite proxies it
 // (ws: true) to the backend in dev; in prod it rides the same host the page was served from.
 export const mcqJobWsUrl = (jobId) => {

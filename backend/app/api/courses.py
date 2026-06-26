@@ -320,6 +320,23 @@ def rag_answer(body: RagAnswerRequest, session: Session = Depends(get_session)) 
     return answer(session, course_ids=course_ids, query=body.query, top_k=top_k)
 
 
+@router.get("/courses/jobs/")
+def list_jobs(active: bool = False, limit: int = 50,
+              session: Session = Depends(get_session),
+              user: User = Depends(require_active)) -> list[dict]:
+    """List the caller's recent jobs (admins see everyone's), newest first. With
+    `active=true`, only unsettled jobs (PENDING/RUNNING/AWAITING_REVIEW) — used so every
+    browser tab can show the same in-flight Activity, not just the tab that started a job."""
+    q = select(SyncJob).order_by(SyncJob.updated_at.desc())
+    if user.role != User.ROLE_ADMIN:
+        q = q.where(SyncJob.created_by == user.id)
+    if active:
+        q = q.where(SyncJob.status.in_(
+            [SyncJob.PENDING, SyncJob.RUNNING, SyncJob.AWAITING_REVIEW]))
+    rows = session.scalars(q.limit(max(1, min(limit, 200)))).all()
+    return [serialize_job(r) for r in rows]
+
+
 @router.get("/courses/jobs/{job_id}/")
 def job_status(job_id: uuid.UUID, session: Session = Depends(get_session)) -> dict:
     job = session.get(SyncJob, job_id)

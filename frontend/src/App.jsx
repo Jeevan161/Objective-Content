@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus, Search, LayoutGrid, ChevronsUpDown, ChevronsDownUp } from 'lucide-react'
-import { startSync, getJob, getCourses, extractContent, ingestContent, cancelMcqJob } from './api'
+import { startSync, getJob, listJobs, getCourses, extractContent, ingestContent, cancelMcqJob } from './api'
 import Sidebar from './components/Sidebar'
 import MobileBar from './components/MobileBar'
 import JobsDrawer from './components/JobsDrawer'
@@ -173,6 +173,29 @@ function Workspace() {
     }, 2000)
     return () => clearTimeout(timer)
   }, [jobs, refreshCourses, toast])
+
+  // Discover active jobs started elsewhere (other tabs/sessions) so Activity is consistent
+  // across tabs — not just the tab that started a job. The per-job poll loop above then
+  // tracks each to completion. Only ADDS unseen jobs; never resurrects locally-dismissed ones.
+  useEffect(() => {
+    let stopped = false
+    const sync = async () => {
+      try {
+        const server = await listJobs(true)
+        if (stopped || !Array.isArray(server)) return
+        setJobs((prev) => {
+          const have = new Set(prev.map((j) => j.id))
+          const fresh = server.filter((j) => !have.has(j.id))
+          return fresh.length ? [...fresh, ...prev] : prev
+        })
+      } catch {
+        /* ignore — transient */
+      }
+    }
+    sync()
+    const timer = setInterval(sync, 4000)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [])
 
   function beginSync(payload) {
     startSync(payload)
