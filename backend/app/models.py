@@ -69,6 +69,10 @@ class Course(Base):
     multimedia_url: Mapped[str] = mapped_column(String(1000), default="")
     course_category: Mapped[str] = mapped_column(String(255), default="")
     course_link: Mapped[str] = mapped_column(String(1000), default="")
+    # Question DOMAIN for MCQ generation, set per course (e.g. "SQL"). Empty = generic.
+    # Deterministically activates domain-specific generation/review rules for the WHOLE
+    # run (read into RagAdapter.domain), instead of guessing the domain per outcome.
+    question_domain: Mapped[str] = mapped_column(String(16), default="")
 
     selected_courseversion_id: Mapped[str] = mapped_column(String(64), default="")
     selected_version_id: Mapped[str] = mapped_column(String(64), default="")

@@ -147,6 +147,7 @@ def build_adapter(course_id: str, unit_id: str, prereq_unit_ids: list[str] | Non
     adapter = RagAdapter(
         course_ids=course_ids, prereq_units=prereq_units,
         reading_material=reading_material, ingested=ingested, unit_ids=unit_filter,
+        domain=getattr(course, "question_domain", "") or "",
     )
     return adapter, prereq_units, session_label
 
@@ -247,6 +248,7 @@ def run_mcq_pipeline(
     adapter = RagAdapter(
         course_ids=course_ids, prereq_units=prereq_units,
         reading_material=reading_material, ingested=ingested, unit_ids=unit_filter,
+        domain=getattr(course, "question_domain", "") or "",
     )
     progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id))
 

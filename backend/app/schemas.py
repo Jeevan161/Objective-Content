@@ -11,9 +11,13 @@ ModelSerializers produced (has_content, content_chars, topic_count, …).
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.models import Course, SyncJob, Topic, Unit, UnitPart
+
+# Allowed per-course MCQ generation domains. "" = generic (default); "SQL" activates
+# the SQL generation/review rule blocks for the whole run. Extend as new domains land.
+ALLOWED_QUESTION_DOMAINS = {"", "SQL"}
 
 
 # --------------------------------------------------------------------------- #
@@ -98,6 +102,21 @@ class QuestionFeedbackRequest(BaseModel):
 
 class ApproveRunRequest(BaseModel):
     reviewer: str = ""
+
+
+class CourseSettingsRequest(BaseModel):
+    """Per-course MCQ-generation settings. `question_domain` activates a domain's
+    rule blocks for every run of this course (e.g. "SQL"); "" = generic."""
+    question_domain: str = ""
+
+    @field_validator("question_domain")
+    @classmethod
+    def _norm_domain(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if v not in ALLOWED_QUESTION_DOMAINS:
+            raise ValueError(
+                f"question_domain must be one of {sorted(ALLOWED_QUESTION_DOMAINS)}")
+        return v
 
 
 class QuestionApprovalRequest(BaseModel):
@@ -250,6 +269,7 @@ def serialize_course_list(
         "course_name": course.course_name,
         "course_category": course.course_category,
         "course_link": course.course_link,
+        "question_domain": getattr(course, "question_domain", "") or "",
         "selected_version_id": course.selected_version_id,
         "is_latest_version": course.is_latest_version,
         "last_synced_at": course.last_synced_at,
@@ -283,6 +303,7 @@ def serialize_course_detail(
         "multimedia_url": course.multimedia_url,
         "course_category": course.course_category,
         "course_link": course.course_link,
+        "question_domain": getattr(course, "question_domain", "") or "",
         "selected_courseversion_id": course.selected_courseversion_id,
         "selected_version_id": course.selected_version_id,
         "is_latest_version": course.is_latest_version,

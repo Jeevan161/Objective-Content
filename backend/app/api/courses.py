@@ -28,6 +28,7 @@ from app.services.task_log import ERROR, log_task
 from app.schemas import (
     ApproveRunRequest,
     BuildRagRequest,
+    CourseSettingsRequest,
     ExtractRequest,
     McqGenerateRequest,
     McqReviewRequest,
@@ -892,3 +893,19 @@ def course_detail(course_id: str, session: Session = Depends(get_session)) -> di
         issue_counts=issue_counts,
         stale_part_ids=stale_part_ids,
     )
+
+
+@router.patch("/courses/{course_id}/settings/")
+def update_course_settings(course_id: str, body: CourseSettingsRequest,
+                           session: Session = Depends(get_session),
+                           user: User = Depends(require_active)) -> dict:
+    """Set per-course MCQ-generation settings. Currently `question_domain` (e.g. "SQL"),
+    which deterministically activates that domain's generation/review rules for every
+    run of this course — no per-outcome guessing. Empty string resets to generic."""
+    course = session.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    course.question_domain = body.question_domain   # already normalized/validated
+    session.commit()
+    session.refresh(course)
+    return {"course_id": course.course_id, "question_domain": course.question_domain}

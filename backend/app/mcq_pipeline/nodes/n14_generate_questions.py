@@ -352,6 +352,42 @@ Any error must arise directly from the Learning Outcome concept. The learner sho
 The correct fix must be the minimum change required. Incorrect fixes must be plausible but still incorrect.""")
 
 
+_SQL_RULES = register("gen.sql_rules", """\
+SQL RULES (apply whenever the question is about SQL)
+
+Use standard, dialect-neutral SQL that runs on common engines (SQLite / PostgreSQL). Do NOT use vendor-only syntax (e.g. TOP, ISNULL, NVL, LIMIT-vs-FETCH, vendor date functions) unless the COURSE MATERIAL explicitly teaches that dialect.
+
+SCHEMA CONTEXT — a query question must be answerable from the query PLUS the schema shown. If the stem or `code` references a table, describe its relevant columns directly in the question, and include a few sample rows whenever the answer depends on the data. Never rely on an unshown table or column.
+
+CORRECTNESS:
+- SQL keywords (SELECT, FROM, WHERE, GROUP BY, HAVING, ORDER BY, JOIN, ON, DISTINCT, ...) must be spelled correctly and the query must be syntactically valid.
+- In a query with aggregation, EVERY non-aggregated column in the SELECT list must also appear in GROUP BY. Filtering on an aggregate uses HAVING, never WHERE.
+- NULL comparisons use IS NULL / IS NOT NULL, never `= NULL`. Aggregates skip NULLs except COUNT(*). AND/OR/NOT follow three-valued logic.
+- JOIN questions must state the join type and the ON condition, and must distinguish INNER vs LEFT/RIGHT/FULL behaviour for unmatched rows.
+- String and date literals use single quotes; identifiers stay unquoted unless they truly require it. Never wrap an entire query in quotes.
+
+RESULT, NOT "OUTPUT" — a SQL query RETURNS a result set (rows / values); it does not "print". For a SQL code question describe what the query "returns" or "the result" — never "prints" / "displays" / "on the console". A result is deterministic only when row order is fixed by ORDER BY; do not ask about the order of rows unless the query has ORDER BY.
+
+NAMES — prefer realistic table / column names (employees, orders, customers, salary, department) over abstract t1 / c1.
+
+DISTRACTORS — build wrong options from COMMON SQL mistakes: WHERE used where HAVING is required, a column missing from GROUP BY, `= NULL`, INNER-vs-LEFT JOIN row counts, DISTINCT misuse, or single/double-quote confusion.
+
+CODE_LANGUAGE — for any SQL code question set code_language to "SQL". Do NOT assess a SQL "write / complete a query" outcome with an execution-graded FIB_CODING (SQL is not run here); use MULTIPLE_CHOICE or a CODE_ANALYSIS_* item instead.""")
+
+
+def _course_is_sql() -> bool:
+    """True when the CURRENT run's course is configured as a SQL course.
+
+    Deterministic and course-level: the value comes from Course.question_domain
+    (set per course), carried on the run-scoped RagAdapter as `domain`. There is no
+    per-outcome guessing — a course is SQL or it is not. Returns False when no adapter
+    is bound (e.g. unit tests) so callers can use it unconditionally."""
+    try:
+        return (getattr(scope.get_adapter(), "domain", "") or "").upper() == "SQL"
+    except Exception:  # noqa: BLE001 — no adapter bound -> not a SQL run
+        return False
+
+
 # Universal self-review checklist, applied last so the model audits the whole item
 # against assessment-validity before returning it.
 _FINAL_VALIDATION = register("gen.final_validation", """\
@@ -394,6 +430,8 @@ def _sys_for(qtype: str, lo: dict) -> str:
         parts.append(get_prompt("gen.code_rules", _CODE_RULES))
     if qtype in _TYPED_ANSWER_TYPES:
         parts.append(get_prompt("gen.exact_answer_rules", _EXACT_ANSWER_RULES))
+    if _course_is_sql():
+        parts.append(get_prompt("gen.sql_rules", _SQL_RULES))
     parts.append(f"Difficulty: {difficulty_of(lo)}.")
     if lo.get("is_scenario") or (lo.get("bloom_level_raw") or "").lower() == "scenario":
         parts.append(get_prompt("gen.scenario_rules", _SCENARIO_RULES))

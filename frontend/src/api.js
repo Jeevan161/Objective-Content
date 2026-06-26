@@ -69,6 +69,14 @@ export const mcqJobWsUrl = (jobId) => {
 export const getCourses = () => request('/courses/')
 export const getCourse = (courseId) => request(`/courses/${courseId}/`)
 
+// Per-course MCQ-generation settings. `questionDomain` ('' = general, 'SQL') activates
+// that domain's generation/review rules for every run of this course.
+export const updateCourseSettings = (courseId, questionDomain) =>
+  request(`/courses/${courseId}/settings/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ question_domain: questionDomain }),
+  })
+
 // Which environments a course + its prerequisites span (one token needed each).
 export const getExtractInfo = (courseId) =>
   request(`/courses/${courseId}/extract-info/`)

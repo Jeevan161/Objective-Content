@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ListChecks, BookOpen, Layers, FileText, Sparkles, AlertTriangle } from 'lucide-react'
-import { getCourse, generateMcq, resumeMcq, listMcqRuns, getMcqRun, mcqJobWsUrl } from '../api'
+import { ArrowLeft, ListChecks, BookOpen, Layers, FileText, Sparkles, AlertTriangle, Database } from 'lucide-react'
+import { getCourse, generateMcq, resumeMcq, listMcqRuns, getMcqRun, mcqJobWsUrl, updateCourseSettings } from '../api'
 import { EmptyState, Spinner } from './ui'
 import { useToast } from './Toast'
 import { useAuth } from '../auth/AuthContext'
@@ -41,6 +41,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   const [budget, setBudget] = useState('') // '' = default ceiling (20)
   const [runParams, setRunParams] = useState(null) // {prereqUnitIds, questionBudget} of the active run, for resume
   const [resuming, setResuming] = useState(false)
+  const [savingDomain, setSavingDomain] = useState(false)
 
   // Load the full hierarchy when a course is chosen; reset downstream picks.
   // NOTE: deps are [courseId] ONLY. `toast`'s identity changes on every toast
@@ -160,6 +161,30 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
       if (ws) ws.close()
     }
   }, [job?.id, streamable, courseId, sessionId])
+
+  // Course-level question DOMAIN ('' = general, 'SQL'). Persisted on the course, so it
+  // applies to EVERY generation run of this course — not guessed per outcome.
+  const questionDomain = detail?.question_domain || ''
+
+  async function handleDomainChange(value) {
+    if (!courseId || value === questionDomain) return
+    setSavingDomain(true)
+    try {
+      const res = await updateCourseSettings(courseId, value)
+      setDetail((d) => (d ? { ...d, question_domain: res.question_domain } : d))
+      toast.push({
+        kind: 'success',
+        title: 'Course domain updated',
+        message: res.question_domain === 'SQL'
+          ? 'SQL question rules will now apply to every generation run of this course.'
+          : 'Using general question rules for this course.',
+      })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not update domain', message: e.message })
+    } finally {
+      setSavingDomain(false)
+    }
+  }
 
   async function handleGenerate(prereqUnitIds) {
     setScopeOpen(false)
@@ -284,6 +309,22 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
                 {u.label}
               </option>
             ))}
+          </select>
+        </div>
+
+        <div className="mcq-field">
+          <label className="section-label">
+            <Database size={13} /> Domain
+          </label>
+          <select
+            className="input"
+            value={questionDomain}
+            disabled={!detail || loading || savingDomain || !ownsCourse}
+            onChange={(e) => handleDomainChange(e.target.value)}
+            data-tip="Course-level setting: activates domain-specific question rules (e.g. SQL) for every generation run of this course"
+          >
+            <option value="">General</option>
+            <option value="SQL">SQL</option>
           </select>
         </div>
       </div>

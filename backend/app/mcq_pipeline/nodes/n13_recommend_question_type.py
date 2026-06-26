@@ -18,6 +18,7 @@ from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.utils.concept_graph import is_setup_or_cli
 from app.mcq_pipeline.config import EXCLUDED_QUESTION_TYPES
 from app.mcq_pipeline.prompts.store import get_prompt, register
+from app.mcq_pipeline.nodes.n14_generate_questions import _course_is_sql
 
 CODE_PATH_TYPES = {
     "FIB_CODING", "CODE_ANALYSIS_MULTIPLE_CHOICE",
@@ -137,6 +138,7 @@ CRITICAL CONSTRAINTS
   more than one way → MULTIPLE_CHOICE. (CODE_ANALYSIS_TEXTUAL likewise only for a short, exact,
   deterministic output the learner reproduces character-for-character.)
 - Never use FIB_CODING or TEXTUAL for installation / CLI / setup commands (pip, npm, cd, activate, export, etc.) → use MULTIPLE_CHOICE instead.
+- For SQL outcomes (writing / completing / reading a query), do NOT use FIB_CODING — SQL is not execution-graded here. Use CODE_ANALYSIS_MULTIPLE_CHOICE (analyse a query / its result) or MULTIPLE_CHOICE instead.
 - REARRANGE must only be used when a SINGLE canonical order exists.
 - If uncertain, choose MULTIPLE_CHOICE (safe fallback).
 
@@ -223,6 +225,16 @@ def recommend_one(lo: dict, *, max_seq: int | None = None) -> dict:
         out["question_type"] = "MULTIPLE_CHOICE"
         out["question_type_rationale"] = (
             "[scenario] situation-based reasoning -> MULTIPLE_CHOICE. "
+            + out.get("question_type_rationale", ""))
+
+    # SQL outcomes must not be routed to FIB_CODING: SQL is not executable in this
+    # pipeline (code_exec supports Python/Node/Java only), so a SQL FIB would always
+    # fail execution-verification and fall back to MCQ anyway. Assess SQL "write /
+    # complete a query" outcomes with CODE_ANALYSIS_MULTIPLE_CHOICE instead.
+    if out["question_type"] == "FIB_CODING" and _course_is_sql():
+        out["question_type"] = "CODE_ANALYSIS_MULTIPLE_CHOICE"
+        out["question_type_rationale"] = (
+            "[sql] SQL is not execution-graded here; FIB_CODING -> CODE_ANALYSIS_MULTIPLE_CHOICE. "
             + out.get("question_type_rationale", ""))
 
     with scope.recording() as rag_calls:

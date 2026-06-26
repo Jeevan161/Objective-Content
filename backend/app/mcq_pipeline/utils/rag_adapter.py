@@ -72,13 +72,18 @@ def detect_code(md: str) -> bool:
 
 class RagAdapter:
     def __init__(self, *, course_ids: list[str], prereq_units: list[dict],
-                 reading_material: str, ingested: bool, unit_ids: list[str] | None = None):
+                 reading_material: str, ingested: bool, unit_ids: list[str] | None = None,
+                 domain: str = ""):
         if not course_ids:
             raise ValueError("RagAdapter requires a non-empty course_ids scope.")
         self.course_ids = course_ids
         self._prereq_units = prereq_units
         self.reading_material = reading_material or ""
         self.ingested = ingested
+        # Course-level MCQ generation DOMAIN (e.g. "SQL"); empty = generic. Set from
+        # Course.question_domain at build time and read by the generation/review/type
+        # nodes to activate domain-specific rules deterministically (no per-LO guessing).
+        self.domain = (domain or "").strip().upper()
         # Optional reading-material unit_id filter (main course units + selected
         # prerequisite units) — narrows GROUNDING search to chosen content.
         self.unit_ids = unit_ids or None

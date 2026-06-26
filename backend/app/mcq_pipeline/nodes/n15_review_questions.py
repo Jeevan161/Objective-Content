@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from app.mcq_pipeline.utils import rag_api, scope
 from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.prompts.store import get_prompt, register
-from app.mcq_pipeline.nodes.n14_generate_questions import CODE_PATH_TYPES, OPTION_TYPES, _CODE_RULES, _EXACT_ANSWER_RULES, _EXPLANATION_RULES, _FIB_RULES, _GROUNDING_RULES, _MORE_THAN_ONE_RULES, _OPTION_RULES, _QUESTION_TEXT_RULES, _REARRANGE_RULES, _TRUE_FALSE_RULES, _TYPED_ANSWER_TYPES, _ground, _lo_block, fix_lean
+from app.mcq_pipeline.nodes.n14_generate_questions import CODE_PATH_TYPES, OPTION_TYPES, _CODE_RULES, _EXACT_ANSWER_RULES, _EXPLANATION_RULES, _FIB_RULES, _GROUNDING_RULES, _MORE_THAN_ONE_RULES, _OPTION_RULES, _QUESTION_TEXT_RULES, _REARRANGE_RULES, _SQL_RULES, _TRUE_FALSE_RULES, _TYPED_ANSWER_TYPES, _course_is_sql, _ground, _lo_block, fix_lean
 
 
 def _review_model(temp: float = 0):
@@ -345,6 +345,13 @@ def _review_sys(qtype: str) -> str:
     if qtype in _TYPE_CHECKLIST:
         parts.append("FOCUS FOR THIS TYPE:\n" + get_prompt(
             f"review.type_checklist.{qtype}", _TYPE_CHECKLIST[qtype]))
+    # SQL domain rules last among the domain blocks, so for SQL they AUTHORITATIVELY
+    # override the generic "say 'prints'/'output'" wording in the code type-checklists
+    # (a SQL query RETURNS a result set — it does not print).
+    if _course_is_sql():
+        parts.append("SQL OVERRIDE — for this SQL question the rules below take precedence "
+                     "over any generic 'prints'/'output' wording above:\n"
+                     + get_prompt("gen.sql_rules", _SQL_RULES))
     # Final gate — applied last.
     parts.append(get_prompt("review.checklist", _VALIDATION_CHECKLIST))
     return "\n\n".join(parts)
