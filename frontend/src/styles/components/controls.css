@@ -130,8 +130,7 @@
   font-size: 12.5px;
 }
 
-/* Native <select> styled to match the theme: drop the OS chrome and draw our own
-   chevron. The chevron color is set per-theme so it reads on graphite AND on light. */
+/* Native <select> with .input: still tidy the OS arrow where one is used directly. */
 select.input {
   appearance: none;
   -webkit-appearance: none;
@@ -144,24 +143,121 @@ select.input {
   background-size: 16px;
 }
 
-select.input:hover:not(:disabled) {
+[data-theme='light'] select.input {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a8e9c' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
+/* ---- Themed custom dropdown (components/Select.jsx) ----
+   Replaces the native <select> so the OPEN option list is themed too. */
+.select {
+  position: relative;
+  width: 100%;
+}
+
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.select-trigger:hover:not(:disabled) {
   border-color: var(--border-strong);
 }
 
-select.input:disabled {
+.select.open .select-trigger {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+
+.select-trigger:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
-/* The dropdown popup itself, where the browser honors it (Chrome/Firefox on
-   Win/Linux); macOS uses native chrome and ignores these. */
-select.input option {
-  background: var(--bg-overlay);
-  color: var(--text);
+.select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-[data-theme='light'] select.input {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a8e9c' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+.select-value.placeholder {
+  color: var(--text-3);
+}
+
+.select-caret {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: transform var(--t-fast), color var(--t-fast);
+}
+
+.select.open .select-caret {
+  transform: rotate(180deg);
+  color: var(--brand);
+}
+
+.select-panel {
+  position: absolute;
+  z-index: var(--z-overlay);
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  max-height: 280px;
+  overflow-y: auto;
+  animation: select-pop var(--t-fast);
+}
+
+@keyframes select-pop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.select-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-option.active {
+  background: var(--bg-hover);
+}
+
+.select-option.selected {
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+.select-check {
+  flex-shrink: 0;
+  color: var(--brand);
+}
+
+.select-empty {
+  padding: 8px 10px;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
 }
 
 .input-with-action {

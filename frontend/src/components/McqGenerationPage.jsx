@@ -8,6 +8,7 @@ import McqProgress from './McqProgress'
 import McqResults from './McqResults'
 import McqReviewGate from './McqReviewGate'
 import McqScopeModal from './McqScopeModal'
+import Select from './Select'
 
 const TERMINAL = ['SUCCESS', 'FAILURE']
 
@@ -255,77 +256,57 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
           <label className="section-label">
             <BookOpen size={13} /> Course
           </label>
-          <select className="input" value={courseId} onChange={(e) => setCourseId(e.target.value)}>
-            <option value="">Select a course…</option>
-            {allCourses.map((c) => (
-              <option key={c.course_id} value={c.course_id}>
-                {c.course_name || c.course_id}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={courseId}
+            onChange={setCourseId}
+            placeholder="Select a course…"
+            options={allCourses.map((c) => ({ value: c.course_id, label: c.course_name || c.course_id }))}
+          />
         </div>
 
         <div className="mcq-field">
           <label className="section-label">
             <Layers size={13} /> Topic
           </label>
-          <select
-            className="input"
+          <Select
             value={topicId}
             disabled={!detail || loading}
-            onChange={(e) => {
-              setTopicId(e.target.value)
-              setSessionId('')
-            }}
-          >
-            <option value="">{loading ? 'Loading topics…' : 'Select a topic…'}</option>
-            {topics.map((t) => (
-              <option key={t.topic_id} value={t.topic_id}>
-                {t.topic_name || t.topic_id}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => { setTopicId(v); setSessionId('') }}
+            placeholder={loading ? 'Loading topics…' : 'Select a topic…'}
+            options={topics.map((t) => ({ value: t.topic_id, label: t.topic_name || t.topic_id }))}
+          />
         </div>
 
         <div className="mcq-field">
           <label className="section-label">
             <FileText size={13} /> Session
           </label>
-          <select
-            className="input"
+          <Select
             value={sessionId}
             disabled={!selectedTopic}
-            onChange={(e) => setSessionId(e.target.value)}
-          >
-            <option value="">
-              {!selectedTopic
+            onChange={setSessionId}
+            placeholder={
+              !selectedTopic
                 ? 'Select a topic first…'
                 : sessions.length === 0
                   ? 'No sessions with reading material'
-                  : 'Select a session…'}
-            </option>
-            {sessions.map((u) => (
-              <option key={sessionUnitId(u)} value={sessionUnitId(u)}>
-                {u.label}
-              </option>
-            ))}
-          </select>
+                  : 'Select a session…'
+            }
+            options={sessions.map((u) => ({ value: sessionUnitId(u), label: u.label }))}
+          />
         </div>
 
         <div className="mcq-field">
           <label className="section-label">
             <Database size={13} /> Domain
           </label>
-          <select
-            className="input"
+          <Select
             value={questionDomain}
             disabled={!detail || loading || savingDomain || !ownsCourse}
-            onChange={(e) => handleDomainChange(e.target.value)}
-            data-tip="Course-level setting: activates domain-specific question rules (e.g. SQL) for every generation run of this course"
-          >
-            <option value="">General</option>
-            <option value="SQL">SQL</option>
-          </select>
+            onChange={handleDomainChange}
+            dataTip="Course-level setting: activates domain-specific question rules (e.g. SQL) for every generation run of this course"
+            options={[{ value: '', label: 'General' }, { value: 'SQL', label: 'SQL' }]}
+          />
         </div>
       </div>
 
