@@ -19,6 +19,7 @@ COPY app ./app
 COPY portal ./portal
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
+COPY scripts ./scripts
 
 EXPOSE 8000
 

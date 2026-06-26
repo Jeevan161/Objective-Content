@@ -42,11 +42,12 @@ COPY backend/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --timeout 120 --retries 10 -r requirements.txt
 
-# Backend app + portal package + alembic config/migrations.
+# Backend app + portal package + alembic config/migrations + ops scripts.
 COPY backend/app ./app
 COPY backend/portal ./portal
 COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./alembic.ini
+COPY backend/scripts ./scripts
 
 # Built SPA — served by FastAPI via the StaticFiles mount in app/main.py
 # (FRONTEND_DIST_DIR points here).
