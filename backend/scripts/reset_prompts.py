@@ -16,7 +16,14 @@ Idempotent. Only resets keys that are actually overridden vs the current default
 """
 from __future__ import annotations
 
-import app.mcq_pipeline.graph  # noqa: F401 — import triggers every register() so defaults exist
+import os
+import sys
+
+# Make `app` importable no matter the cwd/invocation (running `python scripts/x.py`
+# puts scripts/ on sys.path, not the backend root). Add the backend root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import app.mcq_pipeline.graph  # noqa: E402,F401 — import triggers every register() so defaults exist
 from app.mcq_pipeline.prompts.store import default_for, get_prompt, reset_prompt
 
 # Keys whose code DEFAULT changed and must be pushed to the active DB row.

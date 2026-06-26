@@ -16,12 +16,17 @@ review the content before sharing if any comments may include sensitive text).
 from __future__ import annotations
 
 import json
+import os
+import sys
 from collections import Counter
 
-from sqlalchemy import select
+# Make `app` importable regardless of cwd/invocation (script dir != backend root).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.db.session import SessionLocal
-from app.models import AppFeedback, McqQuestionFeedback
+from sqlalchemy import select  # noqa: E402
+
+from app.db.session import SessionLocal  # noqa: E402
+from app.models import AppFeedback, McqQuestionFeedback  # noqa: E402
 
 
 def main() -> None:
