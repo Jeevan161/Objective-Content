@@ -164,12 +164,13 @@ def _build_reserve_los(state: dict, db_prereq_units: list, final_los: list) -> l
     final_ids = {lo.get("outcome") for lo in (final_los or [])}
     inv_by_id = {c["concept_id"]: c for c in state.get("concept_inventory", [])}
     sec_text = {s["topic_id"]: s.get("text", "") for s in state.get("sections", [])}
+    sec_title = {s["topic_id"]: s.get("title", "") for s in state.get("sections", [])}
     reserve = []
     for o in pool:
         if o.get("id") in final_ids:        # promoted into the final set by backfill -> not reserve
             continue
         try:
-            reserve.append(lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text))
+            reserve.append(lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text, sec_title))
         except Exception:  # noqa: BLE001 — a malformed candidate must never break the run result
             continue
     return reserve

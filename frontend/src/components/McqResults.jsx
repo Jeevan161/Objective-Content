@@ -254,6 +254,15 @@ function QuestionCard({ q, lo, index, review }) {
         <span className="qc-tests-v">{lo?.description || lo?.outcome || q.outcome}</span>
       </div>
 
+      <div className="qc-meta-tags">
+        {lo?.topic && <span className="qc-tag"><b>Topic</b> {lo.topic}</span>}
+        {lo?.concept && <span className="qc-tag"><b>Concept</b> {lo.concept}</span>}
+        {lo?.sub_concept && lo.sub_concept !== lo.concept && (
+          <span className="qc-tag"><b>Sub-concept</b> {lo.sub_concept}</span>
+        )}
+        <span className="qc-tag"><b>LO</b> <code>{lo?.outcome || q.outcome}</code></span>
+      </div>
+
       {q.fallback && (
         <div className="qc-note">
           <AlertTriangle size={12} /> Re-routed from {q.fallback.from} — {q.fallback.reason}.

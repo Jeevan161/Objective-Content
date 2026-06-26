@@ -127,7 +127,7 @@ _BLOOM_TO_LEGACY = {"remember": "remember", "understand": "understand",
 
 
 def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
-                 sec_text: dict | None = None) -> dict:
+                 sec_text: dict | None = None, sec_title: dict | None = None) -> dict:
     """Map one new AuthoredOutcome -> the legacy LearningOutcome dict shape that
     `recommend_for_los` / `generate_for_los` / `review_and_fix_for_los` expect."""
     cid = outcome.get("concept_id", "")
@@ -144,8 +144,13 @@ def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
     # from. Carried through so generation/review can ANCHOR on it (previously dropped).
     section_id = (outcome.get("source_evidence") or {}).get("section") or outcome.get("topic_id", "")
     section_text = ((sec_text or {}).get(section_id, "") or "")[:6000]
+    # The human-readable TOPIC this outcome sits under (the section title for the
+    # concept's topic). Shown on each question alongside concept / sub_concept / LO.
+    topic_id = inv.get("topic_id") or section_id
+    topic = (sec_title or {}).get(topic_id, "") or (sec_title or {}).get(section_id, "")
     return {
         "outcome": outcome.get("id"),
+        "topic": topic,
         "bloom_category": bloom,
         "bloom_level": bloom,
         "skill_type": outcome.get("skill_type") or ("practical_application" if bloom == "apply" else "conceptual"),
@@ -175,5 +180,6 @@ def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
 def build_final_los(state: dict, db_prereq_units: list) -> list[dict]:
     inv_by_id = {c["concept_id"]: c for c in state.get("concept_inventory", [])}
     sec_text = {s["topic_id"]: s.get("text", "") for s in state.get("sections", [])}
+    sec_title = {s["topic_id"]: s.get("title", "") for s in state.get("sections", [])}
     src = state.get("artifact", {}).get("outcomes") or state.get("outcomes", [])
-    return [lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text) for o in src]
+    return [lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text, sec_title) for o in src]

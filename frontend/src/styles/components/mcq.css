@@ -693,6 +693,20 @@
 }
 .qc-tests-v { color: var(--text-2); }
 
+/* Per-question taxonomy tags: Topic / Concept / Sub-concept / LO (snake_case). */
+.qc-meta-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.qc-tag {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-2);
+  background: var(--bg-inset); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 3px 8px;
+}
+.qc-tag b {
+  color: var(--text-3); font-weight: 600;
+  text-transform: uppercase; font-size: 10px; letter-spacing: 0.03em;
+}
+.qc-tag code { font-family: var(--font-mono); font-size: 11px; color: var(--brand-strong); }
+
 .qc-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--amber); }
 
 .qc-field { display: flex; flex-direction: column; gap: var(--sp-2); }
