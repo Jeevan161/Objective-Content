@@ -1,14 +1,14 @@
-"""LO pipeline · Node 9.5 — sequence_outcomes (deep-dive ordering)."""
+"""LO pipeline · Node 6 — sequence_outcomes (deep-dive ordering)."""
 from __future__ import annotations
 
 import json
 
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
-from app.mcq_pipeline.nodes._common import _prog
+from app.mcq_pipeline.utils._common import _prog
 
 
-# ── Node 9.5 · sequence_outcomes (A · deep-dive ordering) ─────────────────── #
+# ── Node 6 · sequence_outcomes (A · deep-dive ordering) ─────────────────── #
 # Orders the final questions basic -> advanced as a coherent DEEP DIVE. DOMAIN-GENERAL:
 # driven by the prerequisite concept DAG + concept weights + topic order (NOT hardcoded
 # verb/Bloom tiers). LLM-primary (prompt lo.sequence_sys); deterministic graph+weight

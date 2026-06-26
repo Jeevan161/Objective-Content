@@ -5,9 +5,9 @@ The LangGraph pipeline. The LO-creation stage is the LO-first flow (`nodes` +
 `artifact.finalize`); a `lo_to_legacy` bridge maps its frozen outcomes onto the
 legacy LearningOutcome shape, and the (unchanged) question stage follows:
 
-    START → parse_structure → generate_outcomes → map_concepts → build_outcome_graph
-          → profile_depth → plan_outcomes
-          → resolve_prerequisites → review_outcomes_quality (dedup + R1–R8) → validate ─cond─┐
+    START → parse_structure → author_outcomes → consolidate_concepts → graph_outcomes
+          → select_outcomes  (the plan_los sub-graph: author → merge+depth → DAG → budget-select)
+          → resolve_prerequisites → review_and_validate (dedup + R1–R8 rubric + structural gate) ─cond─┐
                 pass / retries-exhausted → finalize │ still-fixable → repair ↺
           → finalize → lo_to_legacy → sequence_outcomes (basic→advanced)
           → review_outcomes (HITL gate — reviewer sees the sequenced order)
@@ -29,9 +29,9 @@ from app.mcq_pipeline.prompts import rules as lo_rules  # noqa: F401 — registe
 from app.mcq_pipeline.utils import scope
 from app.mcq_pipeline.artifact import build_final_los, finalize as _finalize_artifact
 from app.mcq_pipeline.config import MAX_RETRIES
-from app.mcq_pipeline.nodes import build_outcome_graph, generate_outcomes, map_concepts, parse_structure, plan_outcomes, profile_depth, repair, resolve_prerequisites, review_outcomes_quality, sequence_outcomes, validate
+from app.mcq_pipeline.nodes import author_outcomes, consolidate_concepts, graph_outcomes, parse_structure, repair, resolve_prerequisites, review_and_validate, select_outcomes, sequence_outcomes
 from app.mcq_pipeline.state import LOState, run_ctx
-from app.mcq_pipeline.nodes._common import _prog
+from app.mcq_pipeline.utils._common import _prog
 from app.mcq_pipeline.nodes.n14_generate_questions import generate_for_los
 from app.mcq_pipeline.nodes.n15_review_questions import review_and_fix_for_los
 from app.mcq_pipeline.nodes.n13_recommend_question_type import recommend_for_los
@@ -260,14 +260,12 @@ def get_checkpointer():
 def build_lo_graph(*, checkpointer=None):
     g = StateGraph(LOState)
     g.add_node("parse_structure", parse_structure)
-    g.add_node("generate_outcomes", generate_outcomes)
-    g.add_node("map_concepts", map_concepts)
-    g.add_node("build_outcome_graph", build_outcome_graph)
-    g.add_node("profile_depth", profile_depth)
-    g.add_node("plan_outcomes", plan_outcomes)
+    g.add_node("author_outcomes", author_outcomes)
+    g.add_node("consolidate_concepts", consolidate_concepts)
+    g.add_node("graph_outcomes", graph_outcomes)
+    g.add_node("select_outcomes", select_outcomes)
     g.add_node("resolve_prerequisites", resolve_prerequisites)
-    g.add_node("review_outcomes_quality", review_outcomes_quality)
-    g.add_node("validate", validate)
+    g.add_node("review_and_validate", review_and_validate)
     g.add_node("repair", repair)
     g.add_node("review_outcomes", review_outcomes)        # HITL Gate 2 (inert unless hitl_enabled)
     g.add_node("finalize", finalize)
@@ -278,15 +276,13 @@ def build_lo_graph(*, checkpointer=None):
     g.add_node("review_questions", review_questions_node)
 
     g.add_edge(START, "parse_structure")
-    g.add_edge("parse_structure", "generate_outcomes")
-    g.add_edge("generate_outcomes", "map_concepts")
-    g.add_edge("map_concepts", "build_outcome_graph")
-    g.add_edge("build_outcome_graph", "profile_depth")
-    g.add_edge("profile_depth", "plan_outcomes")
-    g.add_edge("plan_outcomes", "resolve_prerequisites")   # Gate 1 (division review) removed
-    g.add_edge("resolve_prerequisites", "review_outcomes_quality")
-    g.add_edge("review_outcomes_quality", "validate")
-    g.add_conditional_edges("validate", route_after_validate,
+    g.add_edge("parse_structure", "author_outcomes")       # plan_los sub-graph (4 nodes)
+    g.add_edge("author_outcomes", "consolidate_concepts")
+    g.add_edge("consolidate_concepts", "graph_outcomes")
+    g.add_edge("graph_outcomes", "select_outcomes")
+    g.add_edge("select_outcomes", "resolve_prerequisites")  # Gate 1 (division review) removed
+    g.add_edge("resolve_prerequisites", "review_and_validate")
+    g.add_conditional_edges("review_and_validate", route_after_validate,
                             {"repair": "repair", "finalize": "finalize"})
     g.add_edge("repair", "resolve_prerequisites")
     g.add_edge("finalize", "lo_to_legacy")

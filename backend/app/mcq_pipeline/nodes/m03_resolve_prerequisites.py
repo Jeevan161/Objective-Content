@@ -1,4 +1,4 @@
-"""LO pipeline · Node 7 — resolve_prerequisites (LLM-driven, RAG-grounded coverage probe)."""
+"""LO pipeline · Node 3 — resolve_prerequisites (LLM-driven, RAG-grounded coverage probe)."""
 from __future__ import annotations
 
 from app.mcq_pipeline.config import TEMP_GRAPH, USE_LLM_COVERAGE_PROBE
@@ -7,10 +7,10 @@ from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.utils.concept_graph import graph_find_prerequisites, slugify
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
-from app.mcq_pipeline.nodes._common import _bind_rag, _prog
+from app.mcq_pipeline.utils._common import _bind_rag, _prog
 
 
-# ── Node 7 · resolve_prerequisites (A · LLM writes queries, RAG answers, LLM judges) ── #
+# ── Node 3 · resolve_prerequisites (A · LLM writes queries, RAG answers, LLM judges) ── #
 _DEPTH_RANK = {"none": 0, "shallow": 1, "partial": 2, "full": 3}
 # depth grade for a prerequisite taught in THIS session, from the profiler's depth_category.
 _SESSION_DEPTH = {"deep": "full", "moderate": "partial", "mention": "shallow", "named": "none"}
