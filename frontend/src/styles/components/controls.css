@@ -130,6 +130,40 @@
   font-size: 12.5px;
 }
 
+/* Native <select> styled to match the theme: drop the OS chrome and draw our own
+   chevron. The chevron color is set per-theme so it reads on graphite AND on light. */
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6f7e' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 16px;
+}
+
+select.input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+select.input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* The dropdown popup itself, where the browser honors it (Chrome/Firefox on
+   Win/Linux); macOS uses native chrome and ignores these. */
+select.input option {
+  background: var(--bg-overlay);
+  color: var(--text);
+}
+
+[data-theme='light'] select.input {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a8e9c' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
 .input-with-action {
   position: relative;
 }
