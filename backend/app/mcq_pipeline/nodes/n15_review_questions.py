@@ -226,7 +226,10 @@ Reject (flag) distractors that are:
 - untaught
 - obviously wrong
 - accidentally correct
-- a giveaway via an absolute qualifier ('always', 'never', 'all', 'none')
+- a giveaway via an absolute / blanket-scope qualifier ('always', 'never', 'all', 'none', 'only', 'solely', 'just', 'merely', 'any', 'no', 'nothing', 'does not', 'cannot')
+- a NEGATION, OPPOSITE, or BLANKET DENIAL of the correct answer (e.g. key "stores and processes data" with a distractor "does not store or process any data" / "only displays static content"). These are eliminable WITHOUT understanding the concept, so they reveal the answer.
+
+A negation/opposite/blanket-denial distractor, or a set where the correct option is the only positive / most comprehensive / longest statement, is an ANSWER GIVEAWAY — raise it as a HIGH-severity issue (rule "OPTION RULES" / "DISTRACTOR RULES"), because the question can be answered by elimination without understanding the concept. The fix is to rebuild each distractor as a SPECIFIC, plausible alternative of the same polarity and scope, grounded in a taught misconception.
 
 Also flag 'All of the above' / 'None of the above' options unless the Learning Outcome specifically requires that judgment — prefer concrete, comparable alternatives.""")
 

@@ -205,8 +205,11 @@ Distractors must NOT:
 - use untaught concepts
 - contain syntax unrelated to the LO
 - be obviously wrong
+- be a NEGATION, OPPOSITE, or BLANKET DENIAL of the correct answer. If the key is "stores data, processes requests, and returns results", do NOT write distractors like "does not store or process any data", "only displays static content", or "has no role in processing" — a learner eliminates these WITHOUT understanding the concept, which gives the answer away.
 
-A distractor should fail because it misunderstands the target concept.
+Every distractor must be a SPECIFIC, self-standing claim of the SAME polarity, scope, and richness as the correct answer — a different plausible answer a learner could genuinely choose, NOT a weakened, reversed, or "none of this happens" version of the key. Each must require understanding the concept to reject.
+
+A distractor should fail because it misunderstands the target concept — never because it is self-evidently false or the mirror image of the key.
 
 OPTION BALANCE RULES
 
@@ -216,11 +219,13 @@ The correct answer must not stand out because of:
 - formatting
 - specificity
 
-All options should appear equally credible at first glance.
+All options should appear equally credible at first glance. In particular, the correct
+option must NOT be identifiable just because it is the only POSITIVE, the only COMPREHENSIVE,
+or the LONGEST statement while the distractors are short denials — that pattern gives the answer away.
 
 Vary the position of the correct answer across questions.
 
-Avoid absolute qualifiers in options ('always', 'never', 'all', 'none') — they read as giveaways or are unfalsifiable. Do NOT use 'All of the above' or 'None of the above' as options unless the Learning Outcome specifically requires that judgment; prefer concrete, comparable alternatives.
+Avoid giveaway qualifiers in options — absolutes and blanket-scope words ('always', 'never', 'all', 'none', 'only', 'solely', 'just', 'merely', 'any', 'no', 'nothing', 'does not', 'cannot') read as giveaways or are unfalsifiable. Never make a distractor wrong simply by attaching such a word to (or negating) the key's idea. Do NOT use 'All of the above' or 'None of the above' as options unless the Learning Outcome specifically requires that judgment; prefer concrete, comparable alternatives.
 
 The correct option must be the most TECHNICALLY ACCURATE answer the material supports — not the 'commonly recommended' or 'best-practice' one — UNLESS the stem explicitly asks for the standard/recommended practice. (A distractor that is also defensible as 'best practice' would create a second valid answer.)""")
 
