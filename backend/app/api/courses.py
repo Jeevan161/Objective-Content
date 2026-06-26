@@ -57,9 +57,11 @@ from app.services.extraction import (
     required_environments,
 )
 from app.services.jobs import (
+    request_cancel,
     start_build_rag_job,
     start_extraction_job,
     start_mcq_job,
+    start_mcq_regen_job,
     start_mcq_resume_job,
     start_sync_job,
 )
@@ -394,7 +396,12 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
     if prereq_unit_ids is not None:
         prereq_unit_ids = [u.strip() for u in prereq_unit_ids if isinstance(u, str) and u.strip()]
 
-    job = SyncJob(course_id=course_id, job_type=SyncJob.MCQ, created_by=user.id)
+    # Stash the run's selection context on the job so the Activity drawer can reopen it
+    # to the exact page/stage later (the job row alone doesn't carry topic/unit).
+    job = SyncJob(
+        course_id=course_id, job_type=SyncJob.MCQ, created_by=user.id,
+        progress={"ctx": {"topic_id": (body.topic_id or "").strip(), "unit_id": unit_id}},
+    )
     session.add(job)
     session.commit()
     start_mcq_job(
@@ -441,8 +448,43 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
     return serialize_job(job)
 
 
+@router.post("/courses/mcq/jobs/{job_id}/cancel/", status_code=status.HTTP_202_ACCEPTED)
+def cancel_mcq_job(job_id: uuid.UUID, session: Session = Depends(get_session),
+                   user: User = Depends(require_active)) -> dict:
+    """Cancel a running or HITL-paused MCQ/regeneration job. A RUNNING job is signalled to
+    stop at its next cooperative checkpoint (the worker then marks it CANCELLED); a paused
+    (AWAITING_REVIEW) or queued job is cancelled immediately. Only the job's creator (or an
+    admin) may cancel it. Already-settled jobs are returned unchanged."""
+    job = session.get(SyncJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if (job.created_by is not None and job.created_by != user.id
+            and user.role != User.ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="You can only cancel your own jobs.")
+    if job.status in (SyncJob.SUCCESS, SyncJob.FAILURE, SyncJob.CANCELLED):
+        return serialize_job(job)            # already settled — nothing to do
+    if job.status == SyncJob.AWAITING_REVIEW:
+        # No live worker (it exited when it paused) — finalize directly.
+        job.status = SyncJob.CANCELLED
+        job.message = "Cancelled by user."
+        prog = dict(job.progress or {})
+        prog.pop("awaiting_review", None)
+        prog.pop("review", None)
+        job.progress = prog
+        session.commit()
+        progress_broker.publish(str(job_id))
+        return serialize_job(job)
+    # PENDING / RUNNING: signal the worker; it observes this and finalizes to CANCELLED.
+    signalled = request_cancel(job_id)
+    job.message = "Cancelling…" if signalled else "Cancel requested…"
+    session.commit()
+    progress_broker.publish(str(job_id))
+    return serialize_job(job)
+
+
 # --- live job progress over WebSocket (replaces the frontend poll) -------------- #
-_SETTLED_STATUSES = {SyncJob.SUCCESS, SyncJob.FAILURE, SyncJob.AWAITING_REVIEW}
+_SETTLED_STATUSES = {SyncJob.SUCCESS, SyncJob.FAILURE, SyncJob.CANCELLED,
+                     SyncJob.AWAITING_REVIEW}
 
 
 def _read_serialized_job(job_id: uuid.UUID) -> dict | None:
@@ -717,28 +759,27 @@ def _reviewer_name(user: User) -> str:
     return (user.name or "").strip() or user.email
 
 
-@router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/regenerate/")
+@router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/regenerate/",
+             status_code=status.HTTP_202_ACCEPTED)
 def regenerate_mcq_question(run_id: uuid.UUID, outcome: str,
                             body: RegenerateQuestionRequest,
                             session: Session = Depends(get_session),
                             user: User = Depends(require_active)) -> dict:
-    """Regenerate one question for its LO with the reviewer's feedback injected,
-    re-review it, persist (with revision history), and log the feedback. Synchronous
-    (a few LLM calls) — the reviewer is actively waiting on the screen. The reviewer
-    is taken from the authenticated user, not the request body."""
-    if session.get(McqRun, run_id) is None:
+    """Regenerate one question for its LO with the reviewer's feedback injected, re-review it,
+    persist (with revision history) and log the feedback. Runs in the background as a tracked
+    job (REGEN) so it shows up in Activity and the reviewer can keep working; the frontend
+    re-fetches the run when the job completes. The reviewer is the authenticated user."""
+    run = session.get(McqRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     if not (body.feedback or "").strip():
         raise HTTPException(status_code=400, detail="Feedback is required to regenerate.")
-    from app.mcq_pipeline.review import regenerate_question
-    try:
-        question = regenerate_question(run_id, outcome, body.feedback,
-                                       reviewer=_reviewer_name(user), tags=body.tags)
-    except ValueError as err:
-        raise HTTPException(status_code=404, detail=str(err)) from err
-    except Exception as err:  # noqa: BLE001 — surface generation failure
-        raise HTTPException(status_code=502, detail=f"Regeneration failed: {err}") from err
-    return {"question": question}
+    job = SyncJob(course_id=run.course_id, job_type=SyncJob.REGEN, created_by=user.id,
+                  message=f"Regenerating “{outcome}”…")
+    session.add(job)
+    session.commit()
+    start_mcq_regen_job(job.id, run_id, outcome, body.feedback, body.tags, _reviewer_name(user))
+    return serialize_job(job)
 
 
 @router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/feedback/")

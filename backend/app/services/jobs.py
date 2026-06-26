@@ -54,6 +54,60 @@ def _bind_user_for_job(job_id: uuid.UUID):
 _MCQ_SEMAPHORE = threading.Semaphore(max(1, settings.mcq_max_concurrent_jobs))
 
 
+# --- cooperative job cancellation (in-process; single uvicorn process) -------------- #
+# A running/queued MCQ job registers a threading.Event here keyed by str(job_id). The
+# cancel endpoint sets it; the pipeline's ProgressReporter consults `is_cancelled` on
+# every stage transition and raises JobCancelled, which the runner unwinds.
+_cancel_events: dict[str, threading.Event] = {}
+_cancel_lock = threading.Lock()
+
+
+def _register_cancel(job_id: uuid.UUID) -> threading.Event:
+    ev = threading.Event()
+    with _cancel_lock:
+        _cancel_events[str(job_id)] = ev
+    return ev
+
+
+def _clear_cancel(job_id: uuid.UUID) -> None:
+    with _cancel_lock:
+        _cancel_events.pop(str(job_id), None)
+
+
+def is_cancelled(job_id: uuid.UUID) -> bool:
+    with _cancel_lock:
+        ev = _cancel_events.get(str(job_id))
+    return bool(ev is not None and ev.is_set())
+
+
+def request_cancel(job_id: uuid.UUID) -> bool:
+    """Signal a running/queued MCQ job to stop at its next cooperative checkpoint.
+    Returns True if a live worker is registered to observe the signal."""
+    with _cancel_lock:
+        ev = _cancel_events.get(str(job_id))
+    if ev is not None:
+        ev.set()
+        return True
+    return False
+
+
+def _cancel_job(job_id: uuid.UUID) -> None:
+    """Finalize a job as CANCELLED (clearing any parked review payload) and notify sockets."""
+    from app.models import SyncJob
+    with SessionLocal() as session:
+        job = session.get(SyncJob, job_id)
+        if job is not None and job.status not in (SyncJob.SUCCESS, SyncJob.FAILURE):
+            job.status = SyncJob.CANCELLED
+            job.message = "Cancelled by user."
+            prog = dict(job.progress or {})
+            prog.pop("awaiting_review", None)
+            prog.pop("review", None)
+            job.progress = prog
+            job.updated_at = _now()
+            session.commit()
+    progress_broker.publish(str(job_id))
+
+
 def _run(target, *args) -> None:
     session = SessionLocal()
     try:
@@ -182,26 +236,37 @@ def _run_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
     import traceback
 
     from app.mcq_pipeline.runner import run_mcq_pipeline
+    from app.mcq_pipeline.utils.progress import JobCancelled
     from app.services.task_log import ERROR, log_task
 
     user_id = _bind_user_for_job(job_id)
+    cancel_event = _register_cancel(job_id)
     log_task(task_type="MCQ", event="start", job_id=job_id, user_id=user_id,
              message=f"course={course_id} unit={unit_id}")
     try:
         with _MCQ_SEMAPHORE:
+            if cancel_event.is_set():            # cancelled while queued on the semaphore
+                raise JobCancelled()
             result = run_mcq_pipeline(
                 course_id=course_id, topic_id=topic_id, unit_id=unit_id,
                 review=review, prereq_unit_ids=prereq_unit_ids,
                 question_budget=question_budget, hitl_enabled=hitl_enabled,
                 progress_sink=_mcq_sink(job_id), thread_id=str(job_id),
+                cancel_check=cancel_event.is_set,
             )
         _persist_mcq_result(job_id, result, course_id, topic_id, unit_id)
         log_task(task_type="MCQ", event="complete", job_id=job_id, user_id=user_id,
                  message=str(result.get("status", "completed")))
+    except JobCancelled:
+        log_task(task_type="MCQ", event="cancelled", job_id=job_id, user_id=user_id,
+                 message="cancelled by user")
+        _cancel_job(job_id)
     except Exception as err:  # noqa: BLE001 — surface failure on the job row
         log_task(task_type="MCQ", event="error", level=ERROR, job_id=job_id, user_id=user_id,
                  message=str(err), detail={"trace": traceback.format_exc()[:8000]})
         _fail_job(job_id, err)
+    finally:
+        _clear_cancel(job_id)
 
 
 def _resume_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
@@ -211,25 +276,35 @@ def _resume_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: s
     import traceback
 
     from app.mcq_pipeline.runner import resume_run
+    from app.mcq_pipeline.utils.progress import JobCancelled
     from app.services.task_log import ERROR, log_task
 
     user_id = _bind_user_for_job(job_id)
+    cancel_event = _register_cancel(job_id)
     log_task(task_type="MCQ", event="resume", job_id=job_id, user_id=user_id,
              message=f"course={course_id} unit={unit_id}")
     try:
         with _MCQ_SEMAPHORE:
+            if cancel_event.is_set():
+                raise JobCancelled()
             result = resume_run(
                 course_id=course_id, unit_id=unit_id, thread_id=str(job_id), decision=decision,
                 prereq_unit_ids=prereq_unit_ids, question_budget=question_budget, review=review,
-                progress_sink=_mcq_sink(job_id),
+                progress_sink=_mcq_sink(job_id), cancel_check=cancel_event.is_set,
             )
         _persist_mcq_result(job_id, result, course_id, topic_id, unit_id)
         log_task(task_type="MCQ", event="complete", job_id=job_id, user_id=user_id,
                  message=str(result.get("status", "completed")))
+    except JobCancelled:
+        log_task(task_type="MCQ", event="cancelled", job_id=job_id, user_id=user_id,
+                 message="cancelled by user")
+        _cancel_job(job_id)
     except Exception as err:  # noqa: BLE001
         log_task(task_type="MCQ", event="error", level=ERROR, job_id=job_id, user_id=user_id,
                  message=str(err), detail={"trace": traceback.format_exc()[:8000]})
         _fail_job(job_id, err)
+    finally:
+        _clear_cancel(job_id)
 
 
 def start_mcq_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_id: str,
@@ -252,6 +327,54 @@ def start_mcq_resume_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_
         target=_resume_mcq_job,
         args=(job_id, course_id, topic_id, unit_id, decision, prereq_unit_ids,
               question_budget, review),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def _run_mcq_regen_job(job_id: uuid.UUID, run_id: uuid.UUID, outcome: str,
+                       feedback: str, tags: list[str] | None, reviewer: str) -> None:
+    """Regenerate ONE question for its LO in the background so the action is tracked as an
+    Activity (and the reviewer can keep working). `regenerate_question` re-reviews, persists
+    the new question onto the run, and logs the feedback; the frontend re-fetches the run on
+    success. Shares the MCQ semaphore so a regen never crowds out a full generation."""
+    import traceback
+
+    from app.mcq_pipeline.review import regenerate_question
+    from app.models import SyncJob
+    from app.services.task_log import ERROR, log_task
+
+    user_id = _bind_user_for_job(job_id)
+    log_task(task_type="REGEN", event="start", job_id=job_id, user_id=user_id,
+             message=f"run={run_id} outcome={outcome}")
+    try:
+        with _MCQ_SEMAPHORE:
+            regenerate_question(run_id, outcome, feedback, reviewer=reviewer, tags=tags or [])
+        with SessionLocal() as session:
+            job = session.get(SyncJob, job_id)
+            if job is not None:
+                job.status = SyncJob.SUCCESS
+                job.message = f"Regenerated “{outcome}”."
+                prog = dict(job.progress or {})
+                prog["regen"] = {"run_id": str(run_id), "outcome": outcome}
+                job.progress = prog
+                job.updated_at = _now()
+                session.commit()
+        log_task(task_type="REGEN", event="complete", job_id=job_id, user_id=user_id, message=outcome)
+    except Exception as err:  # noqa: BLE001 — surface failure on the job row
+        log_task(task_type="REGEN", event="error", level=ERROR, job_id=job_id, user_id=user_id,
+                 message=str(err), detail={"trace": traceback.format_exc()[:8000]})
+        _fail_job(job_id, err)
+    finally:
+        progress_broker.publish(str(job_id))
+
+
+def start_mcq_regen_job(job_id: uuid.UUID, run_id: uuid.UUID, outcome: str,
+                        feedback: str, tags: list[str] | None, reviewer: str) -> threading.Thread:
+    thread = threading.Thread(
+        target=_run_mcq_regen_job,
+        args=(job_id, run_id, outcome, feedback, tags, reviewer),
         daemon=True,
     )
     thread.start()

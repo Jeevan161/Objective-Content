@@ -156,9 +156,14 @@ export const getMcqTrace = (jobId) => request(`/courses/mcq/jobs/${jobId}/trace/
 // All recent runs (summaries), newest first, across every course — for the Runs page.
 export const listAllMcqRuns = (limit = 50) => request(`/courses/mcq/runs/?limit=${limit}`)
 
+// Cancel a running / HITL-paused MCQ (or regeneration) job; returns the serialized job.
+export const cancelMcqJob = (jobId) =>
+  request(`/courses/mcq/jobs/${jobId}/cancel/`, { method: 'POST' })
+
 // --- Human-in-the-loop review (Gate B) ---
 // The reviewer is taken from the authenticated user server-side — never sent from the client.
-// Regenerate ONE question with reviewer feedback injected; returns the new question.
+// Regenerate ONE question with reviewer feedback injected. Runs as a background REGEN job
+// (so it shows in Activity); returns the serialized job — poll it, then re-fetch the run.
 export const regenerateMcqQuestion = (runId, outcome, feedback, tags = []) =>
   request(`/courses/mcq/runs/${runId}/questions/${encodeURIComponent(outcome)}/regenerate/`, {
     method: 'POST',

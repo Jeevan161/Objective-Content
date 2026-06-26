@@ -1,14 +1,15 @@
 import { useEffect } from 'react'
-import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, ListChecks, Trash2, Activity } from 'lucide-react'
+import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, ListChecks, Trash2, Activity, RotateCcw, Ban, ChevronRight } from 'lucide-react'
 import { EnvBadge, Spinner, EmptyState } from './ui'
 
-const TERMINAL = ['SUCCESS', 'FAILURE']
+const TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
 
 const JOB_TYPE_META = {
   SYNC: { label: 'Course sync', icon: RefreshCw },
   EXTRACT: { label: 'Content extraction', icon: FileText },
   RAG: { label: 'RAG ingestion', icon: Database },
   MCQ: { label: 'MCQ generation', icon: ListChecks },
+  REGEN: { label: 'Question regeneration', icon: RotateCcw },
 }
 
 function timeAgo(iso) {
@@ -20,17 +21,26 @@ function timeAgo(iso) {
   return `${Math.floor(sec / 86400)}d ago`
 }
 
-function JobRow({ job, onDismiss }) {
+function JobRow({ job, onDismiss, onCancel, onOpen }) {
   const active = !TERMINAL.includes(job.status)
   const meta = JOB_TYPE_META[job.job_type] || JOB_TYPE_META.SYNC
   const TypeIcon = meta.icon
+  // MCQ generation jobs can be reopened to their exact page/stage, and cancelled while live.
+  const canOpen = onOpen && job.job_type === 'MCQ'
+  const canCancel = onCancel && active && job.job_type === 'MCQ'
 
   return (
-    <div className={`job-row job-${job.status.toLowerCase()}`}>
+    <div className={`job-row job-${job.status.toLowerCase()} ${canOpen ? 'job-row-clickable' : ''}`}
+      onClick={canOpen ? () => onOpen(job) : undefined}
+      role={canOpen ? 'button' : undefined}
+      tabIndex={canOpen ? 0 : undefined}
+      onKeyDown={canOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(job) } } : undefined}
+    >
       <div className="job-row-status">
         {active && <Spinner size={16} />}
         {job.status === 'SUCCESS' && <CheckCircle2 size={16} className="text-green" />}
         {job.status === 'FAILURE' && <XCircle size={16} className="text-red" />}
+        {job.status === 'CANCELLED' && <Ban size={16} className="text-muted" />}
       </div>
       <div className="job-row-main">
         <div className="job-row-title">
@@ -44,18 +54,26 @@ function JobRow({ job, onDismiss }) {
         </div>
         <div className="job-row-time">{timeAgo(job.created_at)}</div>
       </div>
-      {!active && (
-        <button className="icon-btn" onClick={() => onDismiss(job.id)} aria-label="Dismiss job">
-          <X size={14} />
-        </button>
-      )}
+      <div className="job-row-actions" onClick={(e) => e.stopPropagation()}>
+        {canCancel && (
+          <button className="btn btn-ghost btn-sm" onClick={() => onCancel(job)} aria-label="Cancel job">
+            <Ban size={13} /> Cancel
+          </button>
+        )}
+        {canOpen && <ChevronRight size={15} className="job-row-open" aria-hidden="true" />}
+        {!active && (
+          <button className="icon-btn" onClick={() => onDismiss(job.id)} aria-label="Dismiss job">
+            <X size={14} />
+          </button>
+        )}
+      </div>
     </div>
   )
 }
 
 // Slide-over panel listing every background job (running + finished) so the
 // user can always see exactly what the system is doing.
-function JobsDrawer({ open, jobs, onClose, onDismiss, onClearFinished }) {
+function JobsDrawer({ open, jobs, onClose, onDismiss, onClearFinished, onCancel, onOpenJob }) {
   useEffect(() => {
     function onKey(e) {
       if (e.key === 'Escape') onClose()
@@ -92,7 +110,10 @@ function JobsDrawer({ open, jobs, onClose, onDismiss, onClearFinished }) {
               hint="Background jobs show up here with live progress."
             />
           ) : (
-            jobs.map((job) => <JobRow key={job.id} job={job} onDismiss={onDismiss} />)
+            jobs.map((job) => (
+              <JobRow key={job.id} job={job} onDismiss={onDismiss}
+                onCancel={onCancel} onOpen={onOpenJob} />
+            ))
           )}
         </div>
       </aside>

@@ -203,11 +203,13 @@ class SyncJob(Base):
     AWAITING_REVIEW = "AWAITING_REVIEW"   # paused at a HITL gate (division / LO-mapping)
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
+    CANCELLED = "CANCELLED"               # stopped by the user mid-run / while paused
 
     SYNC = "SYNC"
     EXTRACT = "EXTRACT"
     RAG = "RAG"
     MCQ = "MCQ"
+    REGEN = "REGEN"                       # one-question regeneration (Review Queue)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     job_type: Mapped[str] = mapped_column(String(16), default=SYNC)

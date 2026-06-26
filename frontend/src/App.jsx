@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus, Search, LayoutGrid, ChevronsUpDown, ChevronsDownUp } from 'lucide-react'
-import { startSync, getJob, getCourses, extractContent, ingestContent } from './api'
+import { startSync, getJob, getCourses, extractContent, ingestContent, cancelMcqJob } from './api'
 import Sidebar from './components/Sidebar'
 import MobileBar from './components/MobileBar'
 import JobsDrawer from './components/JobsDrawer'
@@ -23,7 +23,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext'
 import { ToastProvider, useToast } from './components/Toast'
 import { EmptyState, Skeleton, Spinner } from './components/ui'
 
-const TERMINAL = ['SUCCESS', 'FAILURE']
+const TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
 
 function useTheme() {
   const [theme, setTheme] = useState(() => localStorage.getItem('oc-theme') || 'dark')
@@ -105,6 +105,9 @@ function Workspace() {
   // Background jobs being polled (supports several concurrent ones).
   const [jobs, setJobs] = useState([])
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // When set (from the Activity drawer), tells the MCQ page which job to reopen to its
+  // exact course/topic/session + live stage. `seq` makes repeat opens distinct.
+  const [mcqOpenTarget, setMcqOpenTarget] = useState(null)
   // Mobile navigation drawer (the off-canvas sidebar).
   const [navOpen, setNavOpen] = useState(false)
   // Bulk expand/collapse signal broadcast to every course card.
@@ -144,6 +147,8 @@ function Workspace() {
         EXTRACT: 'Extraction failed', RAG: 'Ingestion failed', MCQ: 'MCQ generation failed',
       }
       for (const u of byId.values()) {
+        // Regeneration jobs are followed by the Review Queue itself (own toast + refresh).
+        if (u.job_type === 'REGEN') continue
         if (u.status === 'SUCCESS') {
           toast.push({
             kind: 'success',
@@ -160,7 +165,7 @@ function Workspace() {
           })
         }
       }
-      if ([...byId.values()].some((u) => u.status === 'SUCCESS')) {
+      if ([...byId.values()].some((u) => u.status === 'SUCCESS' && u.job_type !== 'REGEN')) {
         refreshCourses()
         setDataVersion((v) => v + 1)
       }
@@ -228,6 +233,32 @@ function Workspace() {
         })
       })
       .catch((e) => toast.push({ kind: 'error', title: 'Could not start ingestion', message: e.message }))
+  }
+
+  // Open an MCQ job from the Activity drawer at its exact page/stage.
+  function handleOpenJob(job) {
+    const ctx = job.progress?.ctx || {}
+    setMcqOpenTarget({
+      courseId: job.course_id,
+      topicId: ctx.topic_id || '',
+      sessionId: ctx.unit_id || '',
+      jobId: job.id,
+      seq: Date.now(),
+    })
+    setDrawerOpen(false)
+    setPage('mcq')
+  }
+
+  // Cancel a running / paused MCQ (or regeneration) job from the Activity drawer.
+  // The server signals the worker (or finalizes a paused job); we reflect the new state.
+  async function handleCancelJob(job) {
+    try {
+      const updated = await cancelMcqJob(job.id)
+      setJobs((prev) => prev.map((j) => (j.id === job.id ? updated : j)))
+      toast.push({ kind: 'info', title: 'Cancelling job', message: updated.message || job.course_id })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not cancel job', message: e.message })
+    }
   }
 
   // course_id → Set of active job types (SYNC, EXTRACT), so each pipeline
@@ -308,15 +339,23 @@ function Workspace() {
         {page === 'generation' && <GenerationStudio onNavigate={setPage} />}
         {page === 'pipeline' && <PipelinePage />}
         {page === 'llm-providers' && <LLMProvidersPage />}
-        {page === 'mcq' && (
+        {/* Kept mounted (just hidden) so navigating away and back restores the exact
+            flow + live stage; the Activity drawer reopens a specific job via openTarget. */}
+        <div style={{ display: page === 'mcq' ? '' : 'none' }}>
           <McqGenerationPage
             courses={courses}
             onBack={() => setPage('generation')}
             onTrackJob={(job) => setJobs((prev) => [job, ...prev])}
+            openTarget={mcqOpenTarget}
+          />
+        </div>
+        {page === 'runs' && <McqRunsPage courses={courses} />}
+        {page === 'review' && (
+          <ReviewQueuePage
+            courses={courses}
+            onTrackJob={(job) => setJobs((prev) => [job, ...prev])}
           />
         )}
-        {page === 'runs' && <McqRunsPage courses={courses} />}
-        {page === 'review' && <ReviewQueuePage courses={courses} />}
         {page === 'admin' && <AdminDashboard />}
         {page === 'courses' && (
         <>
@@ -456,6 +495,8 @@ function Workspace() {
         onClose={() => setDrawerOpen(false)}
         onDismiss={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
         onClearFinished={() => setJobs((prev) => prev.filter((j) => !TERMINAL.includes(j.status)))}
+        onCancel={handleCancelJob}
+        onOpenJob={handleOpenJob}
       />
 
       {wizard && (
