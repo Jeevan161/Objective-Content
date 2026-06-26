@@ -519,6 +519,16 @@ def _export_filename(run) -> str:
     return f"{safe}_MCQ_export.zip"
 
 
+def _require_reviewed(run) -> None:
+    """Generate ZIP / Prepare & Load are FROZEN until the run is marked reviewed
+    (which itself requires every question approved or excluded). 409 otherwise."""
+    if (run.review_status or "") != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="Mark the run reviewed before exporting or loading "
+                   "(approve or exclude every question, then 'Mark run reviewed').")
+
+
 def _result_for_load(run, approved_only: bool) -> dict:
     """Gate loading on human approval and return the result payload to export.
 
@@ -558,6 +568,7 @@ def export_mcq_run_to_beta(run_id: uuid.UUID, approved_only: bool = False,
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_reviewed(run)
     payload = _result_for_load(run, approved_only)
     try:
         data, info = build_zip_bytes(payload)
@@ -598,6 +609,7 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_reviewed(run)
     if not run.topic_id:
         raise HTTPException(status_code=400,
                             detail="This run has no topic_id, so the exam's parent "
@@ -766,8 +778,20 @@ def set_mcq_question_exclusion(run_id: uuid.UUID, outcome: str,
 def approve_mcq_run(run_id: uuid.UUID, body: ApproveRunRequest,
                     session: Session = Depends(get_session),
                     user: User = Depends(require_active)) -> dict:
-    if session.get(McqRun, run_id) is None:
+    run = session.get(McqRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    # A run may be marked reviewed only when EVERY generated question is resolved —
+    # approved or excluded (no pending). This gates Generate ZIP / Prepare & Load.
+    generated = [q for q in (run.result or {}).get("questions") or [] if q.get("status") == "generated"]
+    pending = [q for q in generated if not q.get("excluded") and q.get("approval") != "approved"]
+    if not generated:
+        raise HTTPException(status_code=409, detail="This run has no generated questions to review.")
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(pending)} of {len(generated)} questions are still pending — approve or "
+                   f"exclude every question before marking the run reviewed.")
     from app.mcq_pipeline.review import approve_run
     return approve_run(run_id, reviewer=_reviewer_name(user))
 

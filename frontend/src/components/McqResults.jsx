@@ -197,9 +197,9 @@ function ConfirmExcludeModal({ excludedCount, proceedingCount, onCancel, onConfi
         </>
       )}>
       <p className="confirm-exclude-msg">
-        <strong>{excludedCount}</strong> excluded question{excludedCount === 1 ? '' : 's'} will{' '}
-        <strong>not</strong> be loaded. Proceeding with the remaining{' '}
-        <strong>{proceedingCount}</strong> question{proceedingCount === 1 ? '' : 's'}.
+        <strong>{excludedCount}</strong> of <strong>{excludedCount + proceedingCount}</strong>{' '}
+        questions are excluded and will <strong>not</strong> be loaded. Proceed with the remaining{' '}
+        <strong>{proceedingCount}</strong> question{proceedingCount === 1 ? '' : 's'}?
       </p>
       <p className="confirm-exclude-hint">Type <code>confirm</code> to continue:</p>
       <input className="input" autoFocus value={text} spellCheck={false} placeholder="confirm"
@@ -617,6 +617,12 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
   const excludedCount = questions.filter((q) => q.status === 'generated' && q.excluded).length
   const approvedCount = eligibleQs.filter((q) => q.approval === 'approved').length
   const allApproved = eligibleQs.length > 0 && approvedCount === eligibleQs.length
+  // "Mark run reviewed" is allowed only when EVERY generated question is resolved —
+  // approved or excluded (no pending). Export/load stay FROZEN until the run is reviewed.
+  const generatedCount = questions.filter((q) => q.status === 'generated').length
+  const pendingCount = eligibleQs.filter((q) => q.approval !== 'approved').length
+  const canMarkReviewed = generatedCount > 0 && pendingCount === 0
+  const canExport = approved   // review_status === 'approved' (set by Mark run reviewed)
 
   // When questions are excluded, make the user confirm (type "confirm") before an
   // export/load proceeds with only the remaining questions.
@@ -755,14 +761,17 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
                 {approved ? (
                   <span className="mcq-status-chip ok"><ShieldCheck size={12} /> run reviewed</span>
                 ) : (
-                  <button className="btn btn-soft btn-sm" onClick={handleApprove}>
+                  <button className="btn btn-soft btn-sm" onClick={handleApprove}
+                    disabled={!canMarkReviewed}
+                    title={canMarkReviewed ? ''
+                      : `Approve or exclude every question first (${pendingCount} still pending)`}>
                     <ShieldCheck size={13} /> Mark run reviewed
                   </button>
                 )}
                 <button className="btn btn-soft btn-sm"
                   onClick={() => guardExcluded(() => handleGenerateZip(false), eligibleQs.length)}
-                  disabled={zipBusy || !allApproved}
-                  title={allApproved ? '' : 'Approve all remaining questions to export'}>
+                  disabled={zipBusy || !canExport}
+                  title={canExport ? '' : 'Mark the run reviewed first'}>
                   <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
                 </button>
                 {zipResult && (
@@ -772,8 +781,8 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
                   </a>
                 )}
                 <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
-                  onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || approvedCount < 1}
-                  title={approvedCount < 1 ? 'Approve at least one question first' : ''}>
+                  onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || !canExport}
+                  title={canExport ? '' : 'Mark the run reviewed first'}>
                   <FileSpreadsheet size={13} /> Prepare &amp; Load
                 </button>
               </div>
