@@ -37,14 +37,28 @@ def main() -> None:
                            .order_by(AppFeedback.created_at.desc())).all()
 
         by_action, by_type, by_tag = Counter(), Counter(), Counter()
-        rejects = []  # the actual complaints — reject/regenerate rows with a comment
+        rejects = []   # question-level complaints — reject/regenerate rows with a comment
+        lo_feedback = []   # LO-level regeneration feedback, with the reading-material link
         for r in qfb:
             by_action[r.action] += 1
             if r.question_type:
                 by_type[r.question_type] += 1
             for t in (r.tags or []):
                 by_tag[t] += 1
-            if r.action in ("reject_regenerate", "reject") and (r.comment or "").strip():
+            if r.stage == "lo":
+                snap = r.before_snapshot or {}
+                lo_feedback.append({
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "outcome": r.outcome,
+                    "outcome_title": snap.get("outcome_title"),
+                    "bloom_level": snap.get("bloom_level"),
+                    "comment": r.comment,
+                    "reviewer": r.reviewer,
+                    "source_section": snap.get("source_section"),
+                    "reading_material_evidence": snap.get("reading_material_evidence"),
+                    "reading_material_excerpt": snap.get("reading_material_excerpt"),
+                })
+            elif r.action in ("reject_regenerate", "reject") and (r.comment or "").strip():
                 rejects.append({
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                     "question_type": r.question_type,
@@ -67,7 +81,8 @@ def main() -> None:
             "by_question_type": dict(by_type),
             "by_tag": dict(by_tag.most_common()),
         },
-        "reject_comments": rejects,          # <-- the reported issues to analyse
+        "reject_comments": rejects,          # <-- question-level reported issues
+        "lo_feedback": lo_feedback,          # <-- LO regeneration feedback + reading-material link
         "app_feedback": app_rows,
     }
     print(json.dumps(out, indent=2, ensure_ascii=False))

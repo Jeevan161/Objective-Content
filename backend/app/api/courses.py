@@ -407,7 +407,8 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
 
 @router.post("/courses/mcq/jobs/{job_id}/resume/", status_code=status.HTTP_202_ACCEPTED)
 def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
-               session: Session = Depends(get_session)) -> dict:
+               session: Session = Depends(get_session),
+               user: User = Depends(require_active)) -> dict:
     """Resume a HITL-paused MCQ run after a human decision at a gate (approve / reject). The job
     must be AWAITING_REVIEW. Re-runs the pipeline from its checkpoint in the background; it may
     pause again at the next gate or complete. The run context (course/unit/etc.) is needed to
@@ -425,7 +426,8 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'.")
     decision = {"action": action, "rejected": body.rejected or [],
-                "rejected_ids": body.rejected_ids or [], "note": body.note or ""}
+                "rejected_ids": body.rejected_ids or [], "note": body.note or "",
+                "reviewer": _reviewer_name(user)}
     prereq_unit_ids = body.prerequisite_unit_ids
     if prereq_unit_ids is not None:
         prereq_unit_ids = [u.strip() for u in prereq_unit_ids if isinstance(u, str) and u.strip()]

@@ -16,7 +16,7 @@ from typing import Callable
 from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
-from app.models import Course, RagChunk, Topic, Unit, UnitPart
+from app.models import Course, McqQuestionFeedback, McqRun, RagChunk, Topic, Unit, UnitPart
 from app.services.extraction import READING_MATERIAL_LABEL, collect_courses_recursive
 
 import threading
@@ -404,6 +404,72 @@ def _interrupt_payload(graph, cfg) -> dict | None:
     return {"paused": True}
 
 
+def _excerpt_around(text: str, quote: str, window: int = 220) -> str:
+    """A window of the reading material around the evidence quote (best-effort context).
+    Falls back to the quote itself when it can't be located."""
+    q = (quote or "").strip()
+    if not text or not q:
+        return q
+    probe = q[:80]                       # quotes can be long/elided; match on a prefix
+    i = text.find(probe)
+    if i < 0:
+        return q[:500]
+    start, end = max(0, i - window), min(len(text), i + len(probe) + window)
+    return text[start:end].strip()
+
+
+def _persist_lo_feedback(thread_id: str, decision, payload: dict, adapter) -> None:
+    """Persist the reviewer's per-LO regeneration feedback from a Gate-2 reject — one
+    McqQuestionFeedback row (stage='lo') per rejected outcome, linked to the reading-material
+    span it was grounded in (its source-evidence quote + a surrounding excerpt). Best-effort:
+    never breaks the resume."""
+    try:
+        if (payload or {}).get("gate") != "outcomes" or (decision or {}).get("action") != "reject":
+            return
+        rejected = list(decision.get("rejected") or [])
+        if not rejected and decision.get("rejected_ids"):   # legacy {rejected_ids, note}
+            note = decision.get("note", "")
+            rejected = [{"id": rid, "feedback": note} for rid in decision["rejected_ids"]]
+        rejected = [r for r in rejected if r.get("id")]
+        if not rejected:
+            return
+        reviewer = decision.get("reviewer") or ""
+        by_id = {o.get("id"): o for o in (payload.get("outcomes") or [])}
+        reading = getattr(adapter, "reading_material", "") or ""
+        try:
+            job_uuid = uuid.UUID(str(thread_id))
+        except (ValueError, TypeError):
+            job_uuid = None
+        with SessionLocal() as s:
+            run = (s.scalars(select(McqRun).where(McqRun.job_id == job_uuid)).first()
+                   if job_uuid is not None else None)
+            run_id = run.id if run is not None else None
+            for item in rejected:
+                lo_id = item.get("id")
+                feedback = (item.get("feedback") or "").strip()
+                o = by_id.get(lo_id) or {}
+                se = o.get("source_evidence")
+                quote = (se.get("quote", "") if isinstance(se, dict) else (se or ""))
+                section = se.get("section", "") if isinstance(se, dict) else ""
+                s.add(McqQuestionFeedback(
+                    run_id=run_id, stage="lo", outcome=str(lo_id)[:160],
+                    question_type=(o.get("bloom_level") or ""),
+                    action="lo_reject_regenerate", tags=[], comment=feedback,
+                    before_snapshot={
+                        "outcome_title": o.get("title") or o.get("description") or "",
+                        "concept_id": o.get("concept_id", ""),
+                        "bloom_level": o.get("bloom_level", ""),
+                        "source_section": section,
+                        "reading_material_evidence": quote,            # verbatim span the LO was grounded in
+                        "reading_material_excerpt": _excerpt_around(reading, quote),
+                    },
+                    reviewer=reviewer,
+                ))
+            s.commit()
+    except Exception:  # noqa: BLE001 — feedback capture must never break the resume
+        pass
+
+
 def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
                prereq_unit_ids: list[str] | None = None, question_budget: int | None = None,
                review: bool = True, progress_sink: Callable[[dict], None] | None = None) -> dict:
@@ -422,7 +488,12 @@ def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
     cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
     # Which gate are we resuming from? Seed the fresh reporter so the stages already completed on the
     # original run stay 'done' on the board (otherwise the resume would reset them all to 'pending').
-    gate = (_interrupt_payload(graph, cfg) or {}).get("gate")
+    payload = _interrupt_payload(graph, cfg) or {}
+    gate = payload.get("gate")
+    # Persist the reviewer's per-LO regeneration feedback (with the reading-material span each
+    # rejected outcome was grounded in) BEFORE resuming — the paused payload still carries the
+    # outcomes + their source evidence.
+    _persist_lo_feedback(thread_id, decision, payload, adapter)
     gate_key = {"outcomes": "review_outcomes"}.get(gate)
     keys = [d["key"] for d in STAGE_DEFS]
     seed_done = ([k for k in keys[:keys.index(gate_key)] if k != "repair"]   # repair is conditional
