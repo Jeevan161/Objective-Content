@@ -22,7 +22,7 @@ function needsReview(r) {
 
 // Review Queue: runs awaiting question review. Open one to Approve/Reject each question and load
 // it to the portal once approved. Shares the McqResults viewer in its interactive 'review' mode.
-function ReviewQueuePage({ courses }) {
+function ReviewQueuePage({ courses, onTrackJob }) {
   const toast = useToast()
   const [runs, setRuns] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
@@ -130,7 +130,7 @@ function ReviewQueuePage({ courses }) {
                 <Spinner size={14} /> Loading run…
               </div>
             )}
-            {!loadingRun && run && <McqResults key={run.id} run={run} mode="review" courseId={run.course_id} unitId={run.unit_id} />}
+            {!loadingRun && run && <McqResults key={run.id} run={run} mode="review" courseId={run.course_id} unitId={run.unit_id} onTrackJob={onTrackJob} />}
             {!loadingRun && !run && (
               <EmptyState
                 icon={ListChecks}

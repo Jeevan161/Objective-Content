@@ -9,7 +9,7 @@ import { useToast } from './Toast'
 import { useAuth } from '../auth/AuthContext'
 import Modal from './Modal'
 import NodeSnapshot from './NodeSnapshot'
-import { regenerateMcqQuestion, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace, setMcqQuestionApproval, setMcqQuestionExclusion } from '../api'
+import { regenerateMcqQuestion, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace, setMcqQuestionApproval, setMcqQuestionExclusion, getJob, getMcqRun } from '../api'
 import ReactMarkdown from 'react-markdown'
 import ReadingMaterialPane from './ReadingMaterialPane'
 
@@ -103,6 +103,20 @@ function RagCalls({ calls }) {
       </ul>
     </details>
   )
+}
+
+// Poll a background job until it settles (or times out). Used to follow a regeneration
+// job started by the Review Queue — the question is re-fetched from the run on success.
+const JOB_TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
+async function pollJobDone(jobId, { intervalMs = 1500, timeoutMs = 180000 } = {}) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, intervalMs))
+    let job = null
+    try { job = await getJob(jobId) } catch { /* transient — keep polling */ }
+    if (job && JOB_TERMINAL.includes(job.status)) return job
+  }
+  return null
 }
 
 // Per-question reviewer actions (Review Queue only): Approve (persisted, drives the
@@ -497,7 +511,7 @@ function TraceRow({ span: s, max }) {
 // `mode`: 'view' (default) shows generation details read-only — used by the generation
 // page and the Runs list. 'review' (Review Queue) adds per-question Approve/Reject and the
 // approval-gated load controls.
-function McqResults({ run, mode = "view", courseId, unitId }) {
+function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
   const review = mode === 'review'
   const toast = useToast()
   const { user } = useAuth()
@@ -521,9 +535,22 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
   async function handleRegenerate(outcome, feedback, tags) {
     setBusyOutcome(outcome)
     try {
-      const { question } = await regenerateMcqQuestion(run.id, outcome, feedback, tags)
-      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? question : q)))
-      toast.push({ kind: 'success', title: 'Question regenerated', message: `${outcome} updated from your feedback` })
+      // Regeneration now runs as a tracked background job (shows in Activity). Follow it,
+      // then pull the freshly persisted question back into the list.
+      const job = await regenerateMcqQuestion(run.id, outcome, feedback, tags)
+      onTrackJob?.(job)
+      const done = await pollJobDone(job.id)
+      if (done?.status === 'SUCCESS') {
+        const fresh = await getMcqRun(run.id)
+        const nq = (fresh?.result?.questions || []).find((q) => q.outcome === outcome)
+        if (nq) setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? nq : q)))
+        toast.push({ kind: 'success', title: 'Question regenerated', message: `${outcome} updated from your feedback` })
+      } else {
+        toast.push({
+          kind: 'error', title: 'Regenerate failed',
+          message: done?.error || 'The regeneration job did not complete.',
+        })
+      }
     } catch (e) {
       toast.push({ kind: 'error', title: 'Regenerate failed', message: e.message })
     } finally {
