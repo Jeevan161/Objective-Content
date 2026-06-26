@@ -68,7 +68,9 @@ class McqReviewRequest(BaseModel):
     """A human decision at a HITL gate, plus the run context needed to resume the paused
     pipeline (rebuilds the run-scoped RAG adapter; the job_id is the checkpoint thread_id)."""
     action: str = "approve"                       # "approve" | "reject"
-    rejected_ids: list[str] | None = None         # Gate-2: which LO ids to regenerate
+    # Per-LO reject + reason: [{"id", "feedback"}]. Each reason drives that LO's regeneration.
+    rejected: list[dict] | None = None
+    rejected_ids: list[str] | None = None         # legacy: ids only (reason falls back to `note`)
     note: str = ""
     course_id: str = ""
     topic_id: str = ""

@@ -6,9 +6,10 @@ The LangGraph pipeline. The LO-creation stage is the LO-first flow (`nodes` +
 legacy LearningOutcome shape, and the (unchanged) question stage follows:
 
     START → parse_structure → generate_outcomes → map_concepts → build_outcome_graph
-          → profile_depth → plan_outcomes → review_division (Gate 1)
+          → profile_depth → plan_outcomes
           → resolve_prerequisites → review_outcomes_quality (dedup + R1–R8) → validate ─cond─┐
-                pass / retries-exhausted → review_outcomes (Gate 2) │ still-fixable → repair ↺
+                pass / retries-exhausted → review_outcomes (HITL gate) │ still-fixable → repair ↺
+                the gate's per-LO reject → repair (regenerate with feedback) ↺ → ... → gate
           → finalize → lo_to_legacy → sequence_outcomes (deep-dive order)
           → recommend_question_types → generate_questions → review_questions → END
 
@@ -126,33 +127,15 @@ def review_questions_node(state, config) -> dict:
     return {"questions": reviewed, "question_reviews": summaries, "notes": notes}
 
 
-# --- human-in-the-loop gates (inert pass-through unless ctx.hitl_enabled) --- #
-def review_division(state, config) -> dict:
-    """HITL Gate 1 — pause for a human to approve/reject the Planner's LO division. Returns a
-    pass-through {} (no interrupt) unless the run enabled HITL. Emits a progress/trace span so the
-    gate is VISIBLE: it lights up 'running' (awaiting human) while paused, then 'done' with the
-    decision on resume — instead of the board/trace appearing frozen at plan_allocation and then
-    jumping to the next node."""
-    ctx = run_ctx(config)
-    if not getattr(ctx, "hitl_enabled", False):
-        return {}
-    prog = _prog(config)
-    prog.start("review_division", detail="awaiting human review")
-    from langgraph.types import interrupt
-    decision = interrupt({"gate": "division", "proposal": state.get("division_proposal", {})})
-    decision = decision if isinstance(decision, dict) else {"action": "approve"}
-    action, note = decision.get("action", "approve"), decision.get("note", "")
-    prog.done("review_division", detail=f"human {action}" + (f": {note[:60]}" if note else ""))
-    return {"gate_decision": {"gate": "division", "action": action, "note": note},
-            "notes": [f"Gate-1 {action}" + (f": {note}" if note else "")]}
-
-
+# --- human-in-the-loop gate (inert pass-through unless ctx.hitl_enabled) --- #
 def review_outcomes(state, config) -> dict:
-    """HITL Gate 2 — pause for a human to approve/reject the final LOs by concept mapping. A per-LO
-    reject marks those ids as rubric failures (with the human note) so the existing repair path
-    regenerates exactly those, then re-judges + re-reviews. Inert pass-through unless HITL on.
-    Emits a progress/trace span so the gate and the human decision are VISIBLE (the board lights up
-    'running' while awaiting review, then 'done' on resume) rather than the run appearing frozen."""
+    """HITL gate — pause for a human to review the final LOs. The reviewer unchecks any
+    outcome and gives a per-LO reason ('why'); each reason is written to that LO's
+    `lo_reviews.fail_reason`, so the existing repair path regenerates exactly those LOs
+    USING that feedback, then re-judges + re-reviews and pauses here again (the loop). The
+    interrupt payload carries `regenerated_ids` — the LOs regenerated in the round that just
+    completed — so the UI can show 'regenerated' vs 'previously approved'. Inert pass-through
+    unless HITL is on. (Gate 1 / division review was removed.)"""
     ctx = run_ctx(config)
     if not getattr(ctx, "hitl_enabled", False):
         return {}
@@ -160,29 +143,42 @@ def review_outcomes(state, config) -> dict:
     prog.start("review_outcomes", detail="awaiting human review")
     from langgraph.types import interrupt
     decision = interrupt({"gate": "outcomes", "outcomes": state.get("outcomes", []),
-                          "reviews": state.get("lo_reviews", {})})
+                          "reviews": state.get("lo_reviews", {}),
+                          "regenerated_ids": list(state.get("last_regenerated_ids") or [])})
     decision = decision if isinstance(decision, dict) else {"action": "approve"}
     action = decision.get("action", "approve")
-    rejected = list(decision.get("rejected_ids", []))
-    note = decision.get("note", "")
+
+    # Per-LO feedback: rejected = [{"id", "feedback"}]. Accept the legacy {rejected_ids, note} too.
+    rejected_items = list(decision.get("rejected") or [])
+    if not rejected_items and decision.get("rejected_ids"):
+        note = decision.get("note", "")
+        rejected_items = [{"id": rid, "feedback": note} for rid in decision["rejected_ids"]]
+    rejected_ids = [r.get("id") for r in rejected_items if r.get("id")]
+
     prog.done("review_outcomes",
-              detail=f"human {action}" + (f", {len(rejected)} to regenerate" if rejected else ""))
-    out = {"gate_decision": {"gate": "outcomes", "action": action,
-                             "rejected_ids": rejected, "note": note},
-           "notes": [f"Gate-2 {action}" + (f" ({len(rejected)} rejected)" if rejected else "")]}
-    if action == "reject" and rejected:
+              detail=f"human {action}" + (f", {len(rejected_ids)} to regenerate" if rejected_ids else ""))
+    out = {"gate_decision": {"gate": "outcomes", "action": action, "rejected_ids": rejected_ids},
+           "notes": [f"Gate {action}" + (f" ({len(rejected_ids)} rejected)" if rejected_ids else "")]}
+    if action == "reject" and rejected_ids:
         vr = dict(state.get("validation_report") or {})
         prev = (vr.get("V13") or {}).get("failing", [])
-        vr["V13"] = {"pass": False, "detail": "human rejected at Gate 2",
-                     "failing": sorted(set(prev) | set(rejected))}
+        vr["V13"] = {"pass": False, "detail": "human rejected at the outcomes gate",
+                     "failing": sorted(set(prev) | set(rejected_ids))}
         reviews = dict(state.get("lo_reviews") or {})
-        for rid in rejected:
+        for item in rejected_items:
+            rid = item.get("id")
+            if not rid:
+                continue
+            fb = (item.get("feedback") or "").strip()
             rv = dict(reviews.get(rid) or {})
             rv.update({"covered": False, "_sig": None,
-                       "fail_reason": f"human review: {note}" if note else "human rejected this outcome"})
+                       "fail_reason": f"human review: {fb}" if fb else "human rejected this outcome"})
             reviews[rid] = rv
         out["validation_report"] = vr
         out["lo_reviews"] = reviews
+        # Marked 'regenerated' when the gate re-pauses after repair, so the UI can split the
+        # just-regenerated LOs (left) from the previously-approved ones (right).
+        out["last_regenerated_ids"] = rejected_ids
     return out
 
 
@@ -195,14 +191,6 @@ def route_after_validate(state) -> str:
     if state.get("retry_count", 0) >= MAX_RETRIES:
         return "finalize"
     return "repair"
-
-
-def route_after_division(state) -> str:
-    """approve / inert → resolve prerequisites ; reject → re-plan (re-selects; the note is recorded)."""
-    d = state.get("gate_decision") or {}
-    if d.get("gate") == "division" and d.get("action") == "reject":
-        return "plan_outcomes"
-    return "resolve_prerequisites"
 
 
 def route_after_outcomes(state) -> str:
@@ -267,7 +255,6 @@ def build_lo_graph(*, checkpointer=None):
     g.add_node("build_outcome_graph", build_outcome_graph)
     g.add_node("profile_depth", profile_depth)
     g.add_node("plan_outcomes", plan_outcomes)
-    g.add_node("review_division", review_division)        # HITL Gate 1 (inert unless hitl_enabled)
     g.add_node("resolve_prerequisites", resolve_prerequisites)
     g.add_node("review_outcomes_quality", review_outcomes_quality)
     g.add_node("validate", validate)
@@ -286,9 +273,7 @@ def build_lo_graph(*, checkpointer=None):
     g.add_edge("map_concepts", "build_outcome_graph")
     g.add_edge("build_outcome_graph", "profile_depth")
     g.add_edge("profile_depth", "plan_outcomes")
-    g.add_edge("plan_outcomes", "review_division")
-    g.add_conditional_edges("review_division", route_after_division,
-                            {"plan_outcomes": "plan_outcomes", "resolve_prerequisites": "resolve_prerequisites"})
+    g.add_edge("plan_outcomes", "resolve_prerequisites")   # Gate 1 (division review) removed
     g.add_edge("resolve_prerequisites", "review_outcomes_quality")
     g.add_edge("review_outcomes_quality", "validate")
     g.add_conditional_edges("validate", route_after_validate,

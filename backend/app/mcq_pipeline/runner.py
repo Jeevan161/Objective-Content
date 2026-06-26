@@ -422,7 +422,7 @@ def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
     # Which gate are we resuming from? Seed the fresh reporter so the stages already completed on the
     # original run stay 'done' on the board (otherwise the resume would reset them all to 'pending').
     gate = (_interrupt_payload(graph, cfg) or {}).get("gate")
-    gate_key = {"division": "review_division", "outcomes": "review_outcomes"}.get(gate)
+    gate_key = {"outcomes": "review_outcomes"}.get(gate)
     keys = [d["key"] for d in STAGE_DEFS]
     seed_done = ([k for k in keys[:keys.index(gate_key)] if k != "repair"]   # repair is conditional
                  if gate_key in keys else [])

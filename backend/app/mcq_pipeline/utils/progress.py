@@ -24,7 +24,6 @@ STAGE_DEFS = [
     {"key": "build_outcome_graph", "label": "Build outcome graph (weights)"},
     {"key": "profile_depth", "label": "Profile depth (feasibility)"},
     {"key": "plan_outcomes", "label": "Plan outcomes (budget + identify apply)"},
-    {"key": "review_division", "label": "Review division (human gate 1)"},
     {"key": "resolve_prerequisites", "label": "Resolve prerequisites (apply)"},
     {"key": "review_outcomes_quality", "label": "Dedup & judge (R1–R8 rubric)"},
     {"key": "validate", "label": "Validate (structural + rubric gate)"},

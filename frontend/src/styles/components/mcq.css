@@ -980,6 +980,21 @@
 .mcq-review-fail { color: var(--red); }
 .mcq-review-note { width: 100%; resize: vertical; font-family: inherit; }
 .mcq-review-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+
+/* Two-column review after a regeneration round: left = regenerated, right = kept. */
+.mcq-review-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
+.mcq-review-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mcq-review-col .mcq-spec-k { padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+@media (max-width: 720px) { .mcq-review-cols { grid-template-columns: 1fr; } }
+
+/* An unchecked (to-regenerate) outcome + its required per-LO feedback box. */
+.mcq-lo-item.rejecting {
+  background: var(--brand-soft);
+  border-radius: var(--r-sm);
+  padding-left: var(--sp-2);
+  padding-right: var(--sp-2);
+}
+.mcq-lo-feedback { width: 100%; resize: vertical; font-family: inherit; margin-top: 4px; }
 .mcq-review .mcq-lo-main input[type='checkbox'] { accent-color: var(--brand); }
 
 /* --- generate options (budget + human-review toggle) --- */

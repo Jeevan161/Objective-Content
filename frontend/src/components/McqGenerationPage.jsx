@@ -203,7 +203,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
         kind: 'info',
         title: 'MCQ generation started',
         message: hitl
-          ? `Generating from “${selectedSession?.label}” — it will pause for your review at each gate.`
+          ? `Generating from “${selectedSession?.label}” — it will pause for your review of the outcomes.`
           : `Generating from “${selectedSession?.label}” — watch the live progress below.`,
       })
     } catch (e) {
@@ -345,7 +345,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
                 data-tip="Target number of questions (default 20; stepped down by 5s if the material is thin)"
               />
             </label>
-            <label className="mcq-opt mcq-opt-check" data-tip="Pause for human approval of the division and the final outcomes">
+            <label className="mcq-opt mcq-opt-check" data-tip="Pause to review the learning outcomes — uncheck any with feedback to regenerate before questions">
               <input
                 type="checkbox"
                 checked={hitl}

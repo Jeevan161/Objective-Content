@@ -51,6 +51,8 @@ class LOState(TypedDict, total=False):
     outcomes: list
     backfill_pool: list                    # ranked UNSELECTED candidates (plan_outcomes) — used to
                                            # top the set back up to budget after dedup / R1-drop
+    last_regenerated_ids: list             # LO ids regenerated in the last human-gate round, so the
+                                           # gate UI can split 'regenerated' from 'previously approved'
 
     # ---- validation / repair loop ----------------------------------------- #
     validation_report: dict
