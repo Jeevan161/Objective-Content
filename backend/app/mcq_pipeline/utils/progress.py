@@ -14,6 +14,13 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import Callable
 
+
+class JobCancelled(BaseException):
+    """Raised cooperatively when the user cancels a running MCQ job. Subclasses
+    BaseException (not Exception) on purpose so the pipeline's broad `except Exception`
+    handlers don't swallow it — it propagates up through the graph to the job runner,
+    which finalizes the job as CANCELLED."""
+
 # The pipeline's stages, in order. `parallel_group` marks branches the UI renders
 # side by side; per-LO stages carry done/total.
 STAGE_DEFS = [
@@ -71,10 +78,14 @@ def _now_iso() -> str:
 class ProgressReporter:
     def __init__(self, sink: Callable[[dict], None] | None = None,
                  trace_sink: Callable[[dict], None] | None = None,
-                 seed_done: list[str] | None = None):
+                 seed_done: list[str] | None = None,
+                 cancel_check: Callable[[], bool] | None = None):
         self._lock = threading.Lock()
         self._sink = sink
         self._trace_sink = trace_sink          # emits one span per node entry (our own trace)
+        # Cooperative cancellation: consulted on every stage transition (nodes call these
+        # frequently). When it returns True we raise JobCancelled, which unwinds the graph.
+        self._cancel_check = cancel_check
         self._open: dict[str, tuple] = {}       # node key -> (started_dt, started_perf)
         # seed_done: stages already completed before this reporter took over (a HITL RESUME builds a
         # fresh reporter; without seeding, every prior stage would reset to 'pending' on the board).
@@ -99,6 +110,10 @@ class ProgressReporter:
                 pass
 
     def _set(self, key: str, **fields) -> None:
+        # Cooperative cancel point — checked before any work, outside the swallowing
+        # _flush, so JobCancelled actually propagates out of the running node.
+        if self._cancel_check is not None and self._cancel_check():
+            raise JobCancelled()
         span = None
         with self._lock:
             stage = self._stages.get(key)

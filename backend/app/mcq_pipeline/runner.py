@@ -215,6 +215,7 @@ def run_mcq_pipeline(
     hitl_enabled: bool = False,
     progress_sink: Callable[[dict], None] | None = None,
     thread_id: str | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict:
     disable_langsmith()
     # The checkpointer keys every run by thread_id; default to a fresh uuid when the
@@ -274,7 +275,8 @@ def run_mcq_pipeline(
         reading_material=reading_material, ingested=ingested, unit_ids=unit_filter,
         domain=getattr(course, "question_domain", "") or "",
     )
-    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id))
+    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id),
+                                cancel_check=cancel_check)
 
     # Live, non-serializable objects ride in the RunContext (keyed by thread_id),
     # never in checkpointed state. Always cleared so the registry can't leak.
@@ -472,7 +474,8 @@ def _persist_lo_feedback(thread_id: str, decision, payload: dict, adapter) -> No
 
 def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
                prereq_unit_ids: list[str] | None = None, question_budget: int | None = None,
-               review: bool = True, progress_sink: Callable[[dict], None] | None = None) -> dict:
+               review: bool = True, progress_sink: Callable[[dict], None] | None = None,
+               cancel_check: Callable[[], bool] | None = None) -> dict:
     """Resume a HITL-paused run after a human decision (Gate 1 / Gate 2). Rebuilds the run-scoped
     RagAdapter/ProgressReporter (they are NOT checkpointed) and re-registers the RunContext under
     the SAME thread_id, then resumes the graph from its checkpoint with the decision. If the run
@@ -499,7 +502,7 @@ def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
     seed_done = ([k for k in keys[:keys.index(gate_key)] if k != "repair"]   # repair is conditional
                  if gate_key in keys else [])
     progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id),
-                                seed_done=seed_done)
+                                seed_done=seed_done, cancel_check=cancel_check)
     ctx = RunContext(rag=adapter, progress=progress, db_prereq_units=prereq_units,
                      generate_questions=True, review_questions=review,
                      question_budget=question_budget, hitl_enabled=True)
