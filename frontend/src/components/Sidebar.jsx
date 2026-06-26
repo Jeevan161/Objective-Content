@@ -24,10 +24,10 @@ const NAV = [
   { key: 'courses', label: 'Courses', icon: LayoutGrid },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'generation', label: 'Generation Studio', icon: Sparkles },
+  { key: 'review', label: 'Review Queue', icon: ClipboardCheck },
   { key: 'runs', label: 'Runs', icon: History },
   { key: 'pipeline', label: 'MCQ Pipeline', icon: Workflow },
   { key: 'llm-providers', label: 'LLM Connectors', icon: Plug },
-  { key: 'review', label: 'Review Queue', icon: ClipboardCheck },
 ]
 
 function Sidebar({
