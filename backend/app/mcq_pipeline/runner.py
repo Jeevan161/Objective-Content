@@ -152,6 +152,29 @@ def build_adapter(course_id: str, unit_id: str, prereq_unit_ids: list[str] | Non
     return adapter, prereq_units, session_label
 
 
+def _build_reserve_los(state: dict, db_prereq_units: list, final_los: list) -> list:
+    """Bridge the UNSELECTED (backfill) outcome candidates that did NOT make the final set
+    into legacy-LO shape, persisted on the run as `reserve_los`. Lets a reviewer-driven
+    'this outcome is misaligned' regeneration swap in a previously-dropped outcome
+    (review._pick_reserve_lo). Empty list when the run produced no reserve pool."""
+    from app.mcq_pipeline.artifact import lo_to_legacy
+    pool = state.get("backfill_pool") or []
+    if not pool:
+        return []
+    final_ids = {lo.get("outcome") for lo in (final_los or [])}
+    inv_by_id = {c["concept_id"]: c for c in state.get("concept_inventory", [])}
+    sec_text = {s["topic_id"]: s.get("text", "") for s in state.get("sections", [])}
+    reserve = []
+    for o in pool:
+        if o.get("id") in final_ids:        # promoted into the final set by backfill -> not reserve
+            continue
+        try:
+            reserve.append(lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text))
+        except Exception:  # noqa: BLE001 — a malformed candidate must never break the run result
+            continue
+    return reserve
+
+
 def _attach_dependencies(questions: list, los: list, state: dict) -> None:
     """Attach per-question dependency context — the concept it tests, the concepts it
     DEPENDS ON (prerequisites, must-know-first), and the concepts that BUILD on it — derived
@@ -300,6 +323,7 @@ def run_mcq_pipeline(
         "overrides": artifact.get("overrides", []),
         "escalation": artifact.get("escalation"),
         "final_los": los,
+        "reserve_los": _build_reserve_los(state, prereq_units, los),
         "questions": questions,
         "question_reviews": state.get("question_reviews", []),
         "notes": state.get("notes", []),
@@ -431,7 +455,8 @@ def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
         "spec_hash": artifact.get("spec_hash", ""),
         "validation_report": artifact.get("validation_report", {}),
         "overrides": artifact.get("overrides", []), "escalation": artifact.get("escalation"),
-        "final_los": los, "questions": questions,
+        "final_los": los, "reserve_los": _build_reserve_los(state, prereq_units, los),
+        "questions": questions,
         "question_reviews": state.get("question_reviews", []),
         "notes": state.get("notes", []), "log": state.get("log", []),
         "prereq_units": prereq_units, "prompt_versions": _prompt_versions(),

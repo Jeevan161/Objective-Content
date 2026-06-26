@@ -142,6 +142,154 @@ def _detect_type_change(feedback: str, current: str, question_text: str = "") ->
     return "REPICK" if (llm == "REPICK" or kw == "REPICK") else None
 
 
+# --- feedback INTENT classification (routes regeneration to a targeted fix) --- #
+# Derived from real reviewer comments in RDS (mcq_question_feedback): "Wrong Options",
+# "Options not aligned", "refers to external resources", "Use Markdown", "AI Generated
+# strokes", "Option B is similar to the correct one", "not mandatory to know" (scope).
+_FEEDBACK_INTENTS = {
+    "wrong_options", "wrong_answer", "multi_valid", "not_self_contained",
+    "formatting", "lo_misaligned", "new_question", "other",
+}
+
+_FEEDBACK_INTENT_SYS = register("review.feedback_intent_sys", (
+    "You triage a reviewer's feedback on a generated assessment question into ONE intent, so the "
+    "system can apply a TARGETED fix instead of blindly regenerating. Choose the single best intent:\n"
+    "- wrong_options: distractors/options are wrong, weak, implausible, give the answer away, or are "
+    "negations/opposites of the key.\n"
+    "- wrong_answer: the marked correct answer (the key) is itself incorrect.\n"
+    "- multi_valid: more than one option is defensibly correct, options are too similar, or the "
+    "'correct' choice is subjective.\n"
+    "- not_self_contained: the question or its answer depends on the source/reading or on context not "
+    "stated IN the question.\n"
+    "- formatting: presentation only — use Markdown, code/backtick formatting, AI-looking dashes or "
+    "typography, wording style.\n"
+    "- lo_misaligned: the question tests the wrong thing / is out of scope / 'should not be asked' / the "
+    "learning outcome itself is unsuitable.\n"
+    "- new_question: the reviewer wants a completely different/new question on the same outcome.\n"
+    "- other: anything else, or unclear.\n"
+    'Return ONLY JSON: {"intent": "<one of the names above>"}.'
+))
+
+
+def _keyword_intent(feedback: str) -> str:
+    """Deterministic fallback intent when the LLM classifier is unavailable."""
+    t = (feedback or "").lower()
+    if re.search(r"\b(self[- ]?contain|external|refers? to|reading|session summary|not specified|context)\b", t):
+        return "not_self_contained"
+    if re.search(r"\b(markdown|format|backtick|strokes?|dashes?|em[- ]?dash|typo|styl|ai[\s-]?generat)\b", t):
+        return "formatting"
+    if re.search(r"\b(subjective|also (correct|valid)|too similar|similar to the correct|ambiguous|more than one|both correct)\b", t):
+        return "multi_valid"
+    if re.search(r"\b(wrong answers?|correct answer|answer is (wrong|incorrect)|answer key|key is wrong)\b", t):
+        return "wrong_answer"
+    if re.search(r"\b(wrong option|wrong options|distractor|options are|not aligned)\b", t):
+        return "wrong_options"
+    if re.search(r"\b(out of scope|not mandatory|cannot be asked|can'?t be asked|should not be asked|not relevant|trivia)\b", t):
+        return "lo_misaligned"
+    if re.search(r"\b(new question|different question|regenerate|start over|completely)\b", t):
+        return "new_question"
+    return "other"
+
+
+def _classify_feedback(feedback: str, current: str, question_text: str) -> str:
+    """LLM-primary intent classification with a keyword fallback. Returns one of
+    _FEEDBACK_INTENTS."""
+    from app.mcq_pipeline.utils.llm import chat, parse_json
+    try:
+        usr = (f"CURRENT QUESTION TYPE: {current}\n\nQUESTION:\n{question_text}\n\n"
+               f"REVIEWER FEEDBACK:\n{feedback}")
+        data = parse_json(chat(
+            [{"role": "system", "content": get_prompt("review.feedback_intent_sys", _FEEDBACK_INTENT_SYS)},
+             {"role": "user", "content": usr}], temperature=0)) or {}
+        it = str(data.get("intent") or "").strip().lower()
+        return it if it in _FEEDBACK_INTENTS else _keyword_intent(feedback)
+    except Exception:  # noqa: BLE001 — never block regeneration on the classifier
+        return _keyword_intent(feedback)
+
+
+# Per-intent sharpened fix instruction fed to fix_lean (alongside the raw reviewer text).
+_INTENT_FIX = {
+    "wrong_options": ("OPTION RULES",
+        "Rebuild the distractors: each must be a specific, plausible, TAUGHT misconception of the "
+        "SAME polarity and scope as the correct answer — no negations/opposites/blanket denials, no "
+        "giveaway absolutes, and every option must directly answer the exact question asked."),
+    "wrong_answer": ("ANSWER KEY",
+        "The marked correct answer is wrong. Mark the genuinely correct option per the COURSE MATERIAL "
+        "and keep EXACTLY one correct; do not change the question's meaning."),
+    "multi_valid": ("OPTION RULES",
+        "More than one option is defensibly correct (or two are too similar). Keep EXACTLY one correct "
+        "and rewrite the others so each is clearly, specifically WRONG on the taught concept — no "
+        "second arguable answer."),
+    "not_self_contained": ("SELF-CONTAINMENT",
+        "Make the question stand alone: remove any reference to the source/reading/session, and move "
+        "EVERY detail the answer depends on INTO the stem. The answer must be fully determined by the "
+        "stem the learner sees."),
+    "formatting": ("MARKDOWN FORMATTING",
+        "Fix presentation only (do NOT change meaning, options, or the key): clean Markdown with "
+        "`backticks` for code/terms in the stem AND options (content_type MARKDOWN where used), and "
+        "plain hyphens/straight quotes — remove any en/em dashes or AI-looking typography."),
+}
+
+
+def _intent_issue(intent: str, feedback: str) -> dict:
+    """Build the high-severity fix issue for fix_lean from the classified intent."""
+    rule, sharp = _INTENT_FIX.get(intent, ("HUMAN FEEDBACK", None))
+    return {
+        "severity": "high", "rule": rule,
+        "problem": f"Reviewer feedback: {feedback}",
+        "suggested_fix": (f"{sharp} (reviewer said: {feedback})" if sharp else feedback),
+    }
+
+
+def _pick_reserve_lo(result: dict, current_lo: dict) -> dict | None:
+    """For a 'change the LO' request with no suggestion: pick a previously-DROPPED
+    (reserve) outcome that is NOT already used in this run and is not a near-duplicate
+    of an existing one. Returns the reserve LO dict, or None if the run has no usable
+    reserve pool (older runs predate reserve persistence -> caller falls back)."""
+    reserve = result.get("reserve_los") or []
+    if not reserve:
+        return None
+    used_outcomes = {(lo.get("outcome") or "").strip().lower()
+                     for lo in (result.get("final_los") or [])}
+    used_concepts = {(lo.get("concept") or "").strip().lower()
+                     for lo in (result.get("final_los") or [])}
+    cur_concept = (current_lo.get("concept") or "").strip().lower()
+    # Prefer a reserve on a DIFFERENT concept than the rejected one; never reuse an
+    # outcome already in the run, and avoid an outcome whose concept is already covered.
+    def _ok(r, *, allow_same_concept):
+        o = (r.get("outcome") or "").strip().lower()
+        c = (r.get("concept") or "").strip().lower()
+        if not o or o in used_outcomes:
+            return False
+        if not allow_same_concept and (c in used_concepts or c == cur_concept):
+            return False
+        return True
+    for allow in (False, True):   # first try a fresh concept, then any unused outcome
+        for r in reserve:
+            if _ok(r, allow_same_concept=allow):
+                return r
+    return None
+
+
+def _apply_lo_swap(res: dict, from_outcome: str, reserve_lo: dict) -> None:
+    """Swap the rejected outcome out of the run's `final_los` and the chosen reserve LO
+    in (and drop it from `reserve_los` so it can't be picked twice). Mutates `res`."""
+    to_outcome = reserve_lo.get("outcome")
+    new_fl, replaced = [], False
+    for lo in (res.get("final_los") or []):
+        if lo.get("outcome") == from_outcome:
+            new_fl.append(reserve_lo); replaced = True
+        elif lo.get("outcome") == to_outcome:
+            continue                         # drop any pre-existing copy of the reserve
+        else:
+            new_fl.append(lo)
+    if not replaced and all(l.get("outcome") != to_outcome for l in new_fl):
+        new_fl.append(reserve_lo)
+    res["final_los"] = new_fl
+    res["reserve_los"] = [r for r in (res.get("reserve_los") or [])
+                          if r.get("outcome") != to_outcome]
+
+
 def _find_lo(result: dict, outcome: str) -> dict | None:
     return next((lo for lo in (result.get("final_los") or []) if lo.get("outcome") == outcome), None)
 
@@ -174,7 +322,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     top-priority instruction; re-review; persist (with a revision + feedback row).
     Returns the new question dict."""
     from app.mcq_pipeline.utils import scope
-    from app.mcq_pipeline.nodes.n14_generate_questions import _ground, fix_lean, generate_lean
+    from app.mcq_pipeline.nodes.n14_generate_questions import _ground, difficulty_of, fix_lean, generate_lean
     from app.mcq_pipeline.nodes.n15_review_questions import review_and_fix_one
     from app.mcq_pipeline.nodes.n13_recommend_question_type import recommend_one
     from app.mcq_pipeline.runner import build_adapter
@@ -201,33 +349,69 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     from app.mcq_pipeline.utils.llm import set_call_context
     set_call_context(unit=(_label or unit_id or str(run_id)), step="regenerate")
 
-    # Honor a reviewer request to CHANGE the question type: regenerate AS the requested
-    # type rather than fixing within the old one (fix_lean can't change type). Detection
-    # is LLM-PRIMARY (robust to phrasing) with a deterministic keyword fallback; if a
-    # change is wanted but no type is named, the type-agent re-picks the ideal for the LO.
+    # Route by reviewer INTENT (taxonomy derived from real RDS feedback). A TYPE CHANGE
+    # regenerates AS the new type. LO-MISALIGNED regenerates + flags for a human (and will
+    # swap in a reserve outcome once the run carries one). EVERY OTHER intent gets a
+    # TARGETED fix of the EXISTING question — preserve what works, fix only the flagged
+    # aspect — instead of a blind from-scratch regen that reintroduces the same flaw
+    # ("regenerated but nothing really changed"). Type detection stays LLM-primary.
     _lean = old_q.get("lean") or {}
     question_text = (_lean.get("question") or _lean.get("statement") or lo.get("description") or "")[:1200]
+
     target = _detect_type_change(feedback, current_qtype, question_text)
     if target == "REPICK":
         target = (recommend_one(lo) or {}).get("question_type")
-    new_qtype = target or current_qtype
+    intent = None if target else _classify_feedback(feedback, current_qtype, question_text)
 
-    gen_lo = {**lo, "question_type": new_qtype}
-    ctx = _ground(gen_lo, None)
-    gen = generate_lean(gen_lo)
-    if gen.get("status") == "generated" and gen.get("lean"):
-        gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [{
-            "severity": "high", "rule": "HUMAN FEEDBACK",
-            "problem": feedback, "suggested_fix": feedback,
-        }])
-    gen["outcome"] = outcome
-    new_q = review_and_fix_one(lo, gen)
+    new_qtype = target or current_qtype
+    alignment_note = None
+    # When the OUTCOME itself is rejected and a reserve (dropped) outcome is available,
+    # swap that reserve LO into this slot instead of re-asking the misaligned outcome.
+    swap_lo = _pick_reserve_lo(result, lo) if intent == "lo_misaligned" else None
+
+    if swap_lo is not None:
+        gen_lo = {**swap_lo, "question_type": new_qtype}
+        ctx = _ground(gen_lo, None)
+        gen = generate_lean(gen_lo)
+        if gen.get("status") == "generated" and gen.get("lean"):
+            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue("other", feedback)])
+        alignment_note = (f"Outcome swapped (the original was flagged as misaligned/out-of-scope): "
+                          f"'{outcome}' -> '{swap_lo.get('outcome')}'. Please review the new question.")
+    elif (not target) and _lean and intent not in ("new_question", "lo_misaligned"):
+        # surgical fix of the existing question (content / format / alignment intents)
+        gen_lo = {**lo, "question_type": new_qtype}
+        ctx = _ground(gen_lo, None)
+        new_lean = fix_lean(gen_lo, ctx, _lean, [_intent_issue(intent or "other", feedback)])
+        gen = {"status": "generated", "question_type": current_qtype,
+               "difficulty": difficulty_of(lo), "lean": new_lean}
+    else:
+        # type change, "make a new one", no prior lean, or LO-misaligned with no reserve -> fresh gen
+        gen_lo = {**lo, "question_type": new_qtype}
+        ctx = _ground(gen_lo, None)
+        gen = generate_lean(gen_lo)
+        if gen.get("status") == "generated" and gen.get("lean"):
+            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue(intent or "other", feedback)])
+        if intent == "lo_misaligned":
+            alignment_note = ("Reviewer flagged the learning outcome as misaligned/out-of-scope, but no "
+                              "reserve (dropped) outcome is stored for this run; regenerated against the "
+                              "same outcome and flagged for your decision.")
+
+    # the LO this slot now belongs to (the reserve when swapped) and its outcome key.
+    effective_lo = swap_lo or lo
+    gen["outcome"] = effective_lo.get("outcome") if swap_lo else outcome
+    new_q = review_and_fix_one(effective_lo, gen)
+    if swap_lo is not None:
+        new_q["lo_swap"] = {"from_outcome": outcome, "to_outcome": swap_lo.get("outcome"),
+                            "from_concept": lo.get("concept"), "to_concept": swap_lo.get("concept")}
+    if alignment_note:
+        new_q["lo_alignment_note"] = alignment_note
+        new_q["needs_human"] = True          # a swapped/flagged outcome needs a fresh human look
     # generate_lean may itself fall back (e.g. an ungroundable code type -> MCQ), so the
     # actual type is whatever was produced.
     actual_qtype = new_q.get("question_type") or new_qtype
     if actual_qtype != current_qtype:
         new_q["type_change"] = {"from": current_qtype, "to": actual_qtype, "requested": new_qtype}
-        lo["question_type"] = actual_qtype   # lo is the run-result's object; keep it in sync
+        effective_lo["question_type"] = actual_qtype   # keep the run-result LO object in sync
 
     # 3) carry forward revision + feedback history on the question
     prev = {k: v for k, v in old_q.items() if k != "revisions"}
@@ -235,6 +419,8 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     new_q["human_feedback"] = (old_q.get("human_feedback") or []) + [
         {"feedback": feedback, "tags": tags or [], "reviewer": reviewer}]
     result["questions"][idx] = new_q
+    if swap_lo is not None:
+        _apply_lo_swap(result, outcome, swap_lo)
 
     # 4) persist + record the feedback row. Merge THIS question into the FRESHLY-LOCKED row
     #    (not a blind overwrite of the whole result snapshot loaded ~10s ago) so a concurrent
@@ -252,9 +438,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         else:
             qs.append(new_q)
         fresh["questions"] = qs
+        if swap_lo is not None:                  # swap the reserve LO into the freshly-locked copy
+            _apply_lo_swap(fresh, outcome, swap_lo)
         if actual_qtype != current_qtype:        # keep the run's LO type in sync, on the fresh copy
+            sync_outcome = (swap_lo.get("outcome") if swap_lo else outcome)
             for flo in (fresh.get("final_los") or []):
-                if flo.get("outcome") == outcome:
+                if flo.get("outcome") == sync_outcome:
                     flo["question_type"] = actual_qtype
         run.result = fresh
         run.review_status = "question_review"
@@ -266,7 +455,8 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
             before_snapshot={"lean": old_q.get("lean"), "review": old_q.get("review"),
                              "question_type": current_qtype},
             after_snapshot={"lean": new_q.get("lean"), "review": new_q.get("review"),
-                            "question_type": actual_qtype, "type_change": new_q.get("type_change")},
+                            "question_type": actual_qtype, "type_change": new_q.get("type_change"),
+                            "lo_swap": new_q.get("lo_swap")},
             reviewer=reviewer or "",
         ))
         s.commit()

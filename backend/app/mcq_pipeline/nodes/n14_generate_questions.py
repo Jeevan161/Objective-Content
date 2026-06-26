@@ -165,6 +165,10 @@ OPTIONS:
 - Prose/conceptual options MAY use light inline Markdown (`code`, **bold**). When an option actually contains such Markdown, set its `content_type` to "MARKDOWN"; otherwise leave it "TEXT".
 - For CODE_ANALYSIS_* question types, options are literal code or program output — keep them PLAIN TEXT (no Markdown, no backticks), `content_type` "TEXT", so the portal shows them verbatim.
 
+Apply this to OPTIONS too, not only the stem: when an option names a code identifier, keyword, command, value, or output, wrap it in `backticks` and set that option's `content_type` to "MARKDOWN". A conceptual MCQ whose options mention technical terms should use Markdown options, not bare text.
+
+PLAIN, HUMAN TYPOGRAPHY — write the stem, options, and explanation the way a person would type them: use a normal hyphen '-' (or rephrase) and straight quotes. Do NOT use en/em dashes ('–', '—'), curly/smart quotes, or other "AI-looking" typography anywhere in the question — reviewers reject these as machine-generated.
+
 NEVER apply Markdown to a graded exact-answer value (a TEXTUAL / FIB answer or expected output) or to the `code` field — those must stay literal.""")
 
 _OPTION_RULES = register("gen.option_rules", """\
@@ -227,7 +231,15 @@ Vary the position of the correct answer across questions.
 
 Avoid giveaway qualifiers in options — absolutes and blanket-scope words ('always', 'never', 'all', 'none', 'only', 'solely', 'just', 'merely', 'any', 'no', 'nothing', 'does not', 'cannot') read as giveaways or are unfalsifiable. Never make a distractor wrong simply by attaching such a word to (or negating) the key's idea. Do NOT use 'All of the above' or 'None of the above' as options unless the Learning Outcome specifically requires that judgment; prefer concrete, comparable alternatives.
 
-The correct option must be the most TECHNICALLY ACCURATE answer the material supports — not the 'commonly recommended' or 'best-practice' one — UNLESS the stem explicitly asks for the standard/recommended practice. (A distractor that is also defensible as 'best practice' would create a second valid answer.)""")
+The correct option must be the most TECHNICALLY ACCURATE answer the material supports — not the 'commonly recommended' or 'best-practice' one — UNLESS the stem explicitly asks for the standard/recommended practice. (A distractor that is also defensible as 'best practice' would create a second valid answer.)
+
+ANSWER VALIDITY & ALIGNMENT
+
+Every option must answer the EXACT question asked — same subject and scope as the stem. Do not offer options about a neighbouring topic the stem did not ask about (an option that is true-but-about-something-else reads as "not aligned with the question").
+
+Exactly ONE option may be defensibly correct. Before finalizing, test EACH distractor with: "could a knowledgeable person argue this is also correct, or correct 'in a general sense'?" If yes, rewrite it so it is clearly and specifically WRONG on the taught concept — never leave a second arguably-correct option (this is the single most common rejection: "X is also valid" / "this is subjective" / "option B is too similar to the correct one").
+
+The correct answer must be fully determined by the stem alone: it must NOT rely on a detail the stem never stated (a specific entity, value, dataset, or constraint). If the key needs such a detail, put that detail in the stem — never let the answer introduce context the question didn't give.""")
 
 _TRUE_FALSE_RULES = register("gen.true_false_rules", """\
 TRUE/FALSE RULES
