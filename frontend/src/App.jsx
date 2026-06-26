@@ -340,8 +340,10 @@ function Workspace() {
         {page === 'pipeline' && <PipelinePage />}
         {page === 'llm-providers' && <LLMProvidersPage />}
         {/* Kept mounted (just hidden) so navigating away and back restores the exact
-            flow + live stage; the Activity drawer reopens a specific job via openTarget. */}
-        <div style={{ display: page === 'mcq' ? '' : 'none' }}>
+            flow + live stage; the Activity drawer reopens a specific job via openTarget.
+            `contents` (not block) so the wrapper adds no box — .mcq-page keeps resolving
+            its height:100% against <main>, otherwise its dropdowns get overflow-clipped. */}
+        <div style={{ display: page === 'mcq' ? 'contents' : 'none' }}>
           <McqGenerationPage
             courses={courses}
             onBack={() => setPage('generation')}
