@@ -73,7 +73,7 @@ def lookup_course_environments(course_id: str) -> dict:
 
 def persist_course_data(
     session: Session, course_id: str, data: dict, version_row: dict | None,
-    environment: str = "PROD", created_by=None,
+    environment: str = "PROD", created_by=None, question_domain: str = "",
 ) -> Course:
     """Replace any stored topics/units for the course with freshly fetched data."""
     details = data.get("course_details", {})
@@ -88,6 +88,11 @@ def persist_course_data(
     # (created_by is None) get claimed by whoever re-syncs them next.
     if created_by is not None and getattr(course, "created_by", None) is None:
         course.created_by = created_by
+
+    # Apply the chosen MCQ domain only when one was provided, so a re-sync without a
+    # domain choice never wipes an existing setting.
+    if question_domain:
+        course.question_domain = question_domain
 
     course.environment = environment
     course.course_name = details.get("course_name", "")
@@ -177,7 +182,8 @@ def run_sync_job(session: Session, job_id: uuid.UUID) -> None:
 
         report("Saving to database…")
         persist_course_data(session, job.course_id, data, version_row, environment=environment,
-                             created_by=getattr(job, "created_by", None))
+                             created_by=getattr(job, "created_by", None),
+                             question_domain=getattr(job, "question_domain", "") or "")
 
         # If this sync was for a prerequisite, link it to its parent course.
         if job.prerequisite_for:

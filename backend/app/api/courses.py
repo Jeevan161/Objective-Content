@@ -26,6 +26,7 @@ from app.api.deps import get_current_user, require_active
 from app.models import BetaLoad, Course, McqRun, McqTrace, RagChunk, SyncJob, Topic, Unit, UnitPart, User
 from app.services.task_log import ERROR, log_task
 from app.schemas import (
+    ALLOWED_QUESTION_DOMAINS,
     ApproveRunRequest,
     BuildRagRequest,
     CourseSettingsRequest,
@@ -167,6 +168,13 @@ def start_sync(body: SyncRequest, session: Session = Depends(get_session),
         version_id = existing.selected_version_id
         is_latest = existing.is_latest_version
 
+    # Per-course MCQ domain, chosen at add time (e.g. "SQL"); applied to the Course when
+    # this sync persists it. Empty = generic.
+    domain = (body.question_domain or "").strip().upper()
+    if domain not in ALLOWED_QUESTION_DOMAINS:
+        raise HTTPException(status_code=400,
+                            detail=f"question_domain must be one of {sorted(ALLOWED_QUESTION_DOMAINS)}")
+
     job = SyncJob(
         course_id=course_id,
         environment=environment,
@@ -174,6 +182,7 @@ def start_sync(body: SyncRequest, session: Session = Depends(get_session),
         courseversion_id=courseversion_id,
         version_id=version_id,
         is_latest_version=is_latest,
+        question_domain=domain,
         created_by=user.id,
     )
     session.add(job)

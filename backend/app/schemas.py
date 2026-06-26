@@ -35,6 +35,7 @@ class SyncRequest(BaseModel):
     is_latest_version: bool = False
     environment: str | None = None
     prerequisite_for: str | None = None
+    question_domain: str = ""          # per-course MCQ domain (e.g. "SQL"), chosen at add time
 
 
 class ExtractRequest(BaseModel):

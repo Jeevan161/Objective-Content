@@ -221,6 +221,8 @@ class SyncJob(Base):
     courseversion_id: Mapped[str] = mapped_column(String(64), default="")
     version_id: Mapped[str] = mapped_column(String(64), default="")
     is_latest_version: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Chosen at course-add time; applied to the Course when this sync persists it.
+    question_domain: Mapped[str] = mapped_column(String(16), default="")
 
     status: Mapped[str] = mapped_column(String(16), default=PENDING)
     message: Mapped[str] = mapped_column(Text, default="")

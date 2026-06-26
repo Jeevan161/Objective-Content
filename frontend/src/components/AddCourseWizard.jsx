@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowLeft, ArrowRight, GitBranch, Link2, Star, CheckCircle2, XCircle } from 'lucide-react'
 import Modal from './Modal'
+import Select from './Select'
 import { EnvBadge, Spinner } from './ui'
 import { lookupCourse } from '../api'
 import { useToast } from './Toast'
@@ -16,6 +17,7 @@ function AddCourseWizard({ prerequisiteFor, onClose, onStartSync }) {
   const toast = useToast()
   const [step, setStep] = useState(1)
   const [courseId, setCourseId] = useState('')
+  const [questionDomain, setQuestionDomain] = useState('')   // '' = general, 'SQL'
   const [loading, setLoading] = useState(false)
   const [lookup, setLookup] = useState(null) // { PROD: {...}, BETA: {...} }
 
@@ -43,6 +45,7 @@ function AddCourseWizard({ prerequisiteFor, onClose, onStartSync }) {
       course_id: courseId.trim(),
       environment,
       prerequisite_for: prerequisiteFor || '',
+      question_domain: questionDomain,
       ...extra,
     })
     onClose()
@@ -90,6 +93,18 @@ function AddCourseWizard({ prerequisiteFor, onClose, onStartSync }) {
             />
             <p className="field-hint">
               We&apos;ll look it up in both PROD and BETA and show what&apos;s available in each.
+            </p>
+          </div>
+
+          <div className="field">
+            <label className="field-label">Question domain</label>
+            <Select
+              value={questionDomain}
+              onChange={setQuestionDomain}
+              options={[{ value: '', label: 'General' }, { value: 'SQL', label: 'SQL' }]}
+            />
+            <p className="field-hint">
+              Activates domain-specific MCQ rules for this course (e.g. SQL). Can be changed later by re-syncing.
             </p>
           </div>
 
