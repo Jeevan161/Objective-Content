@@ -88,7 +88,9 @@ def _dedupe(outcomes: list) -> tuple[list, list]:
     foundational (highest weight). Returns (kept, dropped_ids). Order preserved for survivors."""
     best: dict = {}
     for o in outcomes:
-        key = (o.get("concept_id"), o.get("bloom_level"))
+        # distinct = concept × Bloom × question type, so the SAME outcome assessed in a different
+        # question format is kept (intentional type-variant), not deduped away.
+        key = (o.get("concept_id"), o.get("bloom_level"), o.get("question_type"))
         cur = best.get(key)
         if cur is None or o.get("weight", 0) > cur.get("weight", 0):
             best[key] = o
@@ -96,6 +98,102 @@ def _dedupe(outcomes: list) -> tuple[list, list]:
     kept = [o for o in outcomes if id(o) in keep_ids]
     dropped = [o["id"] for o in outcomes if id(o) not in keep_ids]
     return kept, dropped
+
+
+# ── the LO-reviewer AGENT — checks the WHOLE set and decides keep/fix/regenerate per LO ──── #
+_REVIEW_AGENT = register("lo.review_agent", (
+    "You are a curriculum REVIEWER agent. You are given the reading split into SECTIONS, plus the "
+    "FULL set of candidate learning outcomes. Review the SET AS A WHOLE and decide, for EACH "
+    "outcome, whether to KEEP / FIX / REGENERATE it — with a one-line reason. Think like an agent "
+    "checking its own work: what is solid, what is wrong, what to redo.\n\n"
+
+    "CRITICAL — DO NOT judge from the short 'evidence' quote alone. The 'evidence' is only a POINTER "
+    "and is often INCOMPLETE or WRONG (e.g. it may be a section heading or a mismatched sentence). "
+    "Before you decide a verdict you MUST:\n"
+    "  1. Read the outcome's OWN SECTION — the sections[] entry whose id == the outcome's 'section'.\n"
+    "  2. If that section doesn't settle it, scan the OTHER sections / the whole reading.\n"
+    "  Only after checking the actual section/reading do you decide. An outcome the SECTION clearly "
+    "teaches is valid even if its evidence quote is poor.\n\n"
+
+    "Each outcome must be: GROUNDED in a real teaching sentence (NOT a heading), SELF-CONTAINED (no "
+    "source-local names like 'Project A'/sample variables), at a Bloom tier the material actually "
+    "supports, DISTINCT (no two outcomes testing the same idea), and ANSWERABLE from the reading.\n\n"
+
+    "For EACH outcome decide a verdict:\n"
+    "- keep: the SECTION/reading fully supports it, it's distinct and well-grounded.\n"
+    "- fix: the concept IS taught but the outcome has a minor issue — wording, the evidence quote is "
+    "a heading/wrong sentence (give the correct teaching sentence in better_evidence), or the tier "
+    "is one notch too high. Put the corrected outcome in suggested_fix.\n"
+    "- regenerate: after checking the section AND the rest of the reading, it is genuinely not "
+    "supported, off-topic, or a duplicate of another outcome.\n"
+    "Set not_taught=true ONLY if, having read the whole reading, the concept is not taught anywhere "
+    "(only named/assumed) — it will be dropped.\n\n"
+
+    "TYPE VARIANTS: outcomes that share the SAME idea but have a DIFFERENT question_type are "
+    "INTENTIONAL (one concept assessed via several question formats). Do NOT mark them regenerate or "
+    "list them as redundant just for being similar — they are duplicates ONLY if they share BOTH the "
+    "same idea AND the same question_type.\n\n"
+
+    "Input JSON: {\"sections\": [{\"id\",\"title\",\"text\"}...], "
+    "\"outcomes\": [{\"id\",\"title\",\"bloom_level\",\"question_type\",\"concept\",\"evidence\","
+    "\"section\"}...]}.\n"
+    "Return ONLY JSON:\n"
+    "{\"reviews\": [{\"id\",\"verdict\":\"keep|fix|regenerate\",\"reason\":\"<one line, cite the "
+    "section>\",\"suggested_fix\":\"<corrected outcome, for fix/regenerate>\","
+    "\"better_evidence\":\"<the correct verbatim teaching sentence from the section, if the current "
+    "evidence is poor; else empty>\",\"not_taught\":<bool>}...],\n"
+    " \"set_notes\": {\"redundant\": [[\"id\",\"id\"]...], \"over_segmented\": <bool>, "
+    "\"coverage_gaps\": [\"...\"], \"summary\": \"<2-3 sentences on the set>\"}}"
+))
+
+
+_SECTION_CAP = 6000          # per-section text cap in the reviewer payload
+
+
+def _review_agent(outcomes: list, sections: list) -> tuple[dict, dict]:
+    """The holistic reviewer agent: ONE LLM pass over the full outcome set → per-LO verdict
+    (keep/fix/regenerate) + reason + suggested_fix (+ better_evidence), plus set-level notes. It is
+    given each outcome's SECTION content (not just the short evidence quote) so it judges against the
+    real teaching text — escalating evidence → section → whole reading — because the cited quote may
+    be incomplete or a heading. Returns (lo_reviews, set_notes); ({}, {}) on failure → every LO
+    treated as 'keep' (the deterministic structural gate still applies)."""
+    if not outcomes:
+        return {}, {}
+    used = {(o.get("topic_id") or (o.get("source_evidence") or {}).get("section")) for o in outcomes}
+    sec_payload = [{"id": s["topic_id"], "title": s.get("title", ""),
+                    "text": (s.get("text", "") or "")[:_SECTION_CAP]}
+                   for s in (sections or []) if s.get("topic_id") in used]
+    payload = {"sections": sec_payload,
+               "outcomes": [{"id": o["id"], "title": o.get("title") or o.get("description"),
+                             "bloom_level": o.get("bloom_level"),
+                             "question_type": o.get("question_type"),
+                             "concept": (o.get("concept_id") or "").replace("C_", ""),
+                             "evidence": (o.get("source_evidence") or {}).get("quote", "")[:200],
+                             "section": o.get("topic_id") or (o.get("source_evidence") or {}).get("section", "")}
+                            for o in outcomes]}
+    try:
+        data = parse_json(chat(
+            [{"role": "system", "content": get_prompt("lo.review_agent", _REVIEW_AGENT)},
+             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], temperature=0)) or {}
+    except Exception:  # noqa: BLE001 — reviewer down: keep all; structural gate still applies
+        return {}, {}
+    reviews: dict = {}
+    for r in (data.get("reviews") or []):
+        if not isinstance(r, dict) or not r.get("id"):
+            continue
+        verdict = str(r.get("verdict") or "keep").lower()
+        if verdict not in ("keep", "fix", "regenerate"):
+            verdict = "keep"
+        reviews[r["id"]] = {
+            "covered": verdict == "keep",
+            "verdict": verdict,
+            "rubric": {"R1_present": not bool(r.get("not_taught"))},
+            "fail_reason": str(r.get("reason", ""))[:300],
+            "suggested_fix": str(r.get("suggested_fix", ""))[:200],
+            "better_evidence": str(r.get("better_evidence", ""))[:300],
+        }
+    set_notes = data.get("set_notes") if isinstance(data.get("set_notes"), dict) else {}
+    return reviews, set_notes
 
 
 def _score_outcome(outcome: dict, section_text: str, source_text: str) -> dict:
@@ -182,10 +280,11 @@ def _run_validation(outcomes: list, state: dict, reviews: dict) -> dict:
     rule("V15", not uncovered,
          "every apply/scenario outcome must have all required prerequisites covered", uncovered)
 
-    seen = Counter((o["concept_id"], o["bloom_level"]) for o in O)
-    dups = [o["id"] for o in O if seen[(o["concept_id"], o["bloom_level"])] > 1]
+    seen = Counter((o["concept_id"], o["bloom_level"], o.get("question_type")) for o in O)
+    dups = [o["id"] for o in O if seen[(o["concept_id"], o["bloom_level"], o.get("question_type"))] > 1]
     rule("V16", not dups,
-         "no two outcomes may test the same concept at the same Bloom level", sorted(set(dups)))
+         "no two outcomes may test the same concept at the same Bloom level AND question type "
+         "(same-content variants in different question formats are allowed)", sorted(set(dups)))
     return rep
 
 
@@ -204,47 +303,72 @@ def review_and_validate(state, config) -> dict:
     if backfilled:
         prog.detail("review_and_validate", f"backfilled {len(backfilled)} to reach budget {budget}")
 
-    # (2) rubric judge — only re-scoring outcomes whose signature changed (skip if gate disabled).
-    prev = state.get("lo_reviews") or {}
+    # Ensure every outcome carries a planned question type (select_outcomes typed the selected set;
+    # backfilled/replacement LOs added later may not be — type just those so the gate shows them all).
+    untyped = [i for i, o in enumerate(outcomes) if not o.get("question_type")]
+    if untyped:
+        from app.mcq_pipeline.utils.concurrency import pmap
+        from app.mcq_pipeline.nodes.m02_plan_los.agent import recommend_type
+        for i, t in zip(untyped, pmap(recommend_type, [outcomes[i] for i in untyped])):
+            outcomes[i] = t
+
+    # (2) the LO-REVIEWER AGENT — one holistic pass over the WHOLE set decides keep/fix/regenerate
+    # per outcome (with reasons), and flags set-level issues (redundancy, over-segmentation). This is
+    # the visible 'agent checks its results and resolves' step; its verdicts drive repair below.
     gate_on = ctx is None or getattr(ctx, "run_coverage_gate", True)
+    set_notes: dict = {}
     if gate_on:
-        todo = [o for o in outcomes if (prev.get(o["id"]) or {}).get("_sig") != _outcome_sig(o)]
-        sec_text = {s["topic_id"]: s.get("text", "") for s in state.get("sections", [])}
-        src = state["source_text"]
-        on_done = prog.counter("review_and_validate", len(todo)) if todo else (lambda **k: None)
-        fresh = {}
-        for o in todo:
-            v = _score_outcome(o, sec_text.get(o.get("topic_id"), ""), src)
-            v["_sig"] = _outcome_sig(o)
-            fresh[o["id"]] = v
-            on_done()
-        merged = {**prev, **fresh}
-        merged = {o["id"]: merged[o["id"]] for o in outcomes if o["id"] in merged}   # drop stale ids
+        prog.detail("review_and_validate", f"reviewer agent checking {len(outcomes)} outcomes…")
+        merged, set_notes = _review_agent(outcomes, state.get("sections") or [])
+        # "fix" = the concept IS taught; the outcome just needs a light correction. Apply it in
+        # place — re-ground to the agent's better_evidence (only if it's verbatim in the section)
+        # and adopt its suggested_fix wording — and PASS the gate. Only "regenerate" blocks (stays
+        # covered=False → repair). This stops the loop from churning on minor fixes and actually
+        # repairs the bad-grounding (heading-as-evidence) case instead of tier-downgrading it.
+        sec_text = {s["topic_id"]: s.get("text", "") for s in (state.get("sections") or [])}
+        for o in outcomes:
+            rv = merged.get(o["id"])
+            if not rv or rv.get("verdict") != "fix":
+                continue
+            be = (rv.get("better_evidence") or "").strip()
+            if be and be in sec_text.get(o.get("topic_id"), ""):    # re-ground to the real sentence
+                o["source_evidence"] = {"quote": be, "section": o.get("topic_id", "")}
+            sf = (rv.get("suggested_fix") or "").strip()
+            if sf:
+                o["title"] = sf
+                o["description"] = sf if sf.endswith((".", "!", "?")) else sf + "."
+            rv["covered"] = True                                    # light patch, not a gate failure
+        for o in outcomes:                      # _sig reflects the patched outcome
+            if o["id"] in merged:
+                merged[o["id"]]["_sig"] = _outcome_sig(o)
     else:
-        merged = prev
+        merged = state.get("lo_reviews") or {}
 
     # (3) deterministic structural gate (over the deduped set + fresh rubric verdicts).
     rep = _run_validation(outcomes, state, merged)
     failed = [k for k, v in rep.items() if not v["pass"]]
-    rubric_failures = sum(1 for v in merged.values() if not v.get("covered", True))
+    verdicts = Counter(v.get("verdict", "keep") for v in merged.values())
     apply_uncovered = sorted({nm for o in outcomes if o["bloom_level"] in ("apply", "scenario")
                               for nm in (o.get("prerequisite_coverage") or {}).get("uncovered", [])})
     shallow_prereqs = sorted({nm for o in outcomes if o["bloom_level"] in ("apply", "scenario")
                               for nm in (o.get("prerequisite_coverage") or {}).get("shallow", [])})
     title_of = {o["id"]: o["title"] for o in outcomes}
+    # The agent's per-LO DECISIONS (verdict + reason + suggested fix) — the visible agentic layer.
+    decisions = [{"id": oid, "title": title_of.get(oid, oid), "verdict": v.get("verdict", "keep"),
+                  "reason": v.get("fail_reason", ""), "suggested_fix": v.get("suggested_fix", ""),
+                  "better_evidence": v.get("better_evidence", "")}
+                 for oid, v in merged.items()]
     snapshot = {"deduped": dropped, "kept": len(outcomes), "attempt": state.get("retry_count", 0),
-                "rubric_failures": rubric_failures, "failed": failed,
+                "reviewer_verdicts": dict(verdicts), "failed": failed,
+                "set_notes": set_notes,
                 "apply_uncovered_prereqs": apply_uncovered, "shallow_prereqs": shallow_prereqs,
                 "rules": [{"code": k, "pass": v["pass"], "detail": v["detail"],
                            "failing": v["failing"][:12]} for k, v in rep.items()],
-                "reviews": [{"id": oid, "title": title_of.get(oid, oid), "covered": v.get("covered"),
-                             "failed": [k for k, ok in (v.get("rubric") or {}).items() if not ok],
-                             "fail_reason": v.get("fail_reason", "")}
-                            for oid, v in merged.items()]}
-    prog.done("review_and_validate",
-              detail=(f"{len(dropped)} dup dropped · " + ("pass" if not failed else f"failing: {failed}")),
-              snapshot=snapshot)
+                "decisions": decisions}
+    detail = (f"reviewer: {verdicts.get('keep', 0)} keep / {verdicts.get('fix', 0)} fix / "
+              f"{verdicts.get('regenerate', 0)} regen · " + ("gate pass" if not failed else f"gate-fail {failed}"))
+    prog.done("review_and_validate", detail=detail, snapshot=snapshot)
     return {"outcomes": outcomes, "lo_reviews": merged, "validation_report": rep,
             "log": [{"node": "review_and_validate", "deduped": dropped, "attempt": state.get("retry_count", 0),
-                     "failed": failed, "rubric_failures": rubric_failures,
+                     "failed": failed, "reviewer_verdicts": dict(verdicts),
                      "apply_uncovered_prereqs": apply_uncovered}]}

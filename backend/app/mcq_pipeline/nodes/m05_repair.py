@@ -306,9 +306,14 @@ def repair(state, config) -> dict:
                    "reason": "repair lowered these outcomes below their planned Bloom tier — the "
                              "material did not support it; recommend human review"}]
                  if downgraded else [])
-    snapshot = {"attempt": attempt, "fixes": logs, "downgraded": downgraded}
-    prog.done("repair", detail=(f"{len(downgraded)} downgraded" if downgraded else "reconciled"),
-              snapshot=snapshot)
+    # Surface the per-LO repair DECISIONS in the trace (regenerate / retarget / early-downgrade /
+    # drop / backfill / terminal-grounded), not just a count.
+    actions = Counter(l.get("fix") for l in logs if l.get("fix"))
+    snapshot = {"attempt": attempt, "fixes": logs, "downgraded": downgraded, "actions": dict(actions)}
+    detail = " · ".join(f"{k}:{v}" for k, v in actions.items()) or "no fixes needed"
+    if downgraded:
+        detail += f" · {len(downgraded)} tier-downgraded"
+    prog.done("repair", detail=detail, snapshot=snapshot)
     return {"outcomes": outcomes, "allocation_plan": plan, "retry_count": attempt,
             "overrides": overrides, "log": logs}
 

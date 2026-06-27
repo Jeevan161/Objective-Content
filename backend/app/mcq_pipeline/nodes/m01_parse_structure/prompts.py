@@ -70,11 +70,13 @@ Instructions:
 1. Return topics in document order.
 2. Use only line numbers present in the source.
 3. start_line values must be strictly increasing.
-4. The first topic begins at the first non-empty content line.
-5. Prefer pedagogically meaningful teaching units rather than structural headings.
-6. Merge short transitions, notes, examples, and side explanations into the surrounding topic.
-7. Do not create topics solely because a subsection heading appears.
-8. If multiple adjacent subsections contribute to the same learning objective, keep them in one topic.
+4. The FIRST topic MUST begin at line 1 — the very first non-empty line, INCLUDING any leading title or heading. Never leave any line before the first topic. A document's opening heading/title belongs INSIDE the first topic; do NOT split it off as a separate section.
+5. Every topic's start_line is ITS OWN heading line (or its first content line when there is no heading), so each heading is part of the topic it introduces — never orphaned on its own.
+6. NEVER emit a topic that is only a heading, a title, or a single short line with no real teaching content. Such a fragment must be merged into the adjacent topic — there is no standalone "Introduction" made of just a heading.
+7. Prefer pedagogically meaningful teaching units rather than structural headings.
+8. Merge short transitions, notes, examples, and side explanations into the surrounding topic.
+9. Do not create topics solely because a subsection heading appears.
+10. If multiple adjacent subsections contribute to the same learning objective, keep them in one topic.
 
 For each topic return:
 - title
@@ -143,6 +145,8 @@ Review the segmentation.
 
 Common problems:
 
+- A STRAY FIRST SECTION: the first topic does not start at line 1, so a leading title/heading is orphaned as a tiny "Introduction" with almost no content. FIX: set the first topic's start_line to 1 and fold that heading into the first real topic.
+- A HEADING-ONLY / near-empty topic (just a title or one short line, no teaching content). FIX: merge it into the adjacent topic.
 - Too many tiny topics.
 - Entire document treated as one topic.
 - Examples separated from their parent concept.
@@ -172,7 +176,8 @@ Rules:
 - Use only line numbers present in the source.
 - Never invent or renumber lines.
 - start_line values must be strictly increasing.
-- The first topic begins at the first non-empty content line.
+- The first topic MUST begin at line 1 (the first non-empty line, including any leading heading) — never leave a stray heading/section before it.
+- No topic may be just a heading or a near-empty fragment.
 - Return the complete corrected topic list.
 - Return ONLY valid JSON.
 

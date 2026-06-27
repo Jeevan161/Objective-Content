@@ -3,16 +3,29 @@ from __future__ import annotations
 
 import json
 
+from app.mcq_pipeline.config import TIER_ORDER
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.prompts.store import get_prompt, register
 from app.mcq_pipeline.utils._common import _prog
 
+_BLOOM_RANK = {t: i for i, t in enumerate(TIER_ORDER)}   # remember<understand<apply<scenario
+
+
+def _bloom_rank(level: str) -> int:
+    """Rank a Bloom tier basic→advanced (remember 0 … scenario 3). Tolerant of legacy labels."""
+    b = (level or "").lower()
+    for t, i in _BLOOM_RANK.items():
+        if b.startswith(t[:4]):
+            return i
+    return 1   # default ~understand when unknown
+
 
 # ── Node 6 · sequence_outcomes (A · deep-dive ordering) ─────────────────── #
-# Orders the final questions basic -> advanced as a coherent DEEP DIVE. DOMAIN-GENERAL:
-# driven by the prerequisite concept DAG + concept weights + topic order (NOT hardcoded
-# verb/Bloom tiers). LLM-primary (prompt lo.sequence_sys); deterministic graph+weight
-# sort as the fallback when the LLM is unavailable.
+# Orders the final questions basic -> advanced as a coherent DEEP DIVE: driven by the
+# prerequisite concept DAG + concept weights + topic order, AND — within each concept —
+# a BASIC→ADVANCED Bloom progression (remember→understand→apply→scenario), so a concept is
+# tested at a basic level before any advanced question on it. LLM-primary (prompt
+# lo.sequence_sys); deterministic graph+weight+Bloom sort as the fallback.
 _SEQUENCE_SYS = register("lo.sequence_sys", (
     "You order a set of learning outcomes into a STRICT pedagogical sequence that behaves like a "
     "DEPENDENCY-SAFE deep dive.\n\n"
@@ -33,11 +46,21 @@ _SEQUENCE_SYS = register("lo.sequence_sys", (
     "   - Lower dag_depth comes BEFORE higher dag_depth.\n"
     "   - Higher weight (more downstream dependents) comes earlier.\n\n"
 
-    "3. TOPIC FLOW COHERENCE (secondary constraint)\n"
+    "3. BLOOM PROGRESSION — BASIC → ADVANCED WITHIN EACH CONCEPT (always)\n"
+    "   - For a given concept, order its outcomes from LOWER to HIGHER Bloom level using `level`:\n"
+    "     remember → understand → apply → scenario.\n"
+    "   - A concept must be introduced/tested at a BASIC level (remember/understand) BEFORE any\n"
+    "     ADVANCED question on it (apply / implement / scenario). 'understand' ALWAYS before 'apply'.\n"
+    "   - Keep a concept's outcomes together and run them basic→advanced, then move to the next\n"
+    "     concept. Never place an advanced outcome of a concept before its basic outcome.\n"
+    "   - This applies WITHIN a concept; it must not override the prerequisite (DAG) constraint\n"
+    "     across DIFFERENT concepts (a prerequisite concept still comes first as a whole).\n\n"
+
+    "4. TOPIC FLOW COHERENCE (secondary constraint)\n"
     "   - Prefer keeping outcomes within the same topic_order together.\n"
     "   - Only move across topics when required by dependencies or stronger foundationality.\n\n"
 
-    "4. CONCEPT COMPLEXITY PROGRESSION\n"
+    "5. CONCEPT COMPLEXITY PROGRESSION\n"
     "   - Simpler conceptual depth comes before complex depth.\n"
     "   - Use depth only as a tie-breaker after structural constraints.\n\n"
 
@@ -115,7 +138,7 @@ def sequence_outcomes(state, config) -> dict:
     def row(lo):
         cm = metrics.get(lo.get("concept_id"), {"weight": 0, "dag_depth": 0})
         return {"id": lo.get("outcome"), "concept": lo.get("concept"),
-                "level": lo.get("bloom_category"),
+                "level": lo.get("bloom_level_raw") or lo.get("bloom_category"),
                 "depth": depth_by_c.get(lo.get("concept_id"), "moderate"),
                 "topic_order": topic_order.get(lo.get("source_section"), 99),
                 "weight": cm["weight"], "dag_depth": cm["dag_depth"]}
@@ -137,8 +160,11 @@ def sequence_outcomes(state, config) -> dict:
     except Exception:  # noqa: BLE001 — fall back to the deterministic graph+weight order
         order = None
     if order is None:
+        # foundational concept first (topic → dag_depth → weight), keep each concept's outcomes
+        # together, and run them BASIC → ADVANCED by Bloom rank within the concept.
         order = [r["id"] for r in sorted(
-            rows, key=lambda r: (r["topic_order"], r["dag_depth"], -r["weight"], r["id"]))]
+            rows, key=lambda r: (r["topic_order"], r["dag_depth"], -r["weight"],
+                                 r["concept"] or "", _bloom_rank(r["level"]), r["id"]))]
     seq = [by_id[i] for i in order]
     snapshot = {"source": source, "count": len(seq),
                 "order": [{"outcome": lo.get("outcome"), "concept": lo.get("concept"),
