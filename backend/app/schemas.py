@@ -73,6 +73,10 @@ class McqReviewRequest(BaseModel):
     rejected: list[dict] | None = None
     rejected_ids: list[str] | None = None         # legacy: ids only (reason falls back to `note`)
     note: str = ""
+    # Per-LO review captured at the gate — ONE entry per reviewed outcome, stored regardless of
+    # approve/reject (for the LO-feedback dataset): [{"id", "verdict": good|needs_work|regenerate,
+    # "comment"}]. Regenerate entries also drive that LO's regeneration (mirrored into `rejected`).
+    lo_feedback: list[dict] | None = None
     course_id: str = ""
     topic_id: str = ""
     unit_id: str = ""
@@ -201,6 +205,17 @@ class RagAnswerRequest(BaseModel):
     top_k: int = 15
     # When true, the scope is expanded to include each course's prerequisites.
     include_prerequisites: bool = True
+
+
+class ExecuteCodeRequest(BaseModel):
+    """Run a candidate program and (optionally) check its stdout — the same
+    execution that grades a FIB. Used by the reviewer's 'Run & Check' button."""
+    language: str = "PYTHON"
+    code: str
+    stdin: str = ""
+    # When provided, the response reports whether stdout matches it
+    # (trailing-whitespace-insensitive) — i.e. the FIB pass/fail.
+    expected_output: str | None = None
 
 
 # --------------------------------------------------------------------------- #

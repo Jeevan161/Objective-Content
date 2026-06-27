@@ -30,6 +30,7 @@ from app.schemas import (
     ApproveRunRequest,
     BuildRagRequest,
     CourseSettingsRequest,
+    ExecuteCodeRequest,
     ExtractRequest,
     McqGenerateRequest,
     McqReviewRequest,
@@ -320,6 +321,29 @@ def rag_answer(body: RagAnswerRequest, session: Session = Depends(get_session)) 
     return answer(session, course_ids=course_ids, query=body.query, top_k=top_k)
 
 
+@router.post("/courses/mcq/execute/")
+def execute_code(body: ExecuteCodeRequest,
+                 user: User = Depends(require_active)) -> dict:
+    """Run a candidate program (and optionally check stdout against an expected output)
+    using the SAME sandboxed runner that grades FIBs. Powers the reviewer's FIB
+    'Run & Check' and code-analysis 'Run code' buttons. Authenticated; runs grounded
+    LLM-authored code with CPU/file-size rlimits and a wall-clock timeout."""
+    from app.mcq_pipeline.utils import code_exec
+
+    if not (body.code or "").strip():
+        raise HTTPException(status_code=400, detail="code is required.")
+    if not code_exec.language_supported(body.language):
+        return {"supported": False, "ran": False,
+                "stderr": f"language {body.language!r} is not executable here", "language": body.language}
+    if body.expected_output is not None:
+        res = code_exec.verify_output(body.language, body.code, body.stdin or "", body.expected_output)
+        res["expected"] = body.expected_output
+    else:
+        res = code_exec.run_code(body.language, body.code, body.stdin or "")
+    res["language"] = body.language
+    return res
+
+
 @router.get("/courses/jobs/")
 def list_jobs(active: bool = False, limit: int = 50,
               session: Session = Depends(get_session),
@@ -451,6 +475,7 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'.")
     decision = {"action": action, "rejected": body.rejected or [],
                 "rejected_ids": body.rejected_ids or [], "note": body.note or "",
+                "lo_feedback": body.lo_feedback or [],
                 "reviewer": _reviewer_name(user)}
     prereq_unit_ids = body.prerequisite_unit_ids
     if prereq_unit_ids is not None:
@@ -913,9 +938,10 @@ def get_unit_content(course_id: str, unit_id: str, session: Session = Depends(ge
 # --------------------------------------------------------------------------- #
 @router.get("/courses/")
 def list_courses(session: Session = Depends(get_session)) -> list[dict]:
-    # Only top-level courses — those that are not a prerequisite of another course.
-    courses = session.scalars(select(Course).order_by(Course.course_name)).all()
-    top_level = [c for c in courses if not c.required_by]
+    # Include prerequisite courses too — they must be selectable in the MCQ generation picker
+    # (you can generate learning outcomes for a prerequisite course as well), not only the
+    # top-level courses. (Prerequisite courses still also appear nested under their parents.)
+    top_level = session.scalars(select(Course).order_by(Course.course_name)).all()
     # One grouped query gives the ingested chunk count per course (0 = not ingested).
     counts = dict(
         session.execute(
