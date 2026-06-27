@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight,
   FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck, Download,
-  FileSpreadsheet, ExternalLink, Ban, Undo2,
+  FileSpreadsheet, ExternalLink, Ban, Undo2, Play,
 } from 'lucide-react'
 import { Spinner } from './ui'
 import { useToast } from './Toast'
 import { useAuth } from '../auth/AuthContext'
 import Modal from './Modal'
 import NodeSnapshot from './NodeSnapshot'
-import { regenerateMcqQuestion, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace, setMcqQuestionApproval, setMcqQuestionExclusion, getJob, getMcqRun } from '../api'
+import { regenerateMcqQuestion, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace, setMcqQuestionApproval, setMcqQuestionExclusion, getJob, getMcqRun, executeCode } from '../api'
 import ReactMarkdown from 'react-markdown'
 import ReadingMaterialPane from './ReadingMaterialPane'
 
@@ -223,6 +223,31 @@ function ConfirmExcludeModal({ excludedCount, proceedingCount, onCancel, onConfi
   )
 }
 
+// Result of running a candidate program: FIB shows a match/no-match verdict against the
+// expected output; code-analysis just shows stdout. Mirrors how the platform grades FIBs.
+function ExecResult({ res, isFib }) {
+  if (res.error) return <p className="qc-exec-err">{res.error}</p>
+  if (res.supported === false)
+    return <p className="qc-exec-err">{res.stderr || 'This language is not executable on the server.'}</p>
+  const out = (res.actual ?? res.stdout) || ''
+  return (
+    <div className="qc-exec-out">
+      {isFib && (
+        <span className={`qc-exec-badge ${res.matched ? 'ok' : 'bad'}`}>
+          {res.matched ? <Check size={12} /> : <X size={12} />}
+          {res.matched ? 'Output matches expected' : 'Output does NOT match expected'}
+        </span>
+      )}
+      {res.timed_out && <p className="qc-exec-err">Execution timed out.</p>}
+      <div className="qc-exec-row"><span className="qc-exec-k">stdout</span><pre className="qc-code">{out || '(no output)'}</pre></div>
+      {isFib && !res.matched && res.expected != null && (
+        <div className="qc-exec-row"><span className="qc-exec-k">expected</span><pre className="qc-code">{res.expected}</pre></div>
+      )}
+      {res.stderr && <div className="qc-exec-row"><span className="qc-exec-k">stderr</span><pre className="qc-code qc-exec-stderr">{res.stderr}</pre></div>}
+    </div>
+  )
+}
+
 function QuestionCard({ q, lo, index, review }) {
   const generated = q.status === 'generated'
   const lean = q.lean || {}
@@ -231,15 +256,63 @@ function QuestionCard({ q, lo, index, review }) {
   const code = lean.code || (lean.code_lines ? lean.code_lines.join('\n') : null)
   const ragCalls = [...(q.rag_calls || []), ...(q.review_rag_calls || [])]
 
+  // Reviewer code execution (FIB 'Run & check', code-analysis 'Run code') via the server's
+  // sandboxed runner — the same execution that grades FIBs.
+  const isFib = q.question_type === 'FIB_CODING'
+  const isCodeAnalysis = (q.question_type || '').startsWith('CODE_ANALYSIS')
+  const canRun = generated && (isFib || (isCodeAnalysis && !!code))
+  const [execBusy, setExecBusy] = useState(false)
+  const [execResult, setExecResult] = useState(null)
+
+  const handleRun = async () => {
+    setExecBusy(true)
+    setExecResult(null)
+    try {
+      if (isFib) {
+        const filled = (lean.code_lines ? lean.code_lines.join('\n') : (lean.code || ''))
+          .replaceAll('{{BLANK}}', lean.blank_answer || '')
+        setExecResult(await executeCode({
+          language: lean.code_language || 'PYTHON',
+          code: filled,
+          stdin: lean.test_input || '',
+          expected_output: lean.test_output || '',
+        }))
+      } else {
+        setExecResult(await executeCode({
+          language: lean.code_language || 'PYTHON',
+          code: lean.code || code || '',
+          stdin: '',
+        }))
+      }
+    } catch (e) {
+      setExecResult({ error: e.message })
+    } finally {
+      setExecBusy(false)
+    }
+  }
+
   // Answer chips that apply to this type.
   const answers = []
   if (typeof lean.is_true === 'boolean') answers.push(['Answer', lean.is_true ? 'True' : 'False'])
   if (lean.answer) answers.push(['Answer', lean.answer, true])
   if (lean.blank_answer) answers.push(['Blank fills with', lean.blank_answer, true])
-  if (lean.correct_output) answers.push(['Output', lean.correct_output, true])
   if (lean.expected_output) answers.push(['Expected output', lean.expected_output, true])
   if (lean.test_output) answers.push(['Test output', lean.test_output, true])
-  ;(lean.correct_outputs || []).forEach((c) => answers.push(['Correct', c]))
+
+  // Code-analysis MCQs carry their CHOICES as correct_output(s) + wrong_answers (not `options`).
+  // Build a unified option list so they render with all choices like a normal MCQ.
+  const hasOptions = Array.isArray(lean.options) && lean.options.length > 0
+  const codeOptions = []
+  if (!hasOptions && Array.isArray(lean.wrong_answers) && lean.wrong_answers.length) {
+    if (lean.correct_output) codeOptions.push({ content: lean.correct_output, is_correct: true })
+    ;(lean.correct_outputs || []).forEach((c) => codeOptions.push({ content: c, is_correct: true }))
+    lean.wrong_answers.forEach((w) => codeOptions.push({ content: w, is_correct: false }))
+  }
+  const optionList = hasOptions ? lean.options : codeOptions
+  if (!codeOptions.length) {          // no synthesized options → show output as an answer chip
+    if (lean.correct_output) answers.push(['Output', lean.correct_output, true])
+    ;(lean.correct_outputs || []).forEach((c) => answers.push(['Correct', c]))
+  }
 
   return (
     <article className={`qc ${q.needs_human ? 'flagged' : ''} ${q.excluded ? 'excluded' : ''}`}>
@@ -298,10 +371,22 @@ function QuestionCard({ q, lo, index, review }) {
             {code && <pre className="qc-code">{code}</pre>}
           </Field>
 
-          {Array.isArray(lean.options) && lean.options.length > 0 && (
+          {canRun && (
+            <Field label={isFib ? 'Run & check output' : 'Run code'}>
+              <div className="qc-exec">
+                <button type="button" className="qc-exec-btn" onClick={handleRun} disabled={execBusy}>
+                  {execBusy ? <Spinner size={12} /> : <Play size={12} />}
+                  {isFib ? 'Fill blank, run & match expected' : 'Run snippet'}
+                </button>
+                {execResult && <ExecResult res={execResult} isFib={isFib} />}
+              </div>
+            </Field>
+          )}
+
+          {optionList.length > 0 && (
             <Field label="Options">
               <ul className="qc-opts">
-                {lean.options.map((o, i) => (
+                {optionList.map((o, i) => (
                   <li key={i} className={`qc-opt ${o.is_correct ? 'correct' : ''}`}>
                     <span className="qc-opt-letter">{LETTERS[i] || '•'}</span>
                     <span className="qc-opt-text"><MdInline>{o.content}</MdInline></span>
