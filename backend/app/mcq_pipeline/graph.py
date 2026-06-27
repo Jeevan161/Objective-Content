@@ -32,9 +32,9 @@ from app.mcq_pipeline.config import MAX_RETRIES
 from app.mcq_pipeline.nodes import author_outcomes, consolidate_concepts, graph_outcomes, parse_structure, repair, resolve_prerequisites, review_and_validate, select_outcomes, sequence_outcomes
 from app.mcq_pipeline.state import LOState, run_ctx
 from app.mcq_pipeline.utils._common import _prog
-from app.mcq_pipeline.nodes.n14_generate_questions import generate_for_los
-from app.mcq_pipeline.nodes.n15_review_questions import review_and_fix_for_los
-from app.mcq_pipeline.nodes.n13_recommend_question_type import recommend_for_los
+from app.mcq_pipeline.nodes.m08_generate_questions import generate_for_los
+from app.mcq_pipeline.nodes.m09_review_questions import review_and_fix_for_los
+from app.mcq_pipeline.nodes.m07_recommend_question_type import recommend_for_los
 
 
 # --- terminal LO node + legacy bridge -------------------------------------- #
@@ -66,18 +66,38 @@ def lo_to_legacy(state, config) -> dict:
 
 # --- question stage (adapted to RunContext; logic unchanged) --------------- #
 def recommend_question_types(state, config) -> dict:
+    # In LO-ONLY mode the question type is already PLANNED with each LO in select_outcomes (plan_los)
+    # and shown at the review gate — so this node no-ops. When question generation is enabled it
+    # (re)recommends types on the bridged final_los for the generator.
     ctx = run_ctx(config)
+    if not ctx.generate_questions:
+        ctx.progress.done("recommend_question_types", detail="skipped (types planned in plan_los)")
+        return {}
     scope.set_adapter(ctx.rag)
     los = state["final_los"]
-    on_progress = ctx.progress.counter("recommend_question_types", len(los))
-    los = recommend_for_los(los, max_seq=None, on_progress=on_progress)
+    # PRESERVE the types planned in plan_los (incl. same-content type-variants) — only (re)recommend
+    # for LOs that arrive WITHOUT a type, so re-typing can't collapse the variants.
+    untyped = [lo for lo in los if not lo.get("question_type")]
+    on_progress = ctx.progress.counter("recommend_question_types", len(untyped) or 1)
+    if untyped:
+        recommend_for_los(untyped, max_seq=None, on_progress=on_progress)   # mutates in place
+    else:
+        on_progress()
+    # Mirror the recommended type onto the LO outcomes (the gate renders state["outcomes"]);
+    # final_los[*].outcome == outcomes[*].id.
+    type_by_id = {lo.get("outcome"): lo.get("question_type") for lo in los}
+    rat_by_id = {lo.get("outcome"): lo.get("question_type_rationale", "") for lo in los}
+    outcomes = [{**o, "question_type": type_by_id.get(o["id"], o.get("question_type")),
+                 "question_type_rationale": rat_by_id.get(o["id"], o.get("question_type_rationale", ""))}
+                for o in state.get("outcomes", [])]
     from collections import Counter as _Counter
     types = _Counter(lo.get("question_type", "?") for lo in los)
     ctx.progress.done("recommend_question_types",
+                      detail=" · ".join(f"{t}:{n}" for t, n in types.items()),
                       snapshot={"count": len(los), "by_type": dict(types),
                                 "outcomes": [{"outcome": lo.get("outcome"),
                                               "question_type": lo.get("question_type")} for lo in los]})
-    return {"final_los": los}
+    return {"final_los": los, "outcomes": outcomes}
 
 
 def generate_questions_node(state, config) -> dict:
@@ -287,11 +307,12 @@ def build_lo_graph(*, checkpointer=None):
     g.add_edge("repair", "resolve_prerequisites")
     g.add_edge("finalize", "lo_to_legacy")
     g.add_edge("lo_to_legacy", "sequence_outcomes")
-    # HITL gate now sits AFTER sequencing, so the reviewer sees the basic→advanced order.
-    g.add_edge("sequence_outcomes", "review_outcomes")
+    # Recommend question types BEFORE the gate so each LO shows its type while being reviewed;
+    # the HITL gate then sits after sequencing + typing (reviewer sees basic→advanced order + type).
+    g.add_edge("sequence_outcomes", "recommend_question_types")
+    g.add_edge("recommend_question_types", "review_outcomes")
     g.add_conditional_edges("review_outcomes", route_after_outcomes,
-                            {"repair": "repair", "continue": "recommend_question_types"})
-    g.add_edge("recommend_question_types", "generate_questions")
+                            {"repair": "repair", "continue": "generate_questions"})
     g.add_edge("generate_questions", "review_questions")
     g.add_edge("review_questions", END)
     return g.compile(checkpointer=checkpointer)

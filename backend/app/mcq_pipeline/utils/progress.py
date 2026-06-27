@@ -36,9 +36,9 @@ STAGE_DEFS = [
     {"key": "finalize", "label": "Finalize & freeze"},
     {"key": "lo_to_legacy", "label": "Bridge to questions"},
     {"key": "sequence_outcomes", "label": "Sequence outcomes (deep-dive order)"},
-    {"key": "review_outcomes", "label": "Review outcomes (human gate 2)"},
+    {"key": "recommend_question_types", "label": "Recommend question types"},
+    {"key": "review_outcomes", "label": "Review outcomes (human gate)"},
     # Question stage — unchanged.
-    {"key": "recommend_question_types", "label": "Pick question types"},
     {"key": "generate_questions", "label": "Generate questions"},
     {"key": "review_questions", "label": "Review & fix"},
 ]

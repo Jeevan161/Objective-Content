@@ -8,7 +8,7 @@ the package triggers each node module, firing its register(...) prompt defaults.
 Flow (LO-first):
   parse_structure → [plan_los sub-graph: author_outcomes → consolidate_concepts → graph_outcomes
   → select_outcomes] → resolve_prerequisites → review_and_validate
-  → repair (loop) → finalize → sequence_outcomes → [Gate 2] → (question stage: n13–n15)
+  → repair (loop) → finalize → sequence_outcomes → [Gate 2] → (question stage: m07–m09)
 """
 from app.mcq_pipeline.nodes.m01_parse_structure import parse_structure
 from app.mcq_pipeline.nodes.m02_plan_los import (author_outcomes, consolidate_concepts,

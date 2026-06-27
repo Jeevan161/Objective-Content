@@ -110,7 +110,7 @@ def _llm_type_change(feedback: str, current: str, question_text: str) -> str | N
     """Returns a canonical type, 'REPICK' (change wanted, type unspecified), None (no
     change), or '__ERROR__' (LLM unavailable -> caller falls back to keywords)."""
     from app.mcq_pipeline.utils.llm import chat, parse_json
-    from app.mcq_pipeline.nodes.n13_recommend_question_type import QUESTION_TYPES
+    from app.mcq_pipeline.nodes.m07_recommend_question_type import QUESTION_TYPES
     try:
         usr = (f"CURRENT QUESTION TYPE: {current}\n\nQUESTION:\n{question_text}\n\n"
                f"REVIEWER FEEDBACK:\n{feedback}")
@@ -140,6 +140,21 @@ def _detect_type_change(feedback: str, current: str, question_text: str = "") ->
     if specific:
         return specific
     return "REPICK" if (llm == "REPICK" or kw == "REPICK") else None
+
+
+def _alternative_type(current: str, lo: dict) -> str:
+    """A sensible DIFFERENT type for a 'change the type' regen when the recommender would
+    otherwise re-derive the same one. Keeps code outcomes in the code family; never returns
+    the current type or a disabled (exact-string-match) type."""
+    from app.mcq_pipeline.config import EXCLUDED_QUESTION_TYPES
+    has_code = bool((lo.get("syntax") or "").strip()) or (current or "").startswith("CODE_ANALYSIS")
+    order = (["CODE_ANALYSIS_MULTIPLE_CHOICE", "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE", "MULTIPLE_CHOICE"]
+             if has_code else
+             ["MULTIPLE_CHOICE", "MORE_THAN_ONE_MULTIPLE_CHOICE", "TRUE_OR_FALSE"])
+    for t in order:
+        if t != current and t not in EXCLUDED_QUESTION_TYPES:
+            return t
+    return "MULTIPLE_CHOICE"
 
 
 # --- feedback INTENT classification (routes regeneration to a targeted fix) --- #
@@ -322,9 +337,9 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     top-priority instruction; re-review; persist (with a revision + feedback row).
     Returns the new question dict."""
     from app.mcq_pipeline.utils import scope
-    from app.mcq_pipeline.nodes.n14_generate_questions import _ground, difficulty_of, fix_lean, generate_lean
-    from app.mcq_pipeline.nodes.n15_review_questions import review_and_fix_one
-    from app.mcq_pipeline.nodes.n13_recommend_question_type import recommend_one
+    from app.mcq_pipeline.nodes.m08_generate_questions import _ground, difficulty_of, fix_lean, generate_lean
+    from app.mcq_pipeline.nodes.m09_review_questions import review_and_fix_one
+    from app.mcq_pipeline.nodes.m07_recommend_question_type import recommend_one
     from app.mcq_pipeline.runner import build_adapter
 
     # 1) load what we need, then release the session before the LLM work
@@ -360,7 +375,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
 
     target = _detect_type_change(feedback, current_qtype, question_text)
     if target == "REPICK":
-        target = (recommend_one(lo) or {}).get("question_type")
+        # The reviewer asked to CHANGE the type but named none. recommend_one() re-derives
+        # the SAME type deterministically for this LO, so a bare re-pick would no-op (the
+        # reviewer's "change the type" would silently do nothing). Force a DIFFERENT,
+        # non-excluded type when the re-pick lands back on the rejected current type.
+        repick = (recommend_one(lo) or {}).get("question_type")
+        target = repick if (repick and repick != current_qtype) else _alternative_type(current_qtype, lo)
     intent = None if target else _classify_feedback(feedback, current_qtype, question_text)
 
     new_qtype = target or current_qtype
