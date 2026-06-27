@@ -213,19 +213,11 @@ def run_mcq_pipeline(
     prereq_unit_ids: list[str] | None = None,
     question_budget: int | None = None,
     hitl_enabled: bool = False,
-    # Question generation is LIVE by default. Pass generate_questions=False for an LO-only run
-    # (the question-stage nodes self-skip and the LO review gate is forced on).
-    generate_questions: bool = True,
     progress_sink: Callable[[dict], None] | None = None,
     thread_id: str | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> dict:
     disable_langsmith()
-    # Question generation is LIVE by default (full pipeline: LOs → review gate → questions).
-    # Pass generate_questions=False for an LO-only run; that forces the LO review gate on so the
-    # reviewer always gets it.
-    if not generate_questions:
-        hitl_enabled = True
     # The checkpointer keys every run by thread_id; default to a fresh uuid when the
     # caller (e.g. the job runner) doesn't supply the job id.
     thread_id = thread_id or str(uuid.uuid4())
@@ -290,7 +282,7 @@ def run_mcq_pipeline(
     # never in checkpointed state. Always cleared so the registry can't leak.
     ctx = RunContext(
         rag=adapter, progress=progress, db_prereq_units=prereq_units,
-        generate_questions=generate_questions, review_questions=review,
+        review_questions=review,
         question_budget=question_budget, hitl_enabled=hitl_enabled,
     )
     REGISTRY.register(thread_id, ctx)
@@ -494,7 +486,7 @@ def _persist_lo_feedback(thread_id: str, decision, payload: dict, adapter) -> No
 
 def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
                prereq_unit_ids: list[str] | None = None, question_budget: int | None = None,
-               review: bool = True, generate_questions: bool = True,
+               review: bool = True,
                progress_sink: Callable[[dict], None] | None = None,
                cancel_check: Callable[[], bool] | None = None) -> dict:
     """Resume a HITL-paused run after a human decision (Gate 1 / Gate 2). Rebuilds the run-scoped
@@ -525,7 +517,7 @@ def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
     progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id),
                                 seed_done=seed_done, cancel_check=cancel_check)
     ctx = RunContext(rag=adapter, progress=progress, db_prereq_units=prereq_units,
-                     generate_questions=generate_questions, review_questions=review,
+                     review_questions=review,
                      question_budget=question_budget, hitl_enabled=True)
     REGISTRY.register(thread_id, ctx)
     set_call_context(unit=(session_label or unit_id or thread_id))

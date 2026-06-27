@@ -66,13 +66,10 @@ def lo_to_legacy(state, config) -> dict:
 
 # --- question stage (adapted to RunContext; logic unchanged) --------------- #
 def recommend_question_types(state, config) -> dict:
-    # In LO-ONLY mode the question type is already PLANNED with each LO in select_outcomes (plan_los)
-    # and shown at the review gate — so this node no-ops. When question generation is enabled it
-    # (re)recommends types on the bridged final_los for the generator.
+    # (Re)recommend a question type only for LOs that arrive WITHOUT one; the types planned with the
+    # LO in select_outcomes (plan_los), incl. same-content type-variants, are preserved and were
+    # shown at the review gate.
     ctx = run_ctx(config)
-    if not ctx.generate_questions:
-        ctx.progress.done("recommend_question_types", detail="skipped (types planned in plan_los)")
-        return {}
     scope.set_adapter(ctx.rag)
     los = state["final_los"]
     # PRESERVE the types planned in plan_los (incl. same-content type-variants) — only (re)recommend
@@ -102,9 +99,6 @@ def recommend_question_types(state, config) -> dict:
 
 def generate_questions_node(state, config) -> dict:
     ctx = run_ctx(config)
-    if not ctx.generate_questions:
-        ctx.progress.done("generate_questions", detail="skipped")
-        return {}
     scope.set_adapter(ctx.rag)
     los = state["final_los"]
     on_progress = ctx.progress.counter("generate_questions", len(los))
@@ -118,7 +112,7 @@ def generate_questions_node(state, config) -> dict:
 
 def review_questions_node(state, config) -> dict:
     ctx = run_ctx(config)
-    if not (ctx.generate_questions and ctx.review_questions):
+    if not ctx.review_questions:
         ctx.progress.done("review_questions", detail="skipped")
         return {}
     scope.set_adapter(ctx.rag)
