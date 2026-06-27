@@ -43,7 +43,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob, openTarget }) {
   const [job, setJob] = useState(null)
   const [run, setRun] = useState(null)
   const [scopeOpen, setScopeOpen] = useState(false)
-  const [hitl, setHitl] = useState(false)
+  const [hitl, setHitl] = useState(false)  // opt-in: pause at the LO review gate
   const [budget, setBudget] = useState('') // '' = default ceiling (20)
   const [runParams, setRunParams] = useState(null) // {prereqUnitIds, questionBudget} of the active run, for resume
   const [resuming, setResuming] = useState(false)

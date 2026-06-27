@@ -26,21 +26,19 @@ class JobCancelled(BaseException):
 STAGE_DEFS = [
     # LO-creation stage — the LO-first pipeline.
     {"key": "parse_structure", "label": "Parse structure"},
-    {"key": "generate_outcomes", "label": "Generate all outcomes"},
-    {"key": "map_concepts", "label": "Map concepts (consistent across outcomes)"},
-    {"key": "build_outcome_graph", "label": "Build outcome graph (weights)"},
-    {"key": "profile_depth", "label": "Profile depth (feasibility)"},
-    {"key": "plan_outcomes", "label": "Plan outcomes (budget + identify apply)"},
+    {"key": "author_outcomes", "label": "Author candidate outcomes"},
+    {"key": "consolidate_concepts", "label": "Consolidate concepts + taught depth"},
+    {"key": "graph_outcomes", "label": "Build outcome graph (weights)"},
+    {"key": "select_outcomes", "label": "Select outcomes (budget + feasibility)"},
     {"key": "resolve_prerequisites", "label": "Resolve prerequisites (apply)"},
-    {"key": "review_outcomes_quality", "label": "Dedup & judge (R1–R8 rubric)"},
-    {"key": "validate", "label": "Validate (structural + rubric gate)"},
+    {"key": "review_and_validate", "label": "Review & validate (dedup, R1–R8 rubric, structural gate)"},
     {"key": "repair", "label": "Repair (regenerate, if needed)"},
     {"key": "finalize", "label": "Finalize & freeze"},
     {"key": "lo_to_legacy", "label": "Bridge to questions"},
     {"key": "sequence_outcomes", "label": "Sequence outcomes (deep-dive order)"},
-    {"key": "review_outcomes", "label": "Review outcomes (human gate 2)"},
+    {"key": "recommend_question_types", "label": "Recommend question types"},
+    {"key": "review_outcomes", "label": "Review outcomes (human gate)"},
     # Question stage — unchanged.
-    {"key": "recommend_question_types", "label": "Pick question types"},
     {"key": "generate_questions", "label": "Generate questions"},
     {"key": "review_questions", "label": "Review & fix"},
 ]

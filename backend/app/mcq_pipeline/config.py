@@ -13,10 +13,12 @@ from __future__ import annotations
 
 # --- question budget (user-supplied; QUESTION_BUDGET is only the default ceiling) --- #
 QUESTION_BUDGET = 20                # default ceiling when the caller supplies no budget
-# Question types we do NOT generate right now (the recommender remaps them to MULTIPLE_CHOICE).
-# TEXTUAL is graded by exact STRING MATCH (no AI grader), so it is OFF until that is revisited.
-# Empty this set to re-enable. (CODE_ANALYSIS_TEXTUAL = exact code output is NOT excluded.)
-EXCLUDED_QUESTION_TYPES = {"TEXTUAL"}
+# Question types we do NOT generate right now. Both are graded by exact STRING MATCH (no AI
+# grader), so a single space or typo fails a correct answer — reviewers consistently rejected
+# them for "spacing and typo" issues. The recommender remaps them to an OPTION type instead:
+# CODE_ANALYSIS_TEXTUAL -> CODE_ANALYSIS_MULTIPLE_CHOICE (keeps the code), TEXTUAL -> MULTIPLE_CHOICE.
+# Empty this set to re-enable.
+EXCLUDED_QUESTION_TYPES = {"TEXTUAL", "CODE_ANALYSIS_TEXTUAL"}
 # DEPRECATED: the per-concept cap is no longer applied. With concept_id now keyed at SUB-concept
 # granularity (map_concepts), the (concept_id, Bloom) dedup is the natural bound — one outcome per
 # distinct sub-concept per tier — so an arbitrary per-concept ceiling is unnecessary and was the

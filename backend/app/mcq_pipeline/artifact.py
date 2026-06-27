@@ -174,6 +174,10 @@ def lo_to_legacy(outcome: dict, inv_by_id: dict, db_prereq_units: list,
         "bloom_level_raw": outcome.get("bloom_level"),
         "is_scenario": bool(outcome.get("scenario") or outcome.get("bloom_level") == "scenario"),
         "concept_id": cid,
+        # the question type PLANNED with the LO (incl. same-content type-variants) — carried so the
+        # generator uses it directly and the variants are NOT collapsed by re-typing.
+        "question_type": outcome.get("question_type"),
+        "question_type_rationale": outcome.get("question_type_rationale", ""),
     }
 
 

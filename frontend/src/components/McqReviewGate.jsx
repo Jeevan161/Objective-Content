@@ -1,24 +1,45 @@
 import { useState } from 'react'
 import { CheckCircle2, AlertTriangle, RotateCcw, ThumbsUp } from 'lucide-react'
 
-// The human-in-the-loop review gate (the LO-division Gate 1 was removed). It renders the
-// paused pipeline's authored outcomes. The reviewer unchecks any outcome and gives a per-LO
-// reason ("why"); regenerating sends those reasons so each LO is regenerated with its own
-// feedback. After a round, the payload's `regenerated_ids` split the view into two columns:
-// LEFT = just regenerated (review these), RIGHT = previously approved/kept. The loop repeats.
+// The human-in-the-loop review gate (the LO-division Gate 1 was removed). It renders the paused
+// pipeline's authored outcomes. The reviewer rates EACH outcome — Good / Needs work / Regenerate —
+// and may add a comment on any of them. EVERY rating + comment is stored (stage='lo' feedback) on
+// submit, regardless of approve/reject, building the LO-feedback dataset used to revamp prompts.
+// Outcomes marked "Regenerate" (reason required) are rewritten with their comment as feedback;
+// if none are, the run continues. After a regen round, regenerated_ids split the view into two
+// columns: LEFT = just regenerated (review these), RIGHT = previously kept.
 
-function OutcomeRow({ o, rv, unchecked, feedback, onToggle, onFeedback, busy }) {
-  const failed = rv?.covered === false
+const VERDICTS = [
+  { key: 'good', label: 'Good' },
+  { key: 'needs_work', label: 'Needs work' },
+  { key: 'regenerate', label: 'Regenerate' },
+]
+
+function VerdictPicker({ value, disabled, onChange }) {
   return (
-    <li className={`mcq-lo-item ${unchecked ? 'rejecting' : ''}`}>
+    <div className="mcq-verdict-picker" role="group">
+      {VERDICTS.map((v) => (
+        <button
+          key={v.key}
+          type="button"
+          disabled={disabled}
+          className={`btn btn-ghost mcq-verdict v-${v.key} ${value === v.key ? 'active' : ''}`}
+          aria-pressed={value === v.key}
+          onClick={() => onChange(v.key)}
+        >
+          {v.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function OutcomeRow({ o, rv, verdict, comment, onVerdict, onComment, busy }) {
+  const failed = rv?.covered === false
+  const regen = verdict === 'regenerate'
+  return (
+    <li className={`mcq-lo-item ${regen ? 'rejecting' : ''}`}>
       <div className="mcq-lo-main">
-        <input
-          type="checkbox"
-          checked={!unchecked}
-          disabled={busy}
-          onChange={() => onToggle(o.id)}
-          data-tip="Keep this outcome (uncheck to regenerate)"
-        />
         <span className={`mcq-lo-bloom b-${o.bloom_level}`}>{o.bloom_level}</span>
         <span className="mcq-lo-desc">{o.title || o.description}</span>
         {failed ? (
@@ -30,57 +51,61 @@ function OutcomeRow({ o, rv, unchecked, feedback, onToggle, onFeedback, busy }) 
       <div className="mcq-lo-meta">
         <span className="mcq-lo-tag">concept: {(o.concept_id || '').replace(/^C_/, '')}</span>
         {o.learner_action && <span className="mcq-lo-tag">verb: {o.learner_action}</span>}
+        {o.question_type && (
+          <span className="mcq-lo-tag mcq-lo-qtype" title={o.question_type_rationale || ''}>
+            {o.question_type.replaceAll('_', ' ').toLowerCase()}
+          </span>
+        )}
         {failed && rv?.fail_reason && (
           <span className="mcq-lo-tag mcq-review-fail">{rv.fail_reason}</span>
         )}
       </div>
-      {unchecked && (
-        <textarea
-          className="input mcq-lo-feedback"
-          rows={2}
-          autoFocus
-          disabled={busy}
-          value={feedback}
-          onChange={(e) => onFeedback(o.id, e.target.value)}
-          placeholder="Why is this being regenerated? (required)"
-        />
-      )}
+      <VerdictPicker value={verdict} disabled={busy} onChange={(v) => onVerdict(o.id, v)} />
+      <textarea
+        className="input mcq-lo-feedback"
+        rows={2}
+        disabled={busy}
+        value={comment}
+        onChange={(e) => onComment(o.id, e.target.value)}
+        placeholder={regen
+          ? 'Why regenerate? (required) — this feedback drives the rewrite'
+          : 'Optional feedback on this outcome (stored for prompt tuning)'}
+      />
     </li>
   )
 }
 
-function OutcomeList({ outcomes, reviews, rejected, onToggle, onFeedback, busy }) {
+function OutcomeList({ outcomes, reviews, stateMap, onVerdict, onComment, busy }) {
   return (
     <ul className="mcq-lo-list detailed">
-      {outcomes.map((o) => (
-        <OutcomeRow
-          key={o.id}
-          o={o}
-          rv={(reviews || {})[o.id]}
-          unchecked={rejected.has(o.id)}
-          feedback={rejected.get(o.id) || ''}
-          onToggle={onToggle}
-          onFeedback={onFeedback}
-          busy={busy}
-        />
-      ))}
+      {outcomes.map((o) => {
+        const st = stateMap.get(o.id) || { verdict: 'good', comment: '' }
+        return (
+          <OutcomeRow
+            key={o.id}
+            o={o}
+            rv={(reviews || {})[o.id]}
+            verdict={st.verdict}
+            comment={st.comment}
+            onVerdict={onVerdict}
+            onComment={onComment}
+            busy={busy}
+          />
+        )
+      })}
     </ul>
   )
 }
 
 function McqReviewGate({ review, busy, onDecide }) {
-  // rejected: Map<outcomeId, feedbackText> — unchecked outcomes awaiting regeneration.
-  const [rejected, setRejected] = useState(() => new Map())
-
-  const onToggle = (id) =>
-    setRejected((prev) => {
-      const next = new Map(prev)
-      if (next.has(id)) next.delete(id)
-      else next.set(id, '')
-      return next
-    })
-  const onFeedback = (id, val) =>
-    setRejected((prev) => new Map(prev).set(id, val))
+  // state: Map<outcomeId, {verdict, comment}>. Default verdict 'good' (so a silent submit still
+  // records every outcome as reviewed-good). New outcomes from a regen round default in too.
+  const [state, setState] = useState(() => new Map())
+  const get = (id) => state.get(id) || { verdict: 'good', comment: '' }
+  const setVerdict = (id, verdict) =>
+    setState((p) => new Map(p).set(id, { ...get(id), verdict }))
+  const setComment = (id, comment) =>
+    setState((p) => new Map(p).set(id, { ...get(id), comment }))
 
   if (review?.gate !== 'outcomes') return null
 
@@ -91,18 +116,20 @@ function McqReviewGate({ review, busy, onDecide }) {
   const regenerated = outcomes.filter((o) => regenIds.has(o.id))
   const kept = outcomes.filter((o) => !regenIds.has(o.id))
 
-  // Regeneration is allowed only when every unchecked outcome has a non-empty reason.
-  const canRegen = rejected.size > 0 && [...rejected.values()].every((v) => v.trim())
+  const toRegen = outcomes.filter((o) => get(o.id).verdict === 'regenerate')
+  const missingReason = toRegen.some((o) => !get(o.id).comment.trim())
+  const canSubmit = !busy && !missingReason
 
-  function approve() { onDecide({ action: 'approve' }) }
-  function regenerate() {
-    onDecide({
-      action: 'reject',
-      rejected: [...rejected.entries()].map(([id, feedback]) => ({ id, feedback: feedback.trim() })),
+  function submit() {
+    const lo_feedback = outcomes.map((o) => {
+      const { verdict, comment } = get(o.id)
+      return { id: o.id, verdict, comment: comment.trim() }
     })
+    const rejected = toRegen.map((o) => ({ id: o.id, feedback: get(o.id).comment.trim() }))
+    onDecide({ action: rejected.length ? 'reject' : 'approve', rejected, lo_feedback })
   }
 
-  const listProps = { reviews, rejected, onToggle, onFeedback, busy }
+  const listProps = { reviews, stateMap: state, onVerdict: setVerdict, onComment: setComment, busy }
 
   return (
     <div className="mcq-review">
@@ -110,9 +137,9 @@ function McqReviewGate({ review, busy, onDecide }) {
         <div>
           <h3>Review the learning outcomes</h3>
           <p>
-            {hasRegen
-              ? 'Review the regenerated outcomes on the left. Uncheck any (with a reason) to regenerate again, or approve to continue.'
-              : 'Uncheck any outcome and say why — it will be regenerated with your feedback. Approve to generate questions.'}
+            Rate each outcome — <b>Good</b> / <b>Needs work</b> / <b>Regenerate</b> — and add any
+            feedback. Every rating and comment is saved. Outcomes marked “Regenerate” (reason
+            required) are rewritten with your feedback; otherwise the run continues.
           </p>
         </div>
         <span className="mcq-badge warn">awaiting review</span>
@@ -125,15 +152,13 @@ function McqReviewGate({ review, busy, onDecide }) {
             <OutcomeList outcomes={regenerated} {...listProps} />
           </div>
           <div className="mcq-review-col">
-            <span className="mcq-spec-k">Previously approved ({kept.length})</span>
+            <span className="mcq-spec-k">Previously kept ({kept.length})</span>
             <OutcomeList outcomes={kept} {...listProps} />
           </div>
         </div>
       ) : (
         <div className="mcq-review-section">
-          <span className="mcq-spec-k">
-            Learning outcomes ({outcomes.length}) — uncheck any to regenerate with feedback
-          </span>
+          <span className="mcq-spec-k">Learning outcomes ({outcomes.length})</span>
           <OutcomeList outcomes={outcomes} {...listProps} />
         </div>
       )}
@@ -141,17 +166,16 @@ function McqReviewGate({ review, busy, onDecide }) {
       <div className="mcq-review-actions">
         <button
           type="button"
-          className="btn btn-ghost"
-          disabled={busy || !canRegen}
-          onClick={regenerate}
-          title={rejected.size === 0
-            ? 'Uncheck an outcome to regenerate it'
-            : canRegen ? '' : 'Add a reason for every unchecked outcome'}
+          className="btn btn-primary"
+          disabled={!canSubmit}
+          onClick={submit}
+          title={missingReason ? 'Add a reason for every outcome marked “Regenerate”' : ''}
         >
-          <RotateCcw size={14} /> {`Regenerate ${rejected.size || ''}`.trim()}
-        </button>
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={approve}>
-          <ThumbsUp size={14} /> Approve &amp; continue
+          {toRegen.length ? (
+            <><RotateCcw size={14} /> {`Submit — regenerate ${toRegen.length} & continue`}</>
+          ) : (
+            <><ThumbsUp size={14} /> Submit review & continue</>
+          )}
         </button>
       </div>
     </div>

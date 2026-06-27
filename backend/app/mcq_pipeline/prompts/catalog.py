@@ -17,12 +17,16 @@ from app.mcq_pipeline.utils.progress import STAGE_DEFS
 # deterministic 10-node LO pipeline's agent stages.
 _LO_STAGE = {
     "lo.segment_sys": "parse_structure",
-    "lo.generate_sys": "generate_outcomes",
-    "lo.depth_profile": "profile_depth",
-    "lo.graph_sys": "build_outcome_graph",
+    "lo.segment_critique_sys": "parse_structure",
+    "lo.generate_sys": "author_outcomes",
+    "lo.consolidate_sys": "consolidate_concepts",
+    "lo.consolidate_critic_sys": "consolidate_concepts",
+    "lo.graph_sys": "graph_outcomes",
+    "lo.plan_sys": "select_outcomes",
+    "lo.plan_critic_sys": "select_outcomes",
     "lo.coverage_plan": "resolve_prerequisites",
     "lo.coverage_judge": "resolve_prerequisites",
-    "lo.rubric": "review_outcomes_quality",
+    "lo.rubric": "review_and_validate",
     "lo.repair_sys": "repair",
     "lo.sequence_sys": "sequence_outcomes",
 }
@@ -33,11 +37,20 @@ _LO_STAGE = {
 _DETERMINISTIC_NOTE = ("Deterministic stage — driven by code, not an LLM. The rules "
                        "below are read-only reference documentation.")
 _STAGE_NOTES = {
-    "parse_structure": ("Hybrid — an LLM (lo.segment_sys) proposes the topic boundaries; a "
-                        "deterministic line-split enforces them losslessly and falls back to "
-                        "the heading rules below if the LLM is unavailable."),
-    "map_concepts": _DETERMINISTIC_NOTE,
-    "plan_outcomes": _DETERMINISTIC_NOTE,
+    "parse_structure": ("Hybrid — an LLM (lo.segment_sys) proposes the topic boundaries; when "
+                        "the split looks off, a reviewer (lo.segment_critique_sys) rechecks and "
+                        "corrects it; a deterministic line-split then enforces the result "
+                        "losslessly and falls back to the heading rules below if the LLM is "
+                        "unavailable."),
+    "consolidate_concepts": ("Agentic — an LLM semantically merges sub-concepts (replacing the old "
+                             "Jaccard heuristic) and judges taught depth; a gated critic rechecks "
+                             "the merge. Deterministic code keys the ids and applies the scope rule."),
+    "graph_outcomes": ("LLM K-sample majority voting builds the concept dependency DAG; weights + "
+                       "dag_depth + procedurality are derived deterministically from it."),
+    "select_outcomes": ("Agentic — the LLM proposes which outcomes to keep toward the budget (a "
+                        "gated critic rechecks coverage); deterministic code enforces the "
+                        "invariants (feasibility clamp, budget ceiling, coverage floor, allocation "
+                        "plan the repair loop reconciles against)."),
     "validate": _DETERMINISTIC_NOTE,
     "finalize": _DETERMINISTIC_NOTE,
     "lo_to_legacy": _DETERMINISTIC_NOTE,

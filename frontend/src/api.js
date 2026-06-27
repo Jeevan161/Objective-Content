@@ -175,6 +175,14 @@ export const regenerateMcqQuestion = (runId, outcome, feedback, tags = []) =>
     body: JSON.stringify({ feedback, tags }),
   })
 
+// Run a candidate program (and optionally check stdout against an expected output) via the
+// same sandboxed runner that grades FIBs. Powers the reviewer's FIB 'Run & Check' button.
+export const executeCode = ({ language, code, stdin = '', expected_output = null }) =>
+  request('/courses/mcq/execute/', {
+    method: 'POST',
+    body: JSON.stringify({ language, code, stdin, expected_output }),
+  })
+
 // Record a non-regenerating review action (e.g. accept) on a question.
 export const submitMcqFeedback = (runId, outcome, { action, tags = [], comment = '' }) =>
   request(`/courses/mcq/runs/${runId}/questions/${encodeURIComponent(outcome)}/feedback/`, {

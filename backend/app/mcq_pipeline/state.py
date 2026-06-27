@@ -82,7 +82,6 @@ class RunContext:
     rag: Any
     progress: Any
     db_prereq_units: list = field(default_factory=list)
-    generate_questions: bool = True
     review_questions: bool = True
     run_coverage_gate: bool = True         # run the unified LLM Judge (R1–R8) over LOs (V13)
     question_budget: Any = None            # user-supplied budget (default ceiling = QUESTION_BUDGET)
