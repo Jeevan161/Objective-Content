@@ -13,6 +13,8 @@ There is no legacy fallback (replace-outright); an unrecoverable phase raises ES
 """
 from __future__ import annotations
 
+from collections import Counter
+
 from app.mcq_pipeline.config import QUESTION_BUDGET
 from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.utils._common import _bind_rag, _ctx, _prog
@@ -49,11 +51,15 @@ def consolidate_concepts(state, config) -> dict:
     prog.start("consolidate_concepts")
     protos = [dict(o) for o in state["outcomes"]]
     sec_text = {s["topic_id"]: s["text"] for s in state["sections"]}
-    groups = agent.consolidate(protos, state.get("source_text", ""))
+    groups, cmeta = agent.consolidate(protos, state.get("source_text", ""))
     inv, outcomes = gate.build_inventory(protos, groups, sec_text)
     in_scope = sum(1 for c in inv if c.get("in_scope"))
-    prog.done("consolidate_concepts", detail=f"{len(inv)} concepts ({in_scope} in-scope)",
+    critic = " · critic revised" if cmeta.get("critic_fired") else (
+        " · critic checked" if cmeta.get("critic_gated") else "")
+    prog.done("consolidate_concepts", detail=f"{len(inv)} concepts ({in_scope} in-scope){critic}",
               snapshot={"concept_count": len(inv), "in_scope": in_scope, "merged_from": len(protos),
+                        "critic_gated": cmeta.get("critic_gated", False),
+                        "critic_fired": cmeta.get("critic_fired", False),
                         "concepts": [{"concept_id": c["concept_id"], "name": c["canonical_name"],
                                       "depth": c["depth_category"], "in_scope": c["in_scope"]}
                                      for c in inv]})
@@ -87,10 +93,32 @@ def select_outcomes(state, config) -> dict:
     requested = int(getattr(ctx, "question_budget", None) or QUESTION_BUDGET)
     inv = state["concept_inventory"]
     outcomes = state["outcomes"]
-    prefer = agent.plan(inv, outcomes, requested)
+    prefer, pmeta = agent.plan(inv, outcomes, requested)
     res = gate.enforce(state, inv, outcomes, state["concept_graph"], state["outcome_graph"],
                        requested, prefer)
+    # PHASE 3b — plan the question TYPE alongside each selected LO (parallel), so each outcome leaves
+    # planning as a complete unit (concept + tier + question type) and the review gate shows it.
+    res["outcomes"] = pmap(agent.recommend_type, res["outcomes"])
+    # ENFORCE the target count: if fewer distinct outcomes than the budget, fill toward it with
+    # same-outcome variants in different question formats (best-effort; thin sessions stay below).
+    base_n = len(res["outcomes"])
+    res["outcomes"] = agent.expand_to_target(res["outcomes"], requested)
+    n_variants = len(res["outcomes"]) - base_n
+    if isinstance(res.get("allocation_plan"), dict):      # keep budget target consistent post-expand
+        res["allocation_plan"]["question_budget"] = len(res["outcomes"])
+    qtypes = Counter(o.get("question_type") for o in res["outcomes"])
     snapshot = res.pop("_snapshot", None)
     detail = res.pop("_detail", "")
+    if isinstance(snapshot, dict):
+        snapshot["plan_critic_gated"] = pmeta.get("critic_gated", False)
+        snapshot["plan_critic_fired"] = pmeta.get("critic_fired", False)
+        snapshot["by_question_type"] = dict(qtypes)
+        snapshot["type_variants_added"] = n_variants
+    detail += f" · {len(res['outcomes'])} LOs"
+    if n_variants:
+        detail += f" (+{n_variants} type-variants)"
+    detail += " · types: " + "/".join(f"{(t or '?').split('_')[0].lower()}:{n}" for t, n in qtypes.items())
+    if pmeta.get("critic_fired"):
+        detail += " · plan critic revised"
     prog.done("select_outcomes", detail=detail, snapshot=snapshot)
     return res

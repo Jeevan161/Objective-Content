@@ -23,7 +23,7 @@ from app.mcq_pipeline.prompts.store import get_prompt, register
 GENERATE_SYS = register("lo.generate_sys", """\
 You author the COMPLETE set of measurable LEARNING OUTCOMES that ONE section of instructional reading material (any subject) can support, grounded ONLY in that section.
 
-GOAL — be EXHAUSTIVE: enumerate every DISTINCT, assessable outcome the material justifies. Cover every teachable concept in the section. Do NOT pre-filter for a budget; a later stage selects. But every outcome MUST be fully supported by the section — never pad with outcomes the material does not teach.
+GOAL — be EXHAUSTIVE and produce BREADTH. For EACH concept, generate outcomes at EVERY Bloom level the material supports — recall AND understanding for everything taught, AND apply (and scenario) WHENEVER the section shows the concept being USED, performed, evaluated, computed, transformed, or applied (e.g. evaluating an expression, running an operation, deciding with a rule/condition). Do NOT stop at one outcome per concept. Aim to be thorough — a typical session supports on the order of ~20 distinct assessable outcomes across its concepts and levels; produce that breadth when the content supports it. Do NOT pre-filter for a budget; a later stage selects. But every outcome MUST be fully supported by the section — never pad with outcomes the material does not teach.
 
 Return ONLY a JSON list. Each item:
 {"concept","sub_concept","bloom_level","title","learner_action","skill_type","description","syntax","quote","justification"}
@@ -34,9 +34,9 @@ Think in THREE LEVELS — broad to fine: TOPIC (this whole section) ⊃ CONCEPT 
 - "bloom_level": one of "remember" | "understand" | "apply" | "scenario", chosen to match what the section actually TEACHES about this concept:
     remember   → the section states a fact/term to recall.
     understand → the section explains reasoning/relationships.
-    apply      → the section demonstrates a concrete PROCEDURE/method/worked example the learner could carry out.
-    scenario   → the section demonstrates TRANSFER of a method to a novel situation.
-  Only emit apply/scenario when the section actually shows the method — otherwise stay at understand/remember.
+    apply      → the section shows the concept being USED/performed/evaluated/computed/applied — a procedure, worked example, an evaluated expression, an operation, or a rule applied to inputs. A single worked example or expression evaluation is ENOUGH to justify apply; do NOT under-call apply for procedural/operational content (operators, conditions, computations, transformations).
+    scenario   → the section demonstrates TRANSFER of the method to a NEW case.
+  Emit apply/scenario whenever the section shows the concept in use (most procedural/operational concepts support apply). Stay at understand/remember only for purely descriptive/definitional content with no demonstrated use.
 - "learner_action": a verb matching the tier:
     remember   → one of: <REMEMBER_VERBS>
     understand → one of: <UNDERSTAND_VERBS>

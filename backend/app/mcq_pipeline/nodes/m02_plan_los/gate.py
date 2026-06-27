@@ -160,21 +160,20 @@ def _clamp_to_feasible(o: dict, concept: dict) -> dict:
 
 
 def _quantize_budget(requested: int, capacity: int, n_concepts: int) -> tuple:
-    """Budget is a CEILING (stepped down to a multiple of BUDGET_STEP, capped by capacity) with a
-    hard coverage floor: never fewer than the in-scope broad-concept count."""
+    """Budget is now a TARGET (enforced): aim for `requested` outcomes. `_select` picks as many
+    distinct base outcomes (concept × Bloom) as the material supports up to this target, and any
+    shortfall is filled afterwards with same-outcome question-type variants. So the budget is NOT
+    stepped down to the base-candidate capacity — it stays at the target (never below the coverage
+    floor). A thin session that can't justify the target falls short (flagged, not padded)."""
     flags = []
-    target = max(0, min(requested, capacity))
-    final = max(MIN_BUDGET, (target // BUDGET_STEP) * BUDGET_STEP)
-    if final < requested:
-        flags.append({"flag": "budget_reduced", "requested": requested, "final": final,
-                      "reason": f"material supports ~{capacity} grounded outcomes"})
-    if final < n_concepts:
-        final = min(capacity, ((n_concepts + BUDGET_STEP - 1) // BUDGET_STEP) * BUDGET_STEP)
-        flags.append({"flag": "budget_raised_for_coverage", "final": final,
-                      "reason": f"{n_concepts} in-scope broad concepts must each be covered"})
+    final = max(MIN_BUDGET, requested, n_concepts)      # target the requested; never below coverage
+    if capacity < requested:
+        flags.append({"flag": "few_base_candidates", "base": capacity, "target": requested,
+                      "reason": f"only ~{capacity} distinct base outcomes; the rest are filled with "
+                                "question-type variants (a thin session may stay below the target)"})
     if final <= 10:
         flags.append({"flag": "low_budget_review", "final": final,
-                      "reason": "thin material — recommend human review at Gate 1"})
+                      "reason": "thin material — recommend human review"})
     return final, flags
 
 
@@ -247,8 +246,15 @@ def enforce(state, inv: list, outcomes: list, concept_graph: dict, outcome_graph
     in_scope_ids = {c["concept_id"] for c in inv if c.get("in_scope")}
     n = len({parent_of[cid] for cid in in_scope_ids})
 
-    candidates = [_clamp_to_feasible(o, inv_by_id[o["concept_id"]])
-                  for o in outcomes if o.get("concept_id") in in_scope_ids]
+    candidates, clamped = [], []
+    for o in outcomes:
+        if o.get("concept_id") not in in_scope_ids:
+            continue
+        c = _clamp_to_feasible(o, inv_by_id[o["concept_id"]])
+        if c["bloom_level"] != o["bloom_level"]:        # tier the material couldn't support
+            clamped.append({"id": o["id"], "from": o["bloom_level"], "to": c["bloom_level"],
+                            "concept": inv_by_id[o["concept_id"]]["canonical_name"]})
+        candidates.append(c)
     dropped_oos = [o["id"] for o in outcomes if o.get("concept_id") not in in_scope_ids]
 
     capacity = max(MIN_BUDGET, len(candidates) or MIN_BUDGET)
@@ -326,8 +332,12 @@ def enforce(state, inv: list, outcomes: list, concept_graph: dict, outcome_graph
     logs = [{"node": "plan_los", "candidates": len(outcomes), "selected": len(selected),
              "budget": final_budget, "apply": len(apply_ids), "tier_counts": tier_counts,
              "flags": [f["flag"] for f in flags]}]
+    # The selection DECISIONS (the visible 'resolve' layer): what was kept, what tier the material
+    # couldn't support (clamped), what was dropped out-of-scope or over-budget — each with a reason.
+    decisions = {"kept": [o["id"] for o in selected], "clamped": clamped,
+                 "dropped_out_of_scope": dropped_oos, "dropped_over_budget": dropped_unselected}
     snapshot = {**selection_summary, "budget": final_budget, "tier_counts": tier_counts,
-                "flags": [f["flag"] for f in flags],
+                "flags": [f["flag"] for f in flags], "decisions": decisions,
                 "selected": [{"id": o["id"], "title": o["title"], "bloom": o["bloom_level"],
                               "concept": name_of.get(o["concept_id"], o["concept_id"]),
                               "weight": o.get("weight", 0)} for o in selected]}
@@ -336,5 +346,6 @@ def enforce(state, inv: list, outcomes: list, concept_graph: dict, outcome_graph
             "backfill_pool": backfill_pool, "division_proposal": division_proposal,
             "selection_summary": selection_summary, "coverage_profile": coverage_profile,
             "overrides": overrides, "log": logs, "_snapshot": snapshot,
-            "_detail": f"{len(selected)}/{len(outcomes)} kept · {len(apply_ids)} apply · "
+            "_detail": f"{len(selected)}/{len(outcomes)} kept · {len(clamped)} clamped · "
+                       f"{len(dropped_oos)} out-of-scope · {len(apply_ids)} apply · "
                        + "/".join(f"{k[:3]}:{tier_counts[k]}" for k in TIER_ORDER)}

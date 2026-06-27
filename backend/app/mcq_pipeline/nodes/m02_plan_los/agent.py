@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 
-from app.mcq_pipeline.config import TEMP_AUTHOR
+from app.mcq_pipeline.config import EXCLUDED_QUESTION_TYPES, TEMP_AUTHOR
 from app.mcq_pipeline.prompts.store import get_prompt
 from app.mcq_pipeline.utils.llm import chat, parse_json
 from app.mcq_pipeline.nodes.m02_plan_los import gate
+from app.mcq_pipeline.nodes.m07_recommend_question_type import recommend_one
+from app.mcq_pipeline.nodes.m08_generate_questions import _course_is_sql
 from app.mcq_pipeline.nodes.m02_plan_los.prompts import (CONSOLIDATE_CRITIC_SYS, CONSOLIDATE_SYS,
                                                          PLAN_CRITIC_SYS, PLAN_SYS,
                                                          generate_sys_verb_subbed)
@@ -89,18 +91,21 @@ def _consolidate_critic(subs: list, groups: list) -> list | None:
     return revised if isinstance(revised, list) and revised else None
 
 
-def consolidate(protos: list, source_text: str) -> list:
-    """Semantic merge + taught depth, with a gated critic. [] on failure → the gate treats each
+def consolidate(protos: list, source_text: str) -> tuple[list, dict]:
+    """Semantic merge + taught depth, with a gated critic. Returns (groups, meta) — meta records
+    whether the critic fired, for the trace. [] groups on failure → the gate treats each
     sub-concept standalone at moderate depth (degraded but never blocking)."""
     subs = _sub_concept_payload(protos)
     if not subs:
-        return []
+        return [], {"critic_gated": False, "critic_fired": False}
     groups = _consolidate_call(subs, source_text)
-    if groups and _consolidation_suspicious(groups, len(subs)):
+    gated = bool(groups) and _consolidation_suspicious(groups, len(subs))
+    fired = False
+    if gated:
         revised = _consolidate_critic(subs, groups)
         if revised:
-            groups = revised
-    return groups
+            groups, fired = revised, True
+    return groups, {"critic_gated": gated, "critic_fired": fired}
 
 
 # ── PHASE 3 · selection proposal (+ gated critic) ─────────────────────────── #
@@ -160,15 +165,88 @@ def _plan_critic(concepts: list, cands: list, budget: int, prefer: list) -> list
     return [i for i in revised if isinstance(i, str)] if isinstance(revised, list) and revised else None
 
 
-def plan(inv: list, outcomes: list, budget: int) -> list:
-    """Budget-aware selection PROPOSAL (preferred id order), with a gated critic. The gate guarantees
-    coverage + budget regardless; this only steers fill order. [] → pure deterministic selection."""
+# ── PHASE 3b · plan the question TYPE alongside each LO ───────────────────── #
+def recommend_type(o: dict) -> dict:
+    """Recommend the question TYPE for ONE selected LO (one LLM call, deterministic fallback).
+    Adapts the LO-stage outcome to the recommender's expected shape, so the type is planned WITH the
+    outcome — making each LO a complete planned unit (concept + tier + type). Returns a copy of the
+    outcome with `question_type` + `question_type_rationale`."""
+    adapted = {"outcome": o.get("title") or o.get("description"),
+               "bloom_category": o.get("bloom_level"), "bloom_level_raw": o.get("bloom_level"),
+               "is_scenario": bool(o.get("scenario")), "skill_type": o.get("skill_type"),
+               "learner_action": o.get("learner_action"), "syntax": o.get("syntax"),
+               "concept": (o.get("concept_id") or "").replace("C_", ""),
+               "description": o.get("description")}
+    try:
+        rec = recommend_one(adapted)
+    except Exception:  # noqa: BLE001 — never block planning on the type call
+        rec = {"question_type": "MULTIPLE_CHOICE", "question_type_rationale": "fallback"}
+    return {**o, "question_type": rec.get("question_type", "MULTIPLE_CHOICE"),
+            "question_type_rationale": rec.get("question_type_rationale", "")}
+
+
+def feasible_question_types(o: dict) -> list[str]:
+    """Plausible question FORMATS for an LO (primary first) — used to create same-outcome variants
+    in a DIFFERENT question type when filling toward the target count. apply/scenario outcomes that
+    carry code also get a fill-in-code variant: SQL_FIB_CODING for SQL courses, FIB_CODING for
+    programming languages (Python/Java/JS). Excluded types are filtered out."""
+    has_syntax = bool((o.get("syntax") or "").strip())
+    is_apply = (o.get("bloom_level") or "").lower() in ("apply", "scenario")
+    if has_syntax:
+        types = ["CODE_ANALYSIS_MULTIPLE_CHOICE", "MULTIPLE_CHOICE",
+                 "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE", "TRUE_OR_FALSE"]
+        if is_apply:                                    # write/complete-code variant for apply-code LOs
+            types = [("SQL_FIB_CODING" if _course_is_sql() else "FIB_CODING")] + types
+    else:
+        types = ["MULTIPLE_CHOICE", "TRUE_OR_FALSE", "MORE_THAN_ONE_MULTIPLE_CHOICE"]
+    return [t for t in types if t not in EXCLUDED_QUESTION_TYPES]
+
+
+def expand_to_target(outcomes: list, target: int) -> list:
+    """ENFORCE the target outcome count: when there are fewer distinct outcomes than `target`, fill
+    toward it with SAME-outcome variants in a DIFFERENT question type (one concept assessed via
+    several formats), spread round-robin across the base outcomes so no single concept stacks all
+    variants. Best-effort — a thin session that can't justify the target stays below it."""
+    out = list(outcomes)
+    if len(out) >= target or not outcomes:
+        return out
+    used = {(o["concept_id"], o["bloom_level"], o.get("question_type")) for o in out}
+    alts = [[t for t in feasible_question_types(o) if t != o.get("question_type")] for o in outcomes]
+    depth = 0
+    while len(out) < target:
+        added = False
+        for o, types in zip(outcomes, alts):
+            if depth >= len(types):
+                continue
+            t = types[depth]
+            key = (o["concept_id"], o["bloom_level"], t)
+            if key in used:
+                continue
+            used.add(key)
+            out.append({**o, "id": f"{o['id']}__{t.lower()}", "question_type": t,
+                        "question_type_rationale": "same outcome assessed in a different question "
+                        "format (added to reach the target count)", "_variant_of": o["id"]})
+            added = True
+            if len(out) >= target:
+                break
+        depth += 1
+        if not added:                       # no more feasible variants — accept fewer
+            break
+    return out
+
+
+def plan(inv: list, outcomes: list, budget: int) -> tuple[list, dict]:
+    """Budget-aware selection PROPOSAL (preferred id order), with a gated critic. Returns
+    (prefer_ids, meta). The gate guarantees coverage + budget regardless; this only steers fill
+    order. [] → pure deterministic selection."""
     concepts, cands = _plan_inputs(inv, outcomes)
     if not cands:
-        return []
+        return [], {"critic_gated": False, "critic_fired": False}
     prefer = _plan_call(concepts, cands, budget)
-    if _plan_suspicious(prefer, concepts, cands, budget):
+    gated = _plan_suspicious(prefer, concepts, cands, budget)
+    fired = False
+    if gated:
         revised = _plan_critic(concepts, cands, budget, prefer)
         if revised is not None:
-            prefer = revised
-    return prefer
+            prefer, fired = revised, True
+    return prefer, {"critic_gated": gated, "critic_fired": fired}

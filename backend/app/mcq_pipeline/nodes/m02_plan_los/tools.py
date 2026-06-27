@@ -37,10 +37,12 @@ _GRAPH_SYS = register("lo.graph_sys", (
     "background, parent concepts already captured by the child, or multi-hop (A→B→C) edges. If "
     "uncertain, DO NOT include the edge.\n\n"
 
-    "applied_skill = true ONLY if the target is something the learner EXECUTES (performs steps, "
-    "solves a problem, applies a method/algorithm, constructs/produces output). false for "
-    "definitions, recognition/identification, or conceptual understanding without execution. If both "
-    "conceptual and applied, classify by the PRIMARY assessment behavior.\n\n"
+    "applied_skill = true if the target is something the learner DOES/USES — performs steps, solves "
+    "a problem, applies a method/algorithm, constructs output, OR evaluates/computes an expression, "
+    "applies an operator/rule/condition, decides based on a condition, or transforms data. Operators, "
+    "logical/conditional operations, computations, and procedures are applied skills. false ONLY for "
+    "purely definitional/recognition/conceptual targets with no use. If both conceptual and applied, "
+    "classify by the PRIMARY assessment behavior.\n\n"
 
     "assumed_prior: include ONLY knowledge that is NOT in the given concept list and is commonly "
     "assumed before this session (e.g. 'basic algebra', 'file system basics'). Never include "
