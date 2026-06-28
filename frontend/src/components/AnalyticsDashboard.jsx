@@ -385,9 +385,10 @@ function buildReportInner(data, { courses, users }) {
 .an-report .ok{color:#4cc591}.an-report .warn{color:#e0a53c}
 .an-report h2{font-size:15px;margin:26px 0 10px}
 .an-report table{width:100%;border-collapse:collapse;background:#17181f;border:1px solid #262830;border-radius:12px;overflow:hidden}
-.an-report th,.an-report td{text-align:left;padding:10px 14px;border-bottom:1px solid #262830;font-size:13px}
+.an-report th,.an-report td{text-align:left;padding:10px 14px;border-bottom:1px solid #262830;font-size:13px;
+  overflow-wrap:anywhere;word-break:break-word;vertical-align:top}
 .an-report th{color:#a2a6b4;font-weight:600;background:#1e2027}
-.an-report td.n{text-align:right}
+.an-report td.n{text-align:right;white-space:nowrap}
 .an-report tr:last-child td{border-bottom:none}
 .an-report .sub{color:#6b6f7e;font-size:12px}
 .an-report .empty{color:#6b6f7e;text-align:center}
@@ -416,18 +417,22 @@ function buildReportInner(data, { courses, users }) {
 // Rasterize self-contained report markup to a PNG Blob via <svg><foreignObject> → canvas.
 // No external dependency; throws if the browser can't rasterize (caller falls back to HTML).
 async function htmlToPng(inner) {
-  const width = 1100
+  // Render offscreen at the report's natural width, then measure the ACTUAL content box
+  // (scrollWidth/Height, which include any overflow) so the canvas can't clip it.
   const probe = document.createElement('div')
-  probe.style.cssText = 'position:fixed;left:-100000px;top:0;width:1100px;'
+  probe.style.cssText = 'position:fixed;left:-100000px;top:0;'
   probe.innerHTML = inner
   document.body.appendChild(probe)
   const node = probe.querySelector('.an-report') || probe
-  const height = Math.ceil(node.getBoundingClientRect().height) || 800
+  const rect = node.getBoundingClientRect()
+  // +pad guards against sub-pixel rounding / a last row clipping at the bottom edge.
+  const width = Math.max(1100, Math.ceil(node.scrollWidth), Math.ceil(rect.width))
+  const height = Math.max(Math.ceil(node.scrollHeight), Math.ceil(rect.height)) + 24
   document.body.removeChild(probe)
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">`
     + `<foreignObject x="0" y="0" width="${width}" height="${height}">`
-    + `<div xmlns="http://www.w3.org/1999/xhtml">${inner}</div>`
+    + `<div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px">${inner}</div>`
     + `</foreignObject></svg>`
   const img = new Image()
   await new Promise((resolve, reject) => {
@@ -443,7 +448,7 @@ async function htmlToPng(inner) {
   ctx.scale(scale, scale)
   ctx.fillStyle = '#0f1014'
   ctx.fillRect(0, 0, width, height)
-  ctx.drawImage(img, 0, 0)
+  ctx.drawImage(img, 0, 0, width, height)
   return await new Promise((resolve, reject) =>
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png'))
 }
