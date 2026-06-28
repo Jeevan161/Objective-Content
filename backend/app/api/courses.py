@@ -437,11 +437,25 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
     if prereq_unit_ids is not None:
         prereq_unit_ids = [u.strip() for u in prereq_unit_ids if isinstance(u, str) and u.strip()]
 
+    # Regenerating an existing session (a prior run exists for this course/session) requires
+    # a reason — captured for the analytics' session-level regeneration view. First-time
+    # generation needs none.
+    prior_runs = session.scalar(
+        select(func.count()).select_from(McqRun)
+        .where(McqRun.course_id == course_id, McqRun.unit_id == unit_id)
+    ) or 0
+    reason = (body.reason or "").strip()
+    if prior_runs > 0 and not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="A reason is required to regenerate a session's MCQs.")
+
     # Stash the run's selection context on the job so the Activity drawer can reopen it
     # to the exact page/stage later (the job row alone doesn't carry topic/unit).
     job = SyncJob(
         course_id=course_id, job_type=SyncJob.MCQ, created_by=user.id,
-        progress={"ctx": {"topic_id": (body.topic_id or "").strip(), "unit_id": unit_id}},
+        progress={"ctx": {"topic_id": (body.topic_id or "").strip(), "unit_id": unit_id,
+                          "regen_reason": reason}},
     )
     session.add(job)
     session.commit()

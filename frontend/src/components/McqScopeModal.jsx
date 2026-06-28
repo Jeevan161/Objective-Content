@@ -32,11 +32,14 @@ function earlierSessions(detail, currentUnitId) {
 
 // Pre-generation scope picker: choose which PREREQUISITE units ground the MCQs.
 // Each prerequisite course is a collapsible section listing its units.
-function McqScopeModal({ course, prerequisites, currentUnitId, onClose, onConfirm }) {
+function McqScopeModal({ course, prerequisites, currentUnitId, onClose, onConfirm, requireReason = false }) {
   const toast = useToast()
   const [groups, setGroups] = useState(null) // null = loading
   const [selected, setSelected] = useState(new Set())
   const [open, setOpen] = useState(new Set()) // expanded course ids
+  // Regenerating an existing session requires a reason (captured for analytics).
+  const [reason, setReason] = useState('')
+  const reasonMissing = requireReason && !reason.trim()
 
   useEffect(() => {
     let cancelled = false
@@ -129,14 +132,31 @@ function McqScopeModal({ course, prerequisites, currentUnitId, onClose, onConfir
             </span>
             <div className="ingest-footer-actions">
               <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-              <button type="button" className="btn btn-primary" onClick={() => onConfirm([...selected])}>
-                <Sparkles size={14} /> Generate MCQs
+              <button type="button" className="btn btn-primary" disabled={reasonMissing}
+                data-tip={reasonMissing ? 'Enter a reason to regenerate' : undefined}
+                onClick={() => onConfirm([...selected], reason.trim())}>
+                <Sparkles size={14} /> {requireReason ? 'Re-generate MCQs' : 'Generate MCQs'}
               </button>
             </div>
           </div>
         )
       }
     >
+      {requireReason && (
+        <div className="field mcq-regen-reason">
+          <label className="field-label" htmlFor="mcq-regen-reason">
+            Reason for regeneration <span className="req">*</span>
+          </label>
+          <textarea
+            id="mcq-regen-reason"
+            className="input"
+            rows={2}
+            placeholder="Why are you regenerating this session's MCQs?"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </div>
+      )}
       {groups === null ? (
         <div className="form-stack">
           <Skeleton height={40} />

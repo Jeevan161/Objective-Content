@@ -19,5 +19,6 @@
 @import './components/pipeline-page.css';
 @import './components/llm-providers.css';
 @import './components/auth.css';
+@import './components/analytics.css';
 
 @import './components/responsive.css';

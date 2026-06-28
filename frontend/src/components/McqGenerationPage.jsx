@@ -203,7 +203,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob, openTarget }) {
     }
   }, [job?.id, streamable, courseId, sessionId])
 
-  async function handleGenerate(prereqUnitIds) {
+  async function handleGenerate(prereqUnitIds, reason = '') {
     setScopeOpen(false)
     setRun(null)
     const qb = budget.trim() === '' ? null : Math.max(1, parseInt(budget, 10) || 0) || null
@@ -212,6 +212,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob, openTarget }) {
       const j = await generateMcq(courseId, topicId, sessionId, true, prereqUnitIds, {
         questionBudget: qb,
         hitl,
+        reason,
       })
       setJob(j)
       onTrackJob?.(j) // also surface it in the global Activity drawer
@@ -401,8 +402,9 @@ function McqGenerationPage({ courses, onBack, onTrackJob, openTarget }) {
           course={detail || { course_id: courseId, course_name: detail?.course_name }}
           prerequisites={detail?.prerequisites || []}
           currentUnitId={sessionId}
+          requireReason={!!run}
           onClose={() => setScopeOpen(false)}
-          onConfirm={(prereqUnitIds) => handleGenerate(prereqUnitIds)}
+          onConfirm={(prereqUnitIds, reason) => handleGenerate(prereqUnitIds, reason)}
         />
       )}
 

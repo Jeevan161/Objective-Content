@@ -191,16 +191,31 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
             select(func.count()).select_from(McqRun)
             .where(McqRun.course_id == course_id, McqRun.unit_id == unit_id)
         ) or 0
+        version = prior + 1
+        # A regeneration (version > 1) carries the user's mandatory reason, stashed on the
+        # job at request time; persist it into the run so analytics can surface it.
+        regen_reason = ((getattr(job, "progress", None) or {}).get("ctx") or {}).get("regen_reason", "")
+        if version > 1 and regen_reason:
+            result["regen_reason"] = regen_reason
         session.add(McqRun(
             job_id=job_id, course_id=course_id, topic_id=topic_id, unit_id=unit_id,
             langsmith_run_url=result.get("langsmith_run_url", ""),
             lo_count=result.get("lo_count", 0),
             question_count=result.get("question_count", 0),
             needs_human_count=result.get("needs_human_count", 0),
-            version=prior + 1,
+            version=version,
             result=result,
             created_by=getattr(job, "created_by", None),   # attribute the run to its user
         ))
+        if version > 1:
+            from app.services.task_log import log_task
+            log_task(
+                task_type="MCQ", event="session_regenerated",
+                message=f"Session {unit_id} regenerated (v{version}).",
+                job_id=job_id, user_id=getattr(job, "created_by", None),
+                detail={"course_id": course_id, "unit_id": unit_id,
+                        "version": version, "reason": regen_reason},
+            )
         if job is not None:
             job.status = SyncJob.SUCCESS
             job.message = (

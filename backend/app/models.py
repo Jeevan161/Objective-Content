@@ -419,7 +419,14 @@ class User(Base):
     __tablename__ = "users"
 
     ROLE_USER = "user"
+    ROLE_LEAD = "lead"
+    ROLE_MANAGER = "manager"
     ROLE_ADMIN = "admin"
+
+    # All assignable roles, and the elevated set that may view oversight surfaces
+    # (analytics dashboard, task logs, reviewer feedback). User management stays admin-only.
+    ROLES = {ROLE_USER, ROLE_LEAD, ROLE_MANAGER, ROLE_ADMIN}
+    ELEVATED_ROLES = {ROLE_LEAD, ROLE_MANAGER, ROLE_ADMIN}
 
     id: Mapped[uuid.UUID] = uuid_pk()
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)

@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.courses import router as courses_router
 from app.api.llm_providers import router as llm_providers_router
@@ -54,6 +55,7 @@ async def _log_unhandled_errors(request: Request, call_next):
 
 
 app.include_router(auth_router)
+app.include_router(analytics_router)
 app.include_router(courses_router)
 app.include_router(mcq_prompts_router)
 app.include_router(llm_providers_router)

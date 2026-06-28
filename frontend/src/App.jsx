@@ -16,6 +16,7 @@ import PipelinePage from './components/PipelinePage'
 import LLMProvidersPage from './components/LLMProvidersPage'
 import CourseCard from './components/CourseCard'
 import AdminDashboard from './components/AdminDashboard'
+import AnalyticsDashboard from './components/AnalyticsDashboard'
 import AccountModal from './components/AccountModal'
 import FeedbackForm from './components/FeedbackForm'
 import AuthGate from './components/AuthGate'
@@ -383,6 +384,7 @@ function Workspace() {
           />
         )}
         {page === 'admin' && <AdminDashboard />}
+        {page === 'analytics' && <AnalyticsDashboard courses={courses} />}
         {page === 'courses' && (
         <>
         <header className="topbar">

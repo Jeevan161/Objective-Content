@@ -11,6 +11,7 @@ import {
   Workflow,
   Plug,
   ShieldCheck,
+  BarChart3,
   UserCircle,
   MessageSquarePlus,
   X,
@@ -103,17 +104,27 @@ function Sidebar({
           )}
         </button>
 
-        {user?.role === 'admin' && (
+        {['admin', 'manager', 'lead'].includes(user?.role) && (
           <>
-            <div className="nav-section-label">Admin</div>
+            <div className="nav-section-label">Oversight</div>
             <button
-              className={`nav-item ${page === 'admin' ? 'active' : ''}`}
-              onClick={() => go('admin')}
-              {...tip('Admin')}
+              className={`nav-item ${page === 'analytics' ? 'active' : ''}`}
+              onClick={() => go('analytics')}
+              {...tip('Analytics')}
             >
-              <ShieldCheck size={16} />
-              <span>Admin</span>
+              <BarChart3 size={16} />
+              <span>Analytics</span>
             </button>
+            {user?.role === 'admin' && (
+              <button
+                className={`nav-item ${page === 'admin' ? 'active' : ''}`}
+                onClick={() => go('admin')}
+                {...tip('Admin')}
+              >
+                <ShieldCheck size={16} />
+                <span>Admin</span>
+              </button>
+            )}
           </>
         )}
       </nav>
