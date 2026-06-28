@@ -4,6 +4,14 @@
    patterns; only the analytics-specific extras live here.
    ============================================================ */
 
+/* Low-key byline appended to the dashboard heading. */
+.an-byline {
+  font-weight: 400;
+  font-size: 0.55em;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+}
+
 .an-controls {
   display: flex;
   flex-wrap: wrap;
@@ -106,6 +114,17 @@
 /* Regeneration reason field in the scope modal. */
 .mcq-regen-reason { margin-bottom: var(--sp-4); }
 .mcq-regen-reason .req { color: var(--red); }
+
+/* Course-details "batch order" number badge (topic / unit / part). */
+.batch-order {
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-2);
+  background: var(--bg-inset);
+  border: 1px solid var(--bd, rgba(255, 255, 255, 0.08));
+  border-radius: var(--r-sm);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
 
 /* Loads table: whole row opens the loaded-content view. */
 .loads-row { cursor: pointer; }

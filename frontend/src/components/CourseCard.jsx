@@ -104,6 +104,9 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
     <div className="unit-card" style={{ '--stagger': `${Math.min(index, 10) * 35}ms` }}>
       <div className="unit-card-head">
         <span className={`unit-tag ${meta.cls}`}>{meta.label}</span>
+        {Number.isFinite(unit.order) && (
+          <span className="batch-order" title="Batch order">#{unit.order}</span>
+        )}
         <span className="unit-title">{unit.label}</span>
         {canSync && (
           <button
@@ -138,6 +141,9 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
           <Fragment key={key}>
           <div className={`resource-row ${flagged ? 'flagged' : ''}`}>
             <span className={`res-tag ${partTagClass(part.label)}`}>{part.label}</span>
+            {Number.isFinite(part.order) && (
+              <span className="batch-order" title="Batch order">#{part.order}</span>
+            )}
             {part.error ? (
               <span className="error-text">
                 <AlertTriangle size={12} /> {part.error}
@@ -218,6 +224,9 @@ function TopicSection({ topic, unitsSignal, course, onSyncUnit }) {
         <span className="unit-tag tag-topic">
           <BookOpen size={10} /> Topic
         </span>
+        {Number.isFinite(topic.order) && (
+          <span className="batch-order" title="Batch order">#{topic.order}</span>
+        )}
         <a className="topic-title" href={topic.topic_link} target="_blank" rel="noreferrer">
           {topic.topic_name || topic.topic_id}
           <ExternalLink size={12} />

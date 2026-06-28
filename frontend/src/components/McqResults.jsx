@@ -663,6 +663,8 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
   })
   // State is seeded from `run` on mount; the parent passes key={run.id} so a
   // different run remounts this component (no setState-in-effect needed).
+  // Once a run has been loaded to the portal, mark it "Loaded" and hide the load option.
+  const runLoaded = !!run?.loaded
 
   async function handleRegenerate(outcome, feedback, tags) {
     setBusyOutcome(outcome)
@@ -675,8 +677,11 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
       const done = await pollJobDone(job.id)
       if (done?.status === 'SUCCESS') {
         const fresh = await getMcqRun(run.id)
-        const nq = (fresh?.result?.questions || []).find((q) => q.outcome === outcome)
-        if (nq) setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? nq : q)))
+        // Re-sync the WHOLE list from the fresh run: a regeneration can change the LO
+        // (lo_swap) — and thus the question's `outcome` — so matching by the old outcome
+        // would miss it and the card would only update after a manual page refresh.
+        const freshQs = fresh?.result?.questions
+        if (Array.isArray(freshQs)) setQuestions(freshQs)
         toast.push({ kind: 'success', title: 'Question regenerated', message: `${outcome} updated from your feedback` })
       } else {
         toast.push({
@@ -737,7 +742,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
       setZipBusy(false)
     }
   }
-  async function handlePrepareLoad(approvedOnly = false) {
+  async function handlePrepareLoad() {
     if (!(prepForm.topic_id || '').trim()) {
       toast.push({ kind: 'error', title: 'Topic ID required', message: 'Enter the parent topic ID for the exam.' })
       return
@@ -756,7 +761,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
         show_answer_scoring_mode: prepForm.show_answer_scoring_mode,
         should_send_solutions: prepForm.should_send_solutions,
         reviewer_email: user?.email || '',
-        approved_only: approvedOnly,
+        approved_only: true,   // only approved questions are ever loaded
       })
       onTrackJob?.(job)
       toast.push({
@@ -968,11 +973,17 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
                         <Download size={12} /> <span>{zipResult.filename}</span>
                       </a>
                     )}
-                    <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
-                      onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || !canExport}
-                      title={canExport ? '' : 'Mark the run reviewed first'}>
-                      <FileSpreadsheet size={13} /> Prepare &amp; Load
-                    </button>
+                    {runLoaded ? (
+                      <span className="mcq-status-chip ok" title="This run has been loaded to the portal">
+                        <CheckCircle2 size={12} /> Loaded
+                      </span>
+                    ) : (
+                      <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
+                        onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || !canExport}
+                        title={canExport ? '' : 'Mark the run reviewed first'}>
+                        <FileSpreadsheet size={13} /> Prepare &amp; Load
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -982,7 +993,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
             )}
           </div>
 
-          {review && canLoad && prepOpen && (
+          {review && canLoad && prepOpen && !runLoaded && (
             <div className="mcq-prep-panel">
               <div className="mcq-prep-head">
                 <FileSpreadsheet size={14} />
@@ -1031,16 +1042,11 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
               </div>
               <div className="mcq-prep-actions">
                 <button className="btn btn-primary btn-sm"
-                  onClick={() => guardExcluded(() => handlePrepareLoad(false), eligibleQs.length)}
-                  disabled={prepBusy || !allApproved}
-                  title={allApproved ? '' : `Approve all ${eligibleQs.length} remaining questions to enable`}>
+                  onClick={() => guardExcluded(() => handlePrepareLoad(), approvedCount)}
+                  disabled={prepBusy || approvedCount < 1}
+                  title={approvedCount < 1 ? 'Approve at least one question to load' : ''}>
                   {prepBusy ? <Spinner size={13} /> : <FileSpreadsheet size={13} />}
-                  {prepBusy ? 'Loading… (up to ~2 min)' : 'Prepare & load all'}
-                </button>
-                <button className="btn btn-soft btn-sm"
-                  onClick={() => guardExcluded(() => handlePrepareLoad(true), approvedCount)}
-                  disabled={prepBusy || approvedCount < 1}>
-                  <FileSpreadsheet size={13} /> Load approved only ({approvedCount})
+                  {prepBusy ? 'Starting…' : `Load approved (${approvedCount})`}
                 </button>
                 {prepResult && (
                   <span className={`mcq-status-chip ${prepResult.status === 'SUCCESS' ? 'ok' : 'warn'}`}>

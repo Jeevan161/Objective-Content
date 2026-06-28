@@ -595,6 +595,21 @@ async def mcq_job_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
             pass
 
 
+def _loaded_run_ids(session: Session, run_ids: list) -> set:
+    """Subset of run_ids that have a SUCCESSFUL portal load (drives the 'Loaded' badge +
+    hiding the load option). One query, empty set when there are no ids."""
+    if not run_ids:
+        return set()
+    rows = session.execute(
+        select(BetaLoad.run_id).where(
+            BetaLoad.run_id.in_(run_ids),
+            BetaLoad.action == "load",
+            BetaLoad.status == "SUCCESS",
+        )
+    ).all()
+    return {r[0] for r in rows}
+
+
 @router.get("/courses/mcq/runs/")
 def list_mcq_runs(
     course_id: str | None = None, unit_id: str | None = None, limit: int = 10,
@@ -620,7 +635,10 @@ def list_mcq_runs(
             .where(Topic.course_id.in_({r.course_id for r in runs}), Topic.topic_id.in_(tids))
         ):
             nmap[(c, t)] = n
-    return [serialize_mcq_run(r, include_result=False, topic_name=nmap.get((r.course_id, r.topic_id), ""))
+    loaded_ids = _loaded_run_ids(session, [r.id for r in runs])
+    return [serialize_mcq_run(r, include_result=False,
+                              topic_name=nmap.get((r.course_id, r.topic_id), ""),
+                              loaded=r.id in loaded_ids)
             for r in runs]
 
 
@@ -638,7 +656,8 @@ def get_mcq_run(run_id: uuid.UUID, session: Session = Depends(get_session),
     tname = (session.scalar(select(Topic.topic_name).where(
                  Topic.course_id == run.course_id, Topic.topic_id == run.topic_id))
              if run.topic_id else "") or ""
-    return serialize_mcq_run(run, topic_name=tname)
+    loaded = bool(_loaded_run_ids(session, [run.id]))
+    return serialize_mcq_run(run, topic_name=tname, loaded=loaded)
 
 
 @router.post("/courses/mcq/runs/{run_id}/export-beta/", status_code=status.HTTP_202_ACCEPTED)

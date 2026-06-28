@@ -150,25 +150,39 @@ export default function AnalyticsDashboard({ courses = [] }) {
   const k = data?.kpis || {}
   const p = data?.percentages || {}
 
-  function downloadReport() {
-    if (!data) return
-    const html = buildReportHtml(data, { courses, users })
-    const blob = new Blob([html], { type: 'text/html' })
+  function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `throughput_${range.from.slice(0, 10)}_${range.to.slice(0, 10)}.html`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     a.remove()
     URL.revokeObjectURL(url)
   }
 
+  async function downloadReport() {
+    if (!data) return
+    const stem = `throughput_${range.from.slice(0, 10)}_${range.to.slice(0, 10)}`
+    const inner = buildReportInner(data, { courses, users })
+    try {
+      const blob = await htmlToPng(inner)
+      triggerDownload(blob, `${stem}.png`)
+    } catch (e) {
+      // Rasterization unsupported/failed → fall back to the self-contained HTML report.
+      const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8">`
+        + `<meta name="viewport" content="width=device-width, initial-scale=1">`
+        + `<title>Throughput report</title></head><body style="margin:0">${inner}</body></html>`
+      triggerDownload(new Blob([doc], { type: 'text/html' }), `${stem}.html`)
+      toast.push({ kind: 'info', title: 'Saved as HTML', message: 'Image export was unavailable; downloaded the HTML report instead.' })
+    }
+  }
+
   return (
     <>
       <header className="topbar">
         <div>
-          <h1>Throughput Analytics</h1>
+          <h1>MCQ Generator Throughput <span className="an-byline">— Jeevan</span></h1>
           <p className="topbar-sub">
             Questions generated, reviewed, approved and sent back for regeneration — across
             courses and users, for any time range.
@@ -321,8 +335,11 @@ export default function AnalyticsDashboard({ courses = [] }) {
   )
 }
 
-// --- Self-contained HTML report -------------------------------------------- #
-function buildReportHtml(data, { courses, users }) {
+// --- Downloadable report (rasterized to PNG) ------------------------------- #
+// Self-contained report markup (scoped `.an-report`, literal colors, no CSS vars / external
+// assets) so it renders identically inside an <svg><foreignObject> for rasterization AND as a
+// standalone HTML fallback.
+function buildReportInner(data, { courses, users }) {
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
   const k = data.kpis || {}
@@ -338,66 +355,95 @@ function buildReportHtml(data, { courses, users }) {
   const genAt = new Date().toLocaleString()
   const fmtN = (n) => (n ?? 0).toLocaleString()
 
-  const kpi = (val, label, sub) =>
-    `<div class="card"><div class="v">${fmtN(val)}</div><div class="l">${esc(label)}</div><div class="s">${esc(sub)}</div></div>`
-
+  const kpi = (val, label, sub, cls = '') =>
+    `<div class="card"><div class="v ${cls}">${fmtN(val)}</div><div class="l">${esc(label)}</div><div class="s">${esc(sub)}</div></div>`
   const rows = (arr, cells) =>
-    arr.length
-      ? arr.map((row) => `<tr>${cells(row)}</tr>`).join('')
+    arr.length ? arr.map((row) => `<tr>${cells(row)}</tr>`).join('')
       : `<tr><td class="empty" colspan="6">No data.</td></tr>`
+  const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0)
 
-  const courseRows = rows(data.by_course || [], (r) =>
-    `<td>${esc(r.course_name || r.course_id)}</td><td class="n">${fmtN(r.generated)}</td><td class="n">${fmtN(r.reviewed)}</td><td class="n">${fmtN(r.approved)}</td><td class="n">${fmtN(r.regen_questions)}</td><td class="n">${r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>`)
-  const userRows = rows(data.by_user || [], (r) =>
-    `<td>${esc(r.name)}${r.email ? `<div class="sub">${esc(r.email)}</div>` : ''}</td><td class="n">${fmtN(r.generated)}</td><td class="n">${fmtN(r.reviewed)}</td><td class="n">${fmtN(r.approved)}</td><td class="n">${fmtN(r.regen_questions)}</td><td class="n">${r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>`)
-  const regenRows = rows(data.regen_by_session || [], (r) =>
-    `<td>${esc(new Date(r.created_at).toLocaleString())}</td><td>${esc(r.course_name)}</td><td>${esc(r.unit_id)}</td><td class="n">v${esc(r.version)}</td><td>${esc(r.created_by_name)}</td><td>${esc(r.reason || '—')}</td>`)
+  const courseRows = rows(data.by_course || [], (x) =>
+    `<td>${esc(x.course_name || x.course_id)}</td><td class="n">${fmtN(x.generated)}</td><td class="n">${fmtN(x.reviewed)}</td><td class="n">${fmtN(x.approved)}</td><td class="n">${fmtN(x.regen_questions)}</td><td class="n">${pct(x.approved, x.reviewed)}%</td>`)
+  const userRows = rows(data.by_user || [], (x) =>
+    `<td>${esc(x.name)}${x.email ? `<div class="sub">${esc(x.email)}</div>` : ''}</td><td class="n">${fmtN(x.generated)}</td><td class="n">${fmtN(x.reviewed)}</td><td class="n">${fmtN(x.approved)}</td><td class="n">${fmtN(x.regen_questions)}</td><td class="n">${pct(x.approved, x.reviewed)}%</td>`)
+  const regenRows = rows(data.regen_by_session || [], (x) =>
+    `<td>${esc(new Date(x.created_at).toLocaleString())}</td><td>${esc(x.course_name)}</td><td>${esc(x.unit_id)}</td><td class="n">v${esc(x.version)}</td><td>${esc(x.created_by_name)}</td><td>${esc(x.reason || '-')}</td>`)
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Throughput report · ${esc(r.from?.slice(0, 10))} → ${esc(r.to?.slice(0, 10))}</title>
-<style>
-  :root{--bg:#0f1014;--raised:#17181f;--inset:rgba(0,0,0,.28);--text:#eaebf0;--t2:#a2a6b4;--t3:#6b6f7e;--brand:#7b7bf5;--green:#4cc591;--amber:#e0a53c;--cyan:#54c4d6;--bd:rgba(255,255,255,.08)}
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:32px}
-  .wrap{max-width:1100px;margin:0 auto}
-  h1{font-size:22px;margin:0 0 4px}
-  .meta{color:var(--t2);font-size:13px;margin-bottom:24px}
-  .meta b{color:var(--text)}
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:28px}
-  .card{background:var(--raised);border:1px solid var(--bd);border-radius:14px;padding:18px}
-  .card .v{font-size:30px;font-weight:650}
-  .card .l{color:var(--t2);font-size:13px;margin-top:2px}
-  .card .s{color:var(--t3);font-size:12px;margin-top:8px}
-  .ok{color:var(--green)}.warn{color:var(--amber)}
-  h2{font-size:15px;margin:28px 0 10px}
-  table{width:100%;border-collapse:collapse;background:var(--raised);border:1px solid var(--bd);border-radius:12px;overflow:hidden}
-  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--bd);font-size:13px}
-  th{color:var(--t2);font-weight:600;background:var(--inset)}
-  td.n{text-align:right;font-variant-numeric:tabular-nums}
-  tr:last-child td{border-bottom:none}
-  .sub{color:var(--t3);font-size:12px}
-  .empty{color:var(--t3);text-align:center}
-  .foot{color:var(--t3);font-size:12px;margin-top:28px}
-</style></head><body><div class="wrap">
-  <h1>Throughput report</h1>
-  <div class="meta">
-    <b>${esc(r.from?.slice(0, 16).replace('T', ' '))}</b> → <b>${esc(r.to?.slice(0, 16).replace('T', ' '))}</b>
-    &nbsp;·&nbsp; Course: <b>${esc(courseName)}</b> &nbsp;·&nbsp; User: <b>${esc(userName)}</b>
-    &nbsp;·&nbsp; Generated ${esc(genAt)}
-  </div>
+  const css = `
+.an-report{width:1100px;background:#0f1014;color:#eaebf0;padding:32px;margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5}
+.an-report *{box-sizing:border-box}
+.an-report h1{font-size:24px;font-weight:650;margin:0 0 4px}
+.an-report h1 .byline{font-weight:400;font-size:.55em;color:#6b6f7e}
+.an-report .meta{color:#a2a6b4;font-size:13px;margin-bottom:24px}
+.an-report .meta b{color:#eaebf0}
+.an-report .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}
+.an-report .card{background:#17181f;border:1px solid #262830;border-radius:14px;padding:18px}
+.an-report .card .v{font-size:30px;font-weight:650}
+.an-report .card .l{color:#a2a6b4;font-size:13px;margin-top:2px}
+.an-report .card .s{color:#6b6f7e;font-size:12px;margin-top:8px}
+.an-report .ok{color:#4cc591}.an-report .warn{color:#e0a53c}
+.an-report h2{font-size:15px;margin:26px 0 10px}
+.an-report table{width:100%;border-collapse:collapse;background:#17181f;border:1px solid #262830;border-radius:12px;overflow:hidden}
+.an-report th,.an-report td{text-align:left;padding:10px 14px;border-bottom:1px solid #262830;font-size:13px}
+.an-report th{color:#a2a6b4;font-weight:600;background:#1e2027}
+.an-report td.n{text-align:right}
+.an-report tr:last-child td{border-bottom:none}
+.an-report .sub{color:#6b6f7e;font-size:12px}
+.an-report .empty{color:#6b6f7e;text-align:center}
+.an-report .foot{color:#6b6f7e;font-size:12px;margin-top:28px}`
+
+  return `<style>${css}</style><div class="an-report">
+  <h1>MCQ Generator Throughput <span class="byline">- Jeevan</span></h1>
+  <div class="meta"><b>${esc((r.from || '').slice(0, 16).replace('T', ' '))}</b> &#8594; <b>${esc((r.to || '').slice(0, 16).replace('T', ' '))}</b>
+    &#160;&#183;&#160; Course: <b>${esc(courseName)}</b> &#160;&#183;&#160; User: <b>${esc(userName)}</b> &#160;&#183;&#160; Generated ${esc(genAt)}</div>
   <div class="cards">
-    ${kpi(k.generated, 'Generated', `${fmtN(k.sessions)} sessions · ${fmtN(k.generation_events)} runs`)}
+    ${kpi(k.generated, 'Generated', `${fmtN(k.sessions)} sessions, ${fmtN(k.generation_events)} runs`)}
     ${kpi(k.reviewed, 'Reviewed', `${p.review_rate ?? 0}% of generated`)}
-    <div class="card"><div class="v ok">${fmtN(k.approved)}</div><div class="l">Approved</div><div class="s">${p.approval_rate ?? 0}% of reviewed · ${p.approved_of_generated ?? 0}% of generated</div></div>
-    <div class="card"><div class="v warn">${fmtN(k.regen_questions)}</div><div class="l">Questions regenerated</div><div class="s">${p.regen_question_rate ?? 0}% of generated · ${fmtN(k.regen_events)} events · ${k.avg_regens_per_question ?? 0}×/question</div></div>
+    ${kpi(k.approved, 'Approved', `${p.approval_rate ?? 0}% of reviewed, ${p.approved_of_generated ?? 0}% of generated`, 'ok')}
+    ${kpi(k.regen_questions, 'Questions regenerated', `${p.regen_question_rate ?? 0}% of generated, ${fmtN(k.regen_events)} events, ${k.avg_regens_per_question ?? 0}x/question`, 'warn')}
   </div>
   <h2>By course</h2>
-  <table><thead><tr><th>Course</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th title="Distinct questions regenerated at least once">Regen Q</th><th>Approval %</th></tr></thead><tbody>${courseRows}</tbody></table>
+  <table><thead><tr><th>Course</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th>Regen Q</th><th>Approval %</th></tr></thead><tbody>${courseRows}</tbody></table>
   <h2>By user</h2>
-  <table><thead><tr><th>User</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th title="Distinct questions regenerated at least once">Regen Q</th><th>Approval %</th></tr></thead><tbody>${userRows}</tbody></table>
+  <table><thead><tr><th>User</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th>Regen Q</th><th>Approval %</th></tr></thead><tbody>${userRows}</tbody></table>
   <h2>Session regenerations</h2>
   <table><thead><tr><th>When</th><th>Course</th><th>Session</th><th>Version</th><th>By</th><th>Reason</th></tr></thead><tbody>${regenRows}</tbody></table>
-  <div class="foot">Objective Content · Throughput report</div>
-</div></body></html>`
+  <div class="foot">MCQ Generator Throughput report</div>
+</div>`
+}
+
+// Rasterize self-contained report markup to a PNG Blob via <svg><foreignObject> → canvas.
+// No external dependency; throws if the browser can't rasterize (caller falls back to HTML).
+async function htmlToPng(inner) {
+  const width = 1100
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:fixed;left:-100000px;top:0;width:1100px;'
+  probe.innerHTML = inner
+  document.body.appendChild(probe)
+  const node = probe.querySelector('.an-report') || probe
+  const height = Math.ceil(node.getBoundingClientRect().height) || 800
+  document.body.removeChild(probe)
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">`
+    + `<foreignObject x="0" y="0" width="${width}" height="${height}">`
+    + `<div xmlns="http://www.w3.org/1999/xhtml">${inner}</div>`
+    + `</foreignObject></svg>`
+  const img = new Image()
+  await new Promise((resolve, reject) => {
+    img.onload = resolve
+    img.onerror = () => reject(new Error('rasterize failed'))
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+  })
+  const scale = 2
+  const canvas = document.createElement('canvas')
+  canvas.width = width * scale
+  canvas.height = height * scale
+  const ctx = canvas.getContext('2d')
+  ctx.scale(scale, scale)
+  ctx.fillStyle = '#0f1014'
+  ctx.fillRect(0, 0, width, height)
+  ctx.drawImage(img, 0, 0)
+  return await new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png'))
 }
