@@ -341,6 +341,25 @@ def review_and_validate(state, config) -> dict:
         for o in outcomes:                      # _sig reflects the patched outcome
             if o["id"] in merged:
                 merged[o["id"]]["_sig"] = _outcome_sig(o)
+        # Act on the reviewer's SET-LEVEL redundancy: each [a, b] pair shares BOTH idea AND
+        # question_type (the agent's own contract), so they would generate the SAME question
+        # (e.g. two REARRANGE 'request-response flow' items reviewers reject as duplicates).
+        # Drop the lower-weight LO of each pair; keep the heaviest.
+        redundant = set_notes.get("redundant") if isinstance(set_notes, dict) else None
+        if redundant:
+            by_id = {o["id"]: o for o in outcomes}
+            drop_ids: set = set()
+            for pair in redundant:
+                ids = [i for i in (pair or []) if i in by_id and i not in drop_ids]
+                if len(ids) < 2:
+                    continue
+                ids.sort(key=lambda i: by_id[i].get("weight", 0), reverse=True)  # keep heaviest
+                drop_ids.update(ids[1:])
+            if drop_ids:
+                outcomes = [o for o in outcomes if o["id"] not in drop_ids]
+                for i in drop_ids:
+                    merged.pop(i, None)
+                prog.detail("review_and_validate", f"dropped {len(drop_ids)} redundant outcome(s)")
     else:
         merged = state.get("lo_reviews") or {}
 

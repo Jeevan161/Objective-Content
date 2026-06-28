@@ -154,9 +154,9 @@ If you are UNSURE whether a named item is external, DOWNGRADE it to a LOW note �
 _SELF_CONTAINMENT_AUDIT = register("review.self_containment_audit", """\
 SELF-CONTAINMENT AUDIT
 
-A question is an INDEPENDENT resource: the learner sees ONLY the stem and options, never the reading material. Raise a HIGH 'SELF-CONTAINMENT' issue when the question fails to stand alone:
+A question is an INDEPENDENT resource: the learner sees ONLY the stem and options, never the reading material. Check the STEM, the OPTIONS, and the EXPLANATION. Raise a HIGH 'SELF-CONTAINMENT' issue when the question fails to stand alone:
 
-1. It defers to the source — phrases like 'according to the material', 'based on the lesson', 'in the reading/passage', 'as discussed', 'from this session'.
+1. It defers to the source — phrases like 'according to the material', 'as described in the course material', 'as stated in the course material', 'based on the lesson', 'in the reading/passage', 'as discussed', or 'from this session' (in the stem, an option, OR the explanation). The fix removes the phrase and states the fact directly.
 2. It references an example entity defined only in the source and NOT in the question itself — a scenario label ('Project A'/'Project B'), a sample file/variable/function name, a character, or a one-off value the learner would only know from the reading.
 3. Answering requires having read a specific passage rather than understanding the concept.
 
