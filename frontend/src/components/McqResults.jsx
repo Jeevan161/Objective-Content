@@ -725,10 +725,12 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
   async function handleGenerateZip(approvedOnly = false) {
     setZipBusy(true)
     try {
-      const { url, filename, total } = await exportMcqRunZip(run.id, approvedOnly)
-      setZipResult({ url, filename })
-      window.open(url, '_blank', 'noopener,noreferrer')
-      toast.push({ kind: 'success', title: 'ZIP generated', message: `${total} question(s) exported to the portal bucket.` })
+      const job = await exportMcqRunZip(run.id, approvedOnly)
+      onTrackJob?.(job)
+      toast.push({
+        kind: 'info', title: 'Export started',
+        message: 'Building the ZIP — track it in Activity; the download link appears on the Loads page when it finishes.',
+      })
     } catch (e) {
       toast.push({ kind: 'error', title: 'Generate ZIP failed', message: e.message })
     } finally {
@@ -745,9 +747,8 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
       return
     }
     setPrepBusy(true)
-    setPrepResult(null)
     try {
-      const res = await prepareAndLoadMcqRun(run.id, {
+      const job = await prepareAndLoadMcqRun(run.id, {
         topic_id: (prepForm.topic_id || '').trim(),
         child_order: Number(prepForm.child_order),
         duration_min: Number(prepForm.duration_min),
@@ -757,12 +758,10 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
         reviewer_email: user?.email || '',
         approved_only: approvedOnly,
       })
-      setPrepResult(res)
-      const ok = res.status === 'SUCCESS'
+      onTrackJob?.(job)
       toast.push({
-        kind: ok ? 'success' : 'error',
-        title: ok ? 'Loaded to beta' : `Load ${String(res.status || '').toLowerCase()}`,
-        message: ok ? `${res.total} question(s) loaded; resource unlocked.` : (res.message || 'See the prepared sheet.'),
+        kind: 'info', title: 'Load started',
+        message: 'Loading to the portal — follow it in Activity; the result and sheet link appear on the Loads page.',
       })
     } catch (e) {
       toast.push({ kind: 'error', title: 'Prepare & load failed', message: e.message })

@@ -12,6 +12,7 @@ import {
   Plug,
   ShieldCheck,
   BarChart3,
+  Upload,
   UserCircle,
   MessageSquarePlus,
   X,
@@ -27,6 +28,7 @@ const NAV = [
   { key: 'generation', label: 'Generation Studio', icon: Sparkles },
   { key: 'review', label: 'Review Queue', icon: ClipboardCheck },
   { key: 'runs', label: 'Runs', icon: History },
+  { key: 'loads', label: 'Loads', icon: Upload },
   { key: 'pipeline', label: 'MCQ Pipeline', icon: Workflow },
   { key: 'llm-providers', label: 'LLM Connectors', icon: Plug },
 ]

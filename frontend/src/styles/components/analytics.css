@@ -107,6 +107,14 @@
 .mcq-regen-reason { margin-bottom: var(--sp-4); }
 .mcq-regen-reason .req { color: var(--red); }
 
+/* Loads table: whole row opens the loaded-content view. */
+.loads-row { cursor: pointer; }
+.loads-row:hover { background: var(--bg-hover); }
+.mcq-status-chip.err {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+
 /* Admin users table: compact role picker. */
 .admin-role-select {
   width: auto;

@@ -17,6 +17,7 @@ import LLMProvidersPage from './components/LLMProvidersPage'
 import CourseCard from './components/CourseCard'
 import AdminDashboard from './components/AdminDashboard'
 import AnalyticsDashboard from './components/AnalyticsDashboard'
+import LoadsPage from './components/LoadsPage'
 import AccountModal from './components/AccountModal'
 import FeedbackForm from './components/FeedbackForm'
 import AuthGate from './components/AuthGate'
@@ -109,6 +110,7 @@ function Workspace() {
   // When set (from the Activity drawer), tells the MCQ page which job to reopen to its
   // exact course/topic/session + live stage. `seq` makes repeat opens distinct.
   const [mcqOpenTarget, setMcqOpenTarget] = useState(null)
+  const [loadsOpenJob, setLoadsOpenJob] = useState(null)
   // Mobile navigation drawer (the off-canvas sidebar).
   const [navOpen, setNavOpen] = useState(false)
   // Bulk expand/collapse signal broadcast to every course card.
@@ -259,8 +261,15 @@ function Workspace() {
       .catch((e) => toast.push({ kind: 'error', title: 'Could not start ingestion', message: e.message }))
   }
 
-  // Open an MCQ job from the Activity drawer at its exact page/stage.
+  // Open a job from the Activity drawer. LOAD/EXPORT → the Loads page (showing the loaded
+  // content); MCQ → its exact generation page/stage.
   function handleOpenJob(job) {
+    setDrawerOpen(false)
+    if (job.job_type === 'LOAD' || job.job_type === 'EXPORT') {
+      setLoadsOpenJob({ jobId: job.id, seq: Date.now() })
+      setPage('loads')
+      return
+    }
     const ctx = job.progress?.ctx || {}
     setMcqOpenTarget({
       courseId: job.course_id,
@@ -269,7 +278,6 @@ function Workspace() {
       jobId: job.id,
       seq: Date.now(),
     })
-    setDrawerOpen(false)
     setPage('mcq')
   }
 
@@ -385,6 +393,7 @@ function Workspace() {
         )}
         {page === 'admin' && <AdminDashboard />}
         {page === 'analytics' && <AnalyticsDashboard courses={courses} />}
+        {page === 'loads' && <LoadsPage courses={courses} openJobId={loadsOpenJob?.jobId} />}
         {page === 'courses' && (
         <>
         <header className="topbar">

@@ -1,8 +1,11 @@
 import { useEffect } from 'react'
-import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, ListChecks, Trash2, Activity, RotateCcw, Ban, ChevronRight } from 'lucide-react'
+import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, ListChecks, Trash2, Activity, RotateCcw, Ban, ChevronRight, Upload, FileDown } from 'lucide-react'
 import { EnvBadge, Spinner, EmptyState } from './ui'
 
 const TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
+
+// Job types whose finished rows can be reopened from the drawer (to their target view).
+const REOPENABLE = ['MCQ', 'LOAD', 'EXPORT']
 
 const JOB_TYPE_META = {
   SYNC: { label: 'Course sync', icon: RefreshCw },
@@ -10,6 +13,8 @@ const JOB_TYPE_META = {
   RAG: { label: 'RAG ingestion', icon: Database },
   MCQ: { label: 'MCQ generation', icon: ListChecks },
   REGEN: { label: 'Question regeneration', icon: RotateCcw },
+  LOAD: { label: 'Portal load', icon: Upload },
+  EXPORT: { label: 'ZIP export', icon: FileDown },
 }
 
 function timeAgo(iso) {
@@ -25,8 +30,9 @@ function JobRow({ job, onDismiss, onCancel, onOpen }) {
   const active = !TERMINAL.includes(job.status)
   const meta = JOB_TYPE_META[job.job_type] || JOB_TYPE_META.SYNC
   const TypeIcon = meta.icon
-  // MCQ generation jobs can be reopened to their exact page/stage, and cancelled while live.
-  const canOpen = onOpen && job.job_type === 'MCQ'
+  // MCQ jobs reopen to their exact page/stage; LOAD/EXPORT open the Loads page. Only MCQ
+  // can be cancelled while live.
+  const canOpen = onOpen && REOPENABLE.includes(job.job_type)
   const canCancel = onCancel && active && job.job_type === 'MCQ'
 
   return (
