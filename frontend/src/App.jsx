@@ -329,7 +329,7 @@ function Workspace() {
   }, [courses])
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${page === 'review' ? ' nav-overlay' : ''}`}>
       <Sidebar
         page={page}
         onNavigate={setPage}
@@ -339,7 +339,8 @@ function Workspace() {
         onToggleTheme={toggleTheme}
         open={navOpen}
         onClose={() => setNavOpen(false)}
-        collapsed={navCollapsed}
+        collapsed={navCollapsed || page === 'review'}
+        overlay={page === 'review'}
         onToggleCollapse={toggleNavCollapsed}
         user={user}
         onOpenAccount={() => setAccountOpen(true)}

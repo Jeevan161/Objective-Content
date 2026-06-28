@@ -88,7 +88,13 @@ Do NOT introduce:
 - products
 - version numbers
 - proper nouns
+- port numbers, URLs, hostnames or addresses (e.g. `localhost`, a `:3000` port)
+- environment-variable names, command-line flags/options, file or directory names, or literal configuration values
 unless they explicitly appear in the COURSE MATERIAL.
+
+When the COURSE MATERIAL DOES give a specific value or instruction for the environment (e.g. "go to your project's DOMAIN_URL", a command, a path), use EXACTLY that — never replace the material's value with a conventional alternative from general knowledge (e.g. do NOT turn the material's `DOMAIN_URL` into `http://localhost:8000`, or invent a port like `:3000`).
+
+NEVER fabricate a concrete ENVIRONMENT or CONFIGURATION value from general knowledge. If the COURSE MATERIAL does not state a specific value (the port the server runs on, the URL to open in the browser, a virtual-environment name, a command flag), do NOT default to a "typical" one — ask the question CONCEPTUALLY instead (the steps and their order, what each step achieves) so it does not depend on a value the material never gives. Likewise, do not NARROW a general concept to one technology (e.g. presenting an issue common to many projects as specific to Django) unless the material does so.
 
 Distractors must be built by misapplying taught concepts, not by introducing untaught concepts.
 
@@ -103,7 +109,9 @@ GROUNDING VALIDATION — before finalizing, check every:
 - function
 - command
 - code construct
-If it does not appear in the COURSE MATERIAL, remove it.""")
+- port / URL / hostname / address
+- environment-variable name / command flag / file or directory name / config value
+If it does not appear in the COURSE MATERIAL, remove it (or, for a value the material never gives, rephrase the question so it does not depend on that value).""")
 
 _QUESTION_TEXT_RULES = register("gen.question_text_rules", """\
 QUESTION-TEXT RULES
