@@ -115,6 +115,19 @@
 .mcq-regen-reason { margin-bottom: var(--sp-4); }
 .mcq-regen-reason .req { color: var(--red); }
 
+/* Admin Task-logs pagination row. */
+.admin-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+.admin-pager-info {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
 /* Course-details "batch order" number badge (topic / unit / part). */
 .batch-order {
   font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
