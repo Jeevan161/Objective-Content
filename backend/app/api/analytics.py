@@ -133,9 +133,9 @@ def analytics(
     tot_gen = tot_rev = tot_app = tot_rej = 0
     ts: dict[str, dict[str, int]] = defaultdict(lambda: {"generated": 0, "reviewed": 0, "approved": 0})
     by_course: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"generated": 0, "reviewed": 0, "approved": 0, "regen_requests": 0})
+        lambda: {"generated": 0, "reviewed": 0, "approved": 0, "regen_events": 0, "regen_questions": 0})
     by_user: dict[uuid.UUID | None, dict[str, int]] = defaultdict(
-        lambda: {"generated": 0, "reviewed": 0, "approved": 0, "regen_requests": 0})
+        lambda: {"generated": 0, "reviewed": 0, "approved": 0, "regen_events": 0, "regen_questions": 0})
 
     for r in kept:
         gen, rev, app_, rej = _question_stats(r)
@@ -166,21 +166,38 @@ def analytics(
     if fb_run_ids:
         fb_runs = {r.id: r for r in session.scalars(
             select(McqRun).where(McqRun.id.in_(fb_run_ids))).all()}
-    regen_requests = 0
-    regen_by_user_q: dict[uuid.UUID | None, int] = defaultdict(int)
+    # A question is identified by (run_id, outcome). We count BOTH the total number of
+    # regeneration *events* (a question regenerated 3× = 3) and the number of *distinct
+    # questions* regenerated at least once (= 1) — the latter is the generation-quality
+    # signal ("how many of the generated questions needed rework").
+    regen_events = 0
+    regen_q_keys: set[tuple] = set()
+    by_course_regen_keys: dict[str, set] = defaultdict(set)
+    by_user_regen_events: dict[uuid.UUID | None, int] = defaultdict(int)
+    by_user_regen_keys: dict[uuid.UUID | None, set] = defaultdict(set)
     for f in feedback:
         run = fb_runs.get(f.run_id) if f.run_id else None
         if course_id and (run is None or run.course_id != course_id):
             continue
         if user_uuid is not None and (run is None or run.created_by != user_uuid):
             continue
-        regen_requests += 1
+        regen_events += 1
+        key = (str(f.run_id), f.outcome or "")
+        regen_q_keys.add(key)
         cid = run.course_id if run else ""
         if cid in by_course:
-            by_course[cid]["regen_requests"] += 1
+            by_course[cid]["regen_events"] += 1
+            by_course_regen_keys[cid].add(key)
         uid = run.created_by if run else None
-        by_user[uid]["regen_requests"] += 1
-        regen_by_user_q[uid] += 1
+        by_user[uid]["regen_events"] += 1
+        by_user_regen_events[uid] += 1
+        by_user_regen_keys[uid].add(key)
+    # Fold distinct-question counts into the breakdown rows.
+    for cid, vals in by_course.items():
+        vals["regen_questions"] = len(by_course_regen_keys.get(cid, ()))
+    for uid, vals in by_user.items():
+        vals["regen_questions"] = len(by_user_regen_keys.get(uid, ()))
+    regen_questions = len(regen_q_keys)
 
     # --- session regenerations (version > 1 runs) with their reason --------- #
     regen_by_session = []
@@ -218,14 +235,15 @@ def analytics(
          for uid, vals in by_user.items()),
         key=lambda x: x["generated"], reverse=True)
 
-    all_uids = set(regen_by_user_q) | set(regen_by_user_s)
+    all_uids = set(by_user_regen_events) | set(regen_by_user_s)
     regen_by_user = sorted(
         ({"user_id": str(uid) if uid else None,
           "name": user_names.get(uid, "—") if uid else "—",
-          "question_regens": regen_by_user_q.get(uid, 0),
+          "regen_events": by_user_regen_events.get(uid, 0),
+          "regen_questions": len(by_user_regen_keys.get(uid, ())),
           "session_regens": regen_by_user_s.get(uid, 0)}
          for uid in all_uids),
-        key=lambda x: (x["session_regens"] + x["question_regens"]), reverse=True)
+        key=lambda x: (x["session_regens"] + x["regen_events"]), reverse=True)
 
     return {
         "range": {"from": start.isoformat(), "to": end.isoformat(), "bucket": bucket},
@@ -235,7 +253,9 @@ def analytics(
             "reviewed": tot_rev,
             "approved": tot_app,
             "rejected": tot_rej,
-            "regen_requests": regen_requests,
+            "regen_questions": regen_questions,      # distinct questions regenerated ≥1× (quality signal)
+            "regen_events": regen_events,            # total reject_regenerate actions
+            "avg_regens_per_question": round(regen_events / regen_questions, 2) if regen_questions else 0,
             "session_regens": len(regen_by_session),
             "generation_events": len(runs),
             "sessions": len(kept),
@@ -244,7 +264,9 @@ def analytics(
             "review_rate": _pct(tot_rev, tot_gen),
             "approval_rate": _pct(tot_app, tot_rev),
             "approved_of_generated": _pct(tot_app, tot_gen),
-            "regen_rate": _pct(regen_requests, tot_gen),
+            # % of generated questions that needed regeneration at least once.
+            "regen_question_rate": _pct(regen_questions, tot_gen),
+            "regen_event_rate": _pct(regen_events, tot_gen),
         },
         "timeseries": timeseries,
         "by_course": by_course_rows,

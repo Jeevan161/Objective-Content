@@ -230,9 +230,9 @@ export default function AnalyticsDashboard({ courses = [] }) {
               <div className="an-sub">{p.approval_rate ?? 0}% of reviewed · {p.approved_of_generated ?? 0}% of generated</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value an-warn">{fmt(k.regen_requests)}</div>
-              <div className="stat-label">Regen requests</div>
-              <div className="an-sub">{p.regen_rate ?? 0}% rate · {fmt(k.session_regens)} session regens</div>
+              <div className="stat-value an-warn">{fmt(k.regen_questions)}</div>
+              <div className="stat-label">Questions regenerated</div>
+              <div className="an-sub">{p.regen_question_rate ?? 0}% of generated · {fmt(k.regen_events)} events · {k.avg_regens_per_question ?? 0}×/question</div>
             </div>
           </div>
 
@@ -246,7 +246,7 @@ export default function AnalyticsDashboard({ courses = [] }) {
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>
-                  <tr><th>Course</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th>Regen</th><th>Approval %</th></tr>
+                  <tr><th>Course</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th title="Distinct questions regenerated at least once">Regen Q</th><th>Approval %</th></tr>
                 </thead>
                 <tbody>
                   {(data?.by_course || []).map((r) => (
@@ -255,7 +255,7 @@ export default function AnalyticsDashboard({ courses = [] }) {
                       <td className="admin-num">{fmt(r.generated)}</td>
                       <td className="admin-num">{fmt(r.reviewed)}</td>
                       <td className="admin-num">{fmt(r.approved)}</td>
-                      <td className="admin-num">{fmt(r.regen_requests)}</td>
+                      <td className="admin-num" title={`${fmt(r.regen_events)} regen events`}>{fmt(r.regen_questions)}</td>
                       <td className="admin-num">{r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>
                     </tr>
                   ))}
@@ -270,7 +270,7 @@ export default function AnalyticsDashboard({ courses = [] }) {
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>
-                  <tr><th>User</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th>Regen</th><th>Approval %</th></tr>
+                  <tr><th>User</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th title="Distinct questions regenerated at least once">Regen Q</th><th>Approval %</th></tr>
                 </thead>
                 <tbody>
                   {(data?.by_user || []).map((r) => (
@@ -282,7 +282,7 @@ export default function AnalyticsDashboard({ courses = [] }) {
                       <td className="admin-num">{fmt(r.generated)}</td>
                       <td className="admin-num">{fmt(r.reviewed)}</td>
                       <td className="admin-num">{fmt(r.approved)}</td>
-                      <td className="admin-num">{fmt(r.regen_requests)}</td>
+                      <td className="admin-num" title={`${fmt(r.regen_events)} regen events`}>{fmt(r.regen_questions)}</td>
                       <td className="admin-num">{r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>
                     </tr>
                   ))}
@@ -347,9 +347,9 @@ function buildReportHtml(data, { courses, users }) {
       : `<tr><td class="empty" colspan="6">No data.</td></tr>`
 
   const courseRows = rows(data.by_course || [], (r) =>
-    `<td>${esc(r.course_name || r.course_id)}</td><td class="n">${fmtN(r.generated)}</td><td class="n">${fmtN(r.reviewed)}</td><td class="n">${fmtN(r.approved)}</td><td class="n">${fmtN(r.regen_requests)}</td><td class="n">${r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>`)
+    `<td>${esc(r.course_name || r.course_id)}</td><td class="n">${fmtN(r.generated)}</td><td class="n">${fmtN(r.reviewed)}</td><td class="n">${fmtN(r.approved)}</td><td class="n">${fmtN(r.regen_questions)}</td><td class="n">${r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>`)
   const userRows = rows(data.by_user || [], (r) =>
-    `<td>${esc(r.name)}${r.email ? `<div class="sub">${esc(r.email)}</div>` : ''}</td><td class="n">${fmtN(r.generated)}</td><td class="n">${fmtN(r.reviewed)}</td><td class="n">${fmtN(r.approved)}</td><td class="n">${fmtN(r.regen_requests)}</td><td class="n">${r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>`)
+    `<td>${esc(r.name)}${r.email ? `<div class="sub">${esc(r.email)}</div>` : ''}</td><td class="n">${fmtN(r.generated)}</td><td class="n">${fmtN(r.reviewed)}</td><td class="n">${fmtN(r.approved)}</td><td class="n">${fmtN(r.regen_questions)}</td><td class="n">${r.reviewed ? Math.round((r.approved / r.reviewed) * 100) : 0}%</td>`)
   const regenRows = rows(data.regen_by_session || [], (r) =>
     `<td>${esc(new Date(r.created_at).toLocaleString())}</td><td>${esc(r.course_name)}</td><td>${esc(r.unit_id)}</td><td class="n">v${esc(r.version)}</td><td>${esc(r.created_by_name)}</td><td>${esc(r.reason || '—')}</td>`)
 
@@ -390,12 +390,12 @@ function buildReportHtml(data, { courses, users }) {
     ${kpi(k.generated, 'Generated', `${fmtN(k.sessions)} sessions · ${fmtN(k.generation_events)} runs`)}
     ${kpi(k.reviewed, 'Reviewed', `${p.review_rate ?? 0}% of generated`)}
     <div class="card"><div class="v ok">${fmtN(k.approved)}</div><div class="l">Approved</div><div class="s">${p.approval_rate ?? 0}% of reviewed · ${p.approved_of_generated ?? 0}% of generated</div></div>
-    <div class="card"><div class="v warn">${fmtN(k.regen_requests)}</div><div class="l">Regen requests</div><div class="s">${p.regen_rate ?? 0}% rate · ${fmtN(k.session_regens)} session regens</div></div>
+    <div class="card"><div class="v warn">${fmtN(k.regen_questions)}</div><div class="l">Questions regenerated</div><div class="s">${p.regen_question_rate ?? 0}% of generated · ${fmtN(k.regen_events)} events · ${k.avg_regens_per_question ?? 0}×/question</div></div>
   </div>
   <h2>By course</h2>
-  <table><thead><tr><th>Course</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th>Regen</th><th>Approval %</th></tr></thead><tbody>${courseRows}</tbody></table>
+  <table><thead><tr><th>Course</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th title="Distinct questions regenerated at least once">Regen Q</th><th>Approval %</th></tr></thead><tbody>${courseRows}</tbody></table>
   <h2>By user</h2>
-  <table><thead><tr><th>User</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th>Regen</th><th>Approval %</th></tr></thead><tbody>${userRows}</tbody></table>
+  <table><thead><tr><th>User</th><th>Generated</th><th>Reviewed</th><th>Approved</th><th title="Distinct questions regenerated at least once">Regen Q</th><th>Approval %</th></tr></thead><tbody>${userRows}</tbody></table>
   <h2>Session regenerations</h2>
   <table><thead><tr><th>When</th><th>Course</th><th>Session</th><th>Version</th><th>By</th><th>Reason</th></tr></thead><tbody>${regenRows}</tbody></table>
   <div class="foot">Objective Content · Throughput report</div>
