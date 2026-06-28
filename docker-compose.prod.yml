@@ -18,8 +18,9 @@ services:
         required: true
     ports:
       - "${APP_HOST_PORT:-80}:8000"   # default host :80 → container :8000 (set 8000 if behind a proxy/ALB)
-    # "Prepare & Load" (Google Sheets) only: mount the service-account JSON and point
-    # GOOGLE_SA_CREDENTIALS_FILE at it (in backend/.env). Skip if you don't use that feature.
-    # volumes:
-    #   - ./backend/secrets/google-sa.json:/app/google-sa.json:ro
+    # "Prepare & Load" (Google Sheets): mount the service-account JSON read-only at the path
+    # GOOGLE_SA_CREDENTIALS_FILE points to in backend/.env (default /app/google_sa_credentials.json).
+    # The host file lives at backend/secrets/ (gitignored). Skip this only if you don't use the feature.
+    volumes:
+      - ./backend/secrets/google_sa_credentials.json:/app/google_sa_credentials.json:ro
     restart: unless-stopped

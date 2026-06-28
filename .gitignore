@@ -7,6 +7,7 @@
 # Google service-account / OAuth client credentials (never commit)
 backend/google_sa_credentials.json
 backend/client_secret_*.json
+backend/secrets/
 
 # ───────────────────────────── Python ────────────────────────────────────
 __pycache__/
