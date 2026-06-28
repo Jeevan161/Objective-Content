@@ -63,6 +63,9 @@ class McqGenerateRequest(BaseModel):
     # Reading-material portal unit_ids of the PREREQUISITE units to include in RAG
     # grounding. None = include all prerequisites (default); [] = none.
     prerequisite_unit_ids: list[str] | None = None
+    # Why the session is being regenerated. REQUIRED when a prior run already exists for
+    # this (course_id, unit_id); ignored for a first-time generation.
+    reason: str = ""
 
 
 class McqReviewRequest(BaseModel):

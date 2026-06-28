@@ -119,10 +119,15 @@ export default function AdminDashboard() {
                             : <button className="btn btn-primary btn-sm" disabled={busyId === u.id}
                                 onClick={() => act(u.id, adminApproveUser, 'Approve')}>
                                 <UserCheck size={13} /> Approve</button>}
-                          <button className="btn btn-ghost btn-sm" disabled={busyId === u.id}
-                            onClick={() => act(u.id, (id) => adminSetRole(id, u.role === 'admin' ? 'user' : 'admin'), 'Role change')}>
-                            {u.role === 'admin' ? 'Make user' : 'Make admin'}
-                          </button>
+                          <select className="input btn-sm admin-role-select" value={u.role}
+                            disabled={busyId === u.id || u.id === user.id}
+                            title={u.id === user.id ? 'You cannot change your own role' : 'Change role'}
+                            onChange={(e) => act(u.id, (id) => adminSetRole(id, e.target.value), 'Role change')}>
+                            <option value="user">user</option>
+                            <option value="lead">lead</option>
+                            <option value="manager">manager</option>
+                            <option value="admin">admin</option>
+                          </select>
                         </div>
                       </td>
                     </tr>

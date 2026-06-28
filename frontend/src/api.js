@@ -122,7 +122,7 @@ export const generateMcq = (
   unitId,
   review = true,
   prerequisiteUnitIds = null,
-  { questionBudget = null, hitl = false } = {},
+  { questionBudget = null, hitl = false, reason = '' } = {},
 ) =>
   request('/courses/mcq/generate/', {
     method: 'POST',
@@ -134,6 +134,7 @@ export const generateMcq = (
       prerequisite_unit_ids: prerequisiteUnitIds,
       question_budget: questionBudget,
       hitl,
+      reason,
     }),
   })
 
@@ -298,6 +299,17 @@ export const adminLogs = (level = '', limit = 200) =>
 export const adminAppFeedback = (limit = 200) => request(`/admin/feedback?limit=${limit}`)
 // All MCQ reviewer feedback actions (admin).
 export const adminMcqFeedback = (limit = 300) => request(`/admin/mcq-feedback?limit=${limit}`)
+
+// Throughput analytics for a date range (admin/manager/lead). All params optional.
+export const adminAnalytics = ({ from, to, bucket = 'day', courseId = '', userId = '' } = {}) => {
+  const p = new URLSearchParams()
+  if (from) p.set('from', from)
+  if (to) p.set('to', to)
+  if (bucket) p.set('bucket', bucket)
+  if (courseId) p.set('course_id', courseId)
+  if (userId) p.set('user_id', userId)
+  return request(`/admin/analytics?${p.toString()}`)
+}
 
 // --- Application feedback (any signed-in user) ---
 // rating: 1–5 (emoji), category, helpful (true/false/null), message.

@@ -55,3 +55,11 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Admin access required.")
     return user
+
+
+def require_elevated(user: User = Depends(get_current_user)) -> User:
+    """Gate oversight surfaces (analytics, logs, reviewer feedback) to lead/manager/admin."""
+    if user.role not in User.ELEVATED_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Elevated access required (lead, manager or admin).")
+    return user
