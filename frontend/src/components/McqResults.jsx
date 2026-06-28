@@ -641,7 +641,7 @@ function TraceRow({ span: s, max }) {
 // `mode`: 'view' (default) shows generation details read-only — used by the generation
 // page and the Runs list. 'review' (Review Queue) adds per-question Approve/Reject and the
 // approval-gated load controls.
-function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
+function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTrackJob }) {
   const review = mode === 'review'
   const toast = useToast()
   const { user } = useAuth()
@@ -955,23 +955,27 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
                     <ShieldCheck size={13} /> Mark run reviewed
                   </button>
                 )}
-                <button className="btn btn-soft btn-sm"
-                  onClick={() => guardExcluded(() => handleGenerateZip(false), eligibleQs.length)}
-                  disabled={zipBusy || !canExport}
-                  title={canExport ? '' : 'Mark the run reviewed first'}>
-                  <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
-                </button>
-                {zipResult && (
-                  <a className="mcq-zip-link" href={zipResult.url} target="_blank" rel="noopener noreferrer"
-                    title={zipResult.url}>
-                    <Download size={12} /> <span>{zipResult.filename}</span>
-                  </a>
+                {canLoad && (
+                  <>
+                    <button className="btn btn-soft btn-sm"
+                      onClick={() => guardExcluded(() => handleGenerateZip(false), eligibleQs.length)}
+                      disabled={zipBusy || !canExport}
+                      title={canExport ? '' : 'Mark the run reviewed first'}>
+                      <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
+                    </button>
+                    {zipResult && (
+                      <a className="mcq-zip-link" href={zipResult.url} target="_blank" rel="noopener noreferrer"
+                        title={zipResult.url}>
+                        <Download size={12} /> <span>{zipResult.filename}</span>
+                      </a>
+                    )}
+                    <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
+                      onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || !canExport}
+                      title={canExport ? '' : 'Mark the run reviewed first'}>
+                      <FileSpreadsheet size={13} /> Prepare &amp; Load
+                    </button>
+                  </>
                 )}
-                <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
-                  onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || !canExport}
-                  title={canExport ? '' : 'Mark the run reviewed first'}>
-                  <FileSpreadsheet size={13} /> Prepare &amp; Load
-                </button>
               </div>
             )}
             {!review && (
@@ -979,7 +983,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
             )}
           </div>
 
-          {review && prepOpen && (
+          {review && canLoad && prepOpen && (
             <div className="mcq-prep-panel">
               <div className="mcq-prep-head">
                 <FileSpreadsheet size={14} />

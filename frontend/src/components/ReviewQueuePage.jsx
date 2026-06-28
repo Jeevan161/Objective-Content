@@ -152,7 +152,7 @@ function ReviewQueuePage({ courses, onTrackJob }) {
                 <Spinner size={14} /> Loading run…
               </div>
             )}
-            {!loadingRun && run && <McqResults key={run.id} run={run} mode="review" courseId={run.course_id} unitId={run.unit_id} onTrackJob={onTrackJob} />}
+            {!loadingRun && run && <McqResults key={run.id} run={run} mode="review" canLoad={tab === 'reviewed'} courseId={run.course_id} unitId={run.unit_id} onTrackJob={onTrackJob} />}
             {!loadingRun && !run && (
               <EmptyState
                 icon={ListChecks}
