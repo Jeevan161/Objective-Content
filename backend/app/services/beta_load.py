@@ -191,8 +191,8 @@ def run_load(job_id: uuid.UUID, run_id: uuid.UUID, body: dict,
     with SessionLocal() as session:
         session.add(BetaLoad(run_id=run_id, user_id=user_id, action="load", status=status,
                              resource_id=sheet["resource_id"], sheet_url=sheet["url"],
-                             s3_url=s3_url, request_id=request_id, message=message,
-                             job_id=job_id, content=payload))
+                             s3_url=s3_url, request_id=request_id, unlock_id=unlock_id or "",
+                             message=message, job_id=job_id, content=payload))
         session.commit()
     log_task(task_type="LOAD", event="complete", run_id=run_id, user_id=user_id, job_id=job_id,
              level=(ERROR if status == "FAILURE" else "INFO"),

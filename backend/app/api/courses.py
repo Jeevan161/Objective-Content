@@ -696,13 +696,18 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
 
 def _serialize_beta_load(row, *, include_content: bool = False) -> dict:
     """One Loads row. `include_content` adds the full loaded-questions snapshot (detail view)."""
+    from app.services.beta_s3 import task_url
     content = row.content or {}
     questions = content.get("questions") or []
     out = {
         "id": row.id, "action": row.action, "status": row.status,
         "run_id": row.run_id, "job_id": row.job_id, "course_id": getattr(row, "course_id", None),
         "resource_id": row.resource_id, "sheet_url": row.sheet_url, "s3_url": row.s3_url,
-        "request_id": row.request_id, "message": row.message,
+        "request_id": row.request_id, "unlock_id": getattr(row, "unlock_id", "") or "",
+        # Beta-admin task pages for the content-loading + unlock-resource tasks.
+        "loading_task_url": task_url(row.request_id),
+        "unlock_task_url": task_url(getattr(row, "unlock_id", "")),
+        "message": row.message,
         "count": len(questions), "has_content": bool(content), "created_at": row.created_at,
     }
     if include_content:

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshCw, Upload, FileDown, ExternalLink, ArrowLeft, PackageOpen } from 'lucide-react'
+import { RefreshCw, Upload, FileDown, ExternalLink, ArrowLeft, PackageOpen, ListChecks, Unlock } from 'lucide-react'
 import { listLoads, getLoad } from '../api'
 import { useToast } from './Toast'
 import { Spinner, EmptyState } from './ui'
@@ -72,6 +72,16 @@ export default function LoadsPage({ openJobId = null, courses = [] }) {
             </p>
           </div>
           <div className="topbar-actions">
+            {selected.loading_task_url && (
+              <a className="btn btn-soft btn-sm" href={selected.loading_task_url} target="_blank" rel="noreferrer">
+                <ListChecks size={14} /> Loading task
+              </a>
+            )}
+            {selected.unlock_task_url && (
+              <a className="btn btn-soft btn-sm" href={selected.unlock_task_url} target="_blank" rel="noreferrer">
+                <Unlock size={14} /> Unlock task
+              </a>
+            )}
             {selected.sheet_url && (
               <a className="btn btn-soft btn-sm" href={selected.sheet_url} target="_blank" rel="noreferrer">
                 <ExternalLink size={14} /> Exam sheet

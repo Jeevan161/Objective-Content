@@ -500,7 +500,8 @@ class BetaLoad(Base):
     resource_id: Mapped[str] = mapped_column(String(64), default="")
     sheet_url: Mapped[str] = mapped_column(Text, default="")
     s3_url: Mapped[str] = mapped_column(Text, default="")
-    request_id: Mapped[str] = mapped_column(String(64), default="")
+    request_id: Mapped[str] = mapped_column(String(64), default="")     # content-loading task id
+    unlock_id: Mapped[str] = mapped_column(String(64), default="")      # unlock-resources task id
     message: Mapped[str] = mapped_column(Text, default="")
     # Soft link to the background SyncJob that performed this load/export (nullable).
     job_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)

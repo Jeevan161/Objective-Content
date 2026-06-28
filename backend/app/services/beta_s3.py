@@ -174,6 +174,14 @@ def submit_sheet_loading(*, spreadsheet_id: str, spread_sheet_name: str, s3_url:
     })
 
 
+def task_url(request_id: str) -> str:
+    """Beta-admin change-page URL for a content-loading task (loading OR unlock), so the
+    Loads view can link straight to it. Empty string when there's no id."""
+    if not request_id:
+        return ""
+    return f"{settings.beta_admin_base_url}{_CHANGE_PATH.format(request_id)}"
+
+
 def submit_unlock(resource_id: str) -> str:
     """Unlock a loaded resource for users (UNLOCK_RESOURCES_FOR_USERS)."""
     return _submit_content_loading(_logged_in_session(), _TASK_TYPE_UNLOCK, {
