@@ -134,12 +134,12 @@ def review_questions_node(state, config) -> dict:
     summaries = [{"outcome": r.get("outcome"), "question_type": r.get("question_type"),
                   "attempts": r.get("attempts", 0), "needs_human": r.get("needs_human", False),
                   "review": r.get("review")} for r in reviewed]
-    notes = [f"reviewed {len(reviewed)} questions; "
-             f"{sum(1 for s in summaries if s['needs_human'])} still need human review"]
     ctx.progress.done("review_questions", needs_human=counters["nh"],
                       snapshot={"reviewed": len(reviewed), "needs_human": counters["nh"],
                                 "summaries": summaries})
-    return {"questions": reviewed, "question_reviews": summaries, "notes": notes}
+    # No human-facing summary note — per-question `needs_human` already drives the UI; the
+    # old "reviewed N; M still need human review" note surfaced as overlapping text in review.
+    return {"questions": reviewed, "question_reviews": summaries}
 
 
 # --- human-in-the-loop gate (inert pass-through unless ctx.hitl_enabled) --- #

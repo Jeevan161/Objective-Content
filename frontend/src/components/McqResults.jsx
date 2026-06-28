@@ -754,7 +754,9 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
   }
 
   const los = r.final_los || []
-  const notes = r.notes || []
+  // Drop the legacy "reviewed N; M still need human review" summary note (now removed at the
+  // source) so runs generated before that fix don't keep showing it.
+  const notes = (r.notes || []).filter((n) => !/still need human review/i.test(String(n)))
   const jobId = run?.job_id
   const artifact = r.artifact || {}
   const status = artifact.status || r.lo_status || ''
@@ -859,15 +861,11 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
       )}
 
       <div className="mcq-tiles">
-        {!review && (
-          <>
-            <div className="mcq-tile"><div className="mcq-tile-num">{run?.lo_count ?? los.length}</div><div className="mcq-tile-lbl">Outcomes</div></div>
-            <div className="mcq-tile"><div className="mcq-tile-num">{run?.question_count ?? 0}</div><div className="mcq-tile-lbl">Questions</div></div>
-            <div className="mcq-tile warn"><div className="mcq-tile-num">{run?.needs_human_count ?? needsReview}</div><div className="mcq-tile-lbl">Need review</div></div>
-            {ragCallCount > 0 && (
-              <div className="mcq-tile"><div className="mcq-tile-num">{ragCallCount}</div><div className="mcq-tile-lbl">RAG calls</div></div>
-            )}
-          </>
+        <div className="mcq-tile"><div className="mcq-tile-num">{run?.lo_count ?? los.length}</div><div className="mcq-tile-lbl">Outcomes</div></div>
+        <div className="mcq-tile"><div className="mcq-tile-num">{run?.question_count ?? 0}</div><div className="mcq-tile-lbl">Questions</div></div>
+        <div className="mcq-tile warn"><div className="mcq-tile-num">{run?.needs_human_count ?? needsReview}</div><div className="mcq-tile-lbl">Need review</div></div>
+        {ragCallCount > 0 && (
+          <div className="mcq-tile"><div className="mcq-tile-num">{ragCallCount}</div><div className="mcq-tile-lbl">RAG calls</div></div>
         )}
         <div className="mcq-tile-actions">
           {run?.version != null && (

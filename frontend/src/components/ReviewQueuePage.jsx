@@ -113,6 +113,14 @@ function ReviewQueuePage({ courses, onTrackJob }) {
                     {r.version != null && <span className="runs-item-ver">v{r.version}</span>}
                     <span className="runs-item-date">{fmtDate(r.created_at)}</span>
                   </div>
+                  <div className="runs-item-stats">
+                    <span className={(r.approved_count ?? 0) === (r.eligible_count ?? 0) ? 'runs-item-approved' : ''}>
+                      {r.approved_count ?? 0} / {r.eligible_count ?? 0} approved
+                    </span>
+                    {r.needs_human_count > 0 && (
+                      <span className="runs-item-review">{r.needs_human_count} need review</span>
+                    )}
+                  </div>
                 </button>
               </li>
             ))}
