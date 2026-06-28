@@ -26,7 +26,7 @@ from typing import Callable
 from fastapi import HTTPException
 
 from app.db.session import SessionLocal
-from app.models import BetaLoad, McqRun
+from app.models import BetaLoad, Course, McqRun
 from app.services.task_log import ERROR, log_task
 
 Sink = Callable[[dict], None]
@@ -82,6 +82,8 @@ def run_export(job_id: uuid.UUID, run_id: uuid.UUID, approved_only: bool,
             raise RuntimeError("MCQ run not found.")
         require_reviewed(run)
         payload = result_for_load(run, approved_only)
+        course = session.get(Course, run.course_id)
+        payload = {**payload, "course_name": (course.course_name if course else "") or run.course_id}
         filename = export_filename(run)
 
         sink({"message": "Building export ZIP…"})
@@ -127,6 +129,8 @@ def run_load(job_id: uuid.UUID, run_id: uuid.UUID, body: dict,
         if not parent_topic_id:
             raise RuntimeError("No topic_id for the exam's parent resource.")
         payload = result_for_load(run, bool(body.get("approved_only")))
+        course = session.get(Course, run.course_id)
+        payload = {**payload, "course_name": (course.course_name if course else "") or run.course_id}
         filename = export_filename(run)
 
     # One id per unit, shared by the exam (Form!B5) AND the questions JSON filename.
