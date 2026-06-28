@@ -859,11 +859,15 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
       )}
 
       <div className="mcq-tiles">
-        <div className="mcq-tile"><div className="mcq-tile-num">{run?.lo_count ?? los.length}</div><div className="mcq-tile-lbl">Outcomes</div></div>
-        <div className="mcq-tile"><div className="mcq-tile-num">{run?.question_count ?? 0}</div><div className="mcq-tile-lbl">Questions</div></div>
-        <div className="mcq-tile warn"><div className="mcq-tile-num">{run?.needs_human_count ?? needsReview}</div><div className="mcq-tile-lbl">Need review</div></div>
-        {ragCallCount > 0 && (
-          <div className="mcq-tile"><div className="mcq-tile-num">{ragCallCount}</div><div className="mcq-tile-lbl">RAG calls</div></div>
+        {!review && (
+          <>
+            <div className="mcq-tile"><div className="mcq-tile-num">{run?.lo_count ?? los.length}</div><div className="mcq-tile-lbl">Outcomes</div></div>
+            <div className="mcq-tile"><div className="mcq-tile-num">{run?.question_count ?? 0}</div><div className="mcq-tile-lbl">Questions</div></div>
+            <div className="mcq-tile warn"><div className="mcq-tile-num">{run?.needs_human_count ?? needsReview}</div><div className="mcq-tile-lbl">Need review</div></div>
+            {ragCallCount > 0 && (
+              <div className="mcq-tile"><div className="mcq-tile-num">{ragCallCount}</div><div className="mcq-tile-lbl">RAG calls</div></div>
+            )}
+          </>
         )}
         <div className="mcq-tile-actions">
           {run?.version != null && (
