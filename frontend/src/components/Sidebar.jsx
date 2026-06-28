@@ -40,6 +40,7 @@ function Sidebar({
   open = false,
   onClose,
   collapsed = false,
+  overlay = false,
   onToggleCollapse,
   user = null,
   onOpenAccount,
@@ -58,7 +59,7 @@ function Sidebar({
   const tip = (label) => (collapsed ? { 'data-tip': label } : {})
 
   return (
-    <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}>
+    <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''} ${overlay ? 'overlay' : ''}`}>
       <div className="sidebar-brand">
         <div className="brand-mark">
           <BookOpenCheck size={18} />

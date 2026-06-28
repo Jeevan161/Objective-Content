@@ -139,6 +139,42 @@
   padding-right: var(--sp-2);
 }
 
+/* ── Overlay mode (e.g. while reviewing): the rail is taken OUT of flow so it can
+   expand on hover WITHOUT shifting the page content. The workspace reserves the
+   rail's width so the icons never overlap content at rest. ─────────────────── */
+.app-shell.nav-overlay .workspace-col { margin-left: 76px; }
+
+.sidebar.overlay {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  height: 100%;
+  z-index: calc(var(--z-drawer) + 2);
+}
+
+/* Hover expands it as an overlay; content stays put (the 76px margin is fixed). */
+.sidebar.overlay.collapsed:hover {
+  width: 252px;
+  padding-left: var(--sp-3);
+  padding-right: var(--sp-3);
+  box-shadow: var(--shadow-lg);
+}
+.sidebar.overlay.collapsed:hover .brand-text,
+.sidebar.overlay.collapsed:hover .nav-section-label,
+.sidebar.overlay.collapsed:hover .nav-item > span:first-of-type,
+.sidebar.overlay.collapsed:hover .soon-pill {
+  display: revert;
+}
+.sidebar.overlay.collapsed:hover .sidebar-brand {
+  justify-content: flex-start;
+  padding-left: var(--sp-2);
+}
+.sidebar.overlay.collapsed:hover .nav-item {
+  justify-content: flex-start;
+  padding: 10px 12px;
+}
+
 .sidebar.collapsed .brand-text,
 .sidebar.collapsed .nav-section-label,
 .sidebar.collapsed .nav-item > span:first-of-type,

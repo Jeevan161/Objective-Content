@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight,
+  CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight, ChevronLeft, Circle,
   FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck, Download,
   FileSpreadsheet, ExternalLink, Ban, Undo2, Play,
 } from 'lucide-react'
@@ -16,6 +16,33 @@ import ReadingMaterialPane from './ReadingMaterialPane'
 const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer', 'LO drift', 'too easy', 'too hard']
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+// Per-question review status, used by the Q1/Q2… navigator. `regenOutcome` is the outcome
+// whose regeneration job is currently in flight (so the nav can show a live spinner).
+const STATUS_LABEL = {
+  approved: 'Approved', needs_review: 'Needs review', regenerating: 'Regenerating',
+  regenerated: 'Regenerated', excluded: 'Excluded', failed: 'Failed', pending: 'Pending',
+}
+function qStatus(q, regenOutcome) {
+  if (regenOutcome && q.outcome === regenOutcome) return 'regenerating'
+  if (q.excluded) return 'excluded'
+  if (q.status !== 'generated') return 'failed'
+  if (q.approval === 'approved') return 'approved'
+  if ((q.revisions?.length || 0) > 0) return 'regenerated'   // regenerated, awaiting re-approval
+  if (q.needs_human) return 'needs_review'
+  return 'pending'
+}
+function StatusIcon({ status, size = 14 }) {
+  switch (status) {
+    case 'approved': return <CheckCircle2 size={size} />
+    case 'regenerating': return <Spinner size={size} />
+    case 'regenerated': return <RotateCcw size={size} />
+    case 'needs_review': return <AlertTriangle size={size} />
+    case 'excluded': return <Ban size={size} />
+    case 'failed': return <X size={size} />
+    default: return <Circle size={size} />
+  }
+}
 
 // Markdown previewer — the portal renders the question text + explanation as Markdown, so we show
 // the same rendered preview here. Options / code / exact answers stay literal (rendered elsewhere)
@@ -603,6 +630,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
   const r = run?.result || {}
   const [questions, setQuestions] = useState(r.questions || [])
   const [busyOutcome, setBusyOutcome] = useState(null)
+  const [regenOutcome, setRegenOutcome] = useState(null)   // outcome with a regen job in flight
   const [approved, setApproved] = useState(run?.review_status === 'approved')
   const [confirm, setConfirm] = useState(null) // { proceed, proceedingCount } when excludes exist
   const [zipBusy, setZipBusy] = useState(false)
@@ -611,6 +639,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
   const [prepBusy, setPrepBusy] = useState(false)
   const [prepResult, setPrepResult] = useState(null) // { status, message, sheet_url, ... }
   const [prepForm, setPrepForm] = useState({
+    topic_id: run?.topic_id || '',   // parent; defaults to the run's topic, editable at load
     child_order: '', duration_min: 30, pass_percentage: 80,
     show_answer_scoring_mode: 'INCORRECT', should_send_solutions: 'yes',
   })
@@ -619,6 +648,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
 
   async function handleRegenerate(outcome, feedback, tags) {
     setBusyOutcome(outcome)
+    setRegenOutcome(outcome)
     try {
       // Regeneration now runs as a tracked background job (shows in Activity). Follow it,
       // then pull the freshly persisted question back into the list.
@@ -640,6 +670,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
       toast.push({ kind: 'error', title: 'Regenerate failed', message: e.message })
     } finally {
       setBusyOutcome(null)
+      setRegenOutcome(null)
     }
   }
   async function handleSetApproval(outcome, approval) {
@@ -687,6 +718,10 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
     }
   }
   async function handlePrepareLoad(approvedOnly = false) {
+    if (!(prepForm.topic_id || '').trim()) {
+      toast.push({ kind: 'error', title: 'Topic ID required', message: 'Enter the parent topic ID for the exam.' })
+      return
+    }
     if (prepForm.child_order === '' || Number.isNaN(Number(prepForm.child_order))) {
       toast.push({ kind: 'error', title: 'Child order required', message: 'Enter the position under the topic.' })
       return
@@ -695,6 +730,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
     setPrepResult(null)
     try {
       const res = await prepareAndLoadMcqRun(run.id, {
+        topic_id: (prepForm.topic_id || '').trim(),
         child_order: Number(prepForm.child_order),
         duration_min: Number(prepForm.duration_min),
         pass_percentage: Number(prepForm.pass_percentage),
@@ -761,6 +797,12 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
   const [filter, setFilter] = useState('all') // all | review
 
   const shown = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
+  // Review uses a one-card-at-a-time deck with a Q1/Q2… navigator; `current` indexes `shown`.
+  const [current, setCurrent] = useState(0)
+  useEffect(() => {                                  // keep the index in range as the list/filter changes
+    if (current > shown.length - 1) setCurrent(Math.max(0, shown.length - 1))
+  }, [shown.length, current])
+  const curQ = shown[Math.min(current, Math.max(0, shown.length - 1))]
 
   // Reading material sits to the RIGHT of the questions, behind a draggable adjustment bar.
   // The session is whatever was passed in (generation page) or, in the Runs/Review views,
@@ -859,10 +901,10 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
         <>
           <div className="mcq-toolbar">
             <div className="mcq-filters">
-              <button className={`mcq-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>
+              <button className={`mcq-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => { setFilter('all'); setCurrent(0) }}>
                 All
               </button>
-              <button className={`mcq-chip ${filter === 'review' ? 'active' : ''}`} onClick={() => setFilter('review')}>
+              <button className={`mcq-chip ${filter === 'review' ? 'active' : ''}`} onClick={() => { setFilter('review'); setCurrent(0) }}>
                 Needs review {needsReview > 0 && <span className="mcq-chip-n">{needsReview}</span>}
               </button>
             </div>
@@ -919,10 +961,18 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
                 <FileSpreadsheet size={14} />
                 <span>Prepare exam-config sheet &amp; load to beta</span>
                 <span className="mcq-prep-sub">
-                  parent = this session's topic · {approvedCount} of {eligibleQs.length} approved
+                  parent = the topic below (editable) · {approvedCount} of {eligibleQs.length} approved
                 </span>
               </div>
               <div className="mcq-prep-fields">
+                <label>Parent topic ID{run?.topic_name ? ` — ${run.topic_name}` : ''}
+                  <input className="input" value={prepForm.topic_id}
+                    onChange={(e) => setPrepForm((f) => ({ ...f, topic_id: e.target.value }))}
+                    placeholder="topic id" />
+                  {(prepForm.topic_id || '') !== (run?.topic_id || '') && (
+                    <span className="mcq-prep-sub">changed from this run's topic ({run?.topic_id || '—'})</span>
+                  )}
+                </label>
                 <label>Child order under parent
                   <input className="input" type="number" min="1" value={prepForm.child_order}
                     onChange={(e) => setPrepForm((f) => ({ ...f, child_order: e.target.value }))}
@@ -983,21 +1033,58 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
             </div>
           )}
 
-          <div className="qc-list">
-            {shown.map((q) => (
-              <QuestionCard key={q.outcome} q={q} lo={loByOutcome[q.outcome]}
-                index={questions.indexOf(q)}
-                review={review && q.status === 'generated' ? (
-                  <QuestionReview
-                    q={q} busy={busyOutcome === q.outcome}
-                    onApprove={(approval) => handleSetApproval(q.outcome, approval)}
-                    onRegenerate={(fb, tags) => handleRegenerate(q.outcome, fb, tags)}
-                    onExclude={(excluded) => handleSetExclusion(q.outcome, excluded)}
-                  />
-                ) : null} />
-            ))}
-            {shown.length === 0 && <p className="muted">No questions in this filter.</p>}
-          </div>
+          {review ? (
+            <div className="qc-review-deck">
+              <nav className="qc-nav" aria-label="Questions">
+                {shown.map((q, i) => {
+                  const st = qStatus(q, regenOutcome)
+                  return (
+                    <button key={q.outcome} type="button"
+                      className={`qc-nav-item st-${st} ${i === current ? 'active' : ''}`}
+                      onClick={() => setCurrent(i)}
+                      title={`Q${questions.indexOf(q) + 1} — ${STATUS_LABEL[st]}`}>
+                      <span className="qc-nav-ic"><StatusIcon status={st} size={15} /></span>
+                      <span className="qc-nav-n">Q{questions.indexOf(q) + 1}</span>
+                    </button>
+                  )
+                })}
+                {shown.length === 0 && <p className="muted qc-nav-empty">None</p>}
+              </nav>
+              <div className="qc-deck">
+                <div className="qc-deck-bar">
+                  <button className="btn btn-soft btn-sm" disabled={current <= 0}
+                    onClick={() => setCurrent((c) => Math.max(0, c - 1))}>
+                    <ChevronLeft size={14} /> Prev
+                  </button>
+                  <span className="qc-deck-pos">{shown.length ? current + 1 : 0} / {shown.length}</span>
+                  <button className="btn btn-soft btn-sm" disabled={current >= shown.length - 1}
+                    onClick={() => setCurrent((c) => Math.min(shown.length - 1, c + 1))}>
+                    Next <ChevronRight size={14} />
+                  </button>
+                </div>
+                {curQ ? (
+                  <QuestionCard key={curQ.outcome} q={curQ} lo={loByOutcome[curQ.outcome]}
+                    index={questions.indexOf(curQ)}
+                    review={curQ.status === 'generated' ? (
+                      <QuestionReview
+                        q={curQ} busy={busyOutcome === curQ.outcome}
+                        onApprove={(approval) => handleSetApproval(curQ.outcome, approval)}
+                        onRegenerate={(fb, tags) => handleRegenerate(curQ.outcome, fb, tags)}
+                        onExclude={(excluded) => handleSetExclusion(curQ.outcome, excluded)}
+                      />
+                    ) : null} />
+                ) : <p className="muted">No questions in this filter.</p>}
+              </div>
+            </div>
+          ) : (
+            <div className="qc-list">
+              {shown.map((q) => (
+                <QuestionCard key={q.outcome} q={q} lo={loByOutcome[q.outcome]}
+                  index={questions.indexOf(q)} review={null} />
+              ))}
+              {shown.length === 0 && <p className="muted">No questions in this filter.</p>}
+            </div>
+          )}
         </>
       )}
 
