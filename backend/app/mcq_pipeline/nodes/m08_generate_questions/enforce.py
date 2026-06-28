@@ -131,12 +131,43 @@ def _strip_trailing_period(text: str) -> str:
     return t
 
 
+def _humanize_typography(text: str) -> str:
+    """Normalize the 'machine-generated' typography reviewers reject — en/em dashes and
+    smart quotes — to the plain typography a person would type (gen.markdown_rules already
+    forbids these, but the model still emits them, so we enforce it deterministically).
+    SAFE on code-bearing text: en/em dashes and curly quotes are never valid code syntax,
+    so this can't corrupt a snippet or program output. Backticks and '…' are left as-is."""
+    if not isinstance(text, str):
+        return text
+    return (text.replace("—", "-").replace("–", "-")   # — – -> -
+                .replace("‘", "'").replace("’", "'")   # ‘ ’ -> '
+                .replace("“", '"').replace("”", '"'))  # “ ” -> "
+
+
+_PROSE_FIELDS = ("question", "statement", "explanation")
+
+
 def _normalize_lean_text(lean: dict) -> dict:
-    """In-place: strip a trailing period from the question stem / statement and from
-    each option's content. Graded values (TEXTUAL/FIB answers, expected output) and
-    `code` are intentionally left literal."""
+    """In-place cleanup of learner-facing text so it never carries the 'machine-generated'
+    typography reviewers reject: normalize en/em dashes + smart quotes to plain typography,
+    and strip a trailing period from stems / options. Graded values (TEXTUAL/FIB answers,
+    expected output) and the `code` field are intentionally left literal. (Source meta-
+    references like 'as stated in the course material' are enforced in the prompt + the
+    review stage, not stripped here.)"""
     if not isinstance(lean, dict):
         return lean
+    # (1) typography — every learner-facing prose field (stem, statement, explanation, options,
+    #     rearrange items); never the `code` field or graded answer values.
+    for fld in _PROSE_FIELDS:
+        if isinstance(lean.get(fld), str):
+            lean[fld] = _humanize_typography(lean[fld])
+    for o in (lean.get("options") or []):
+        if isinstance(o, dict) and isinstance(o.get("content"), str):
+            o["content"] = _humanize_typography(o["content"])
+    if isinstance(lean.get("ordered_items"), list):
+        lean["ordered_items"] = [_humanize_typography(x) if isinstance(x, str) else x
+                                 for x in lean["ordered_items"]]
+    # (2) trailing period on stems / options (existing house rule).
     for fld in ("question", "statement"):
         if isinstance(lean.get(fld), str):
             lean[fld] = _strip_trailing_period(lean[fld])

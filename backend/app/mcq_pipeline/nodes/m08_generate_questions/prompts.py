@@ -130,7 +130,7 @@ Avoid:
 - ambiguous wording
 
 SELF-CONTAINED — the question is an INDEPENDENT resource. The learner sees ONLY the stem and options, never the reading material. Therefore:
-- Embed EVERY detail needed to answer directly in the stem. Never defer to the source: no 'according to the material', 'based on the lesson', 'in the reading/passage', 'as discussed', 'from this session'.
+- Embed EVERY detail needed to answer directly in the stem. Never defer to the source — not in the STEM, the OPTIONS, or the EXPLANATION — with phrases like 'according to the material', 'as described in the course material', 'as stated in the course material', 'based on the lesson', 'in the reading/passage', 'as discussed', or 'from this session'. State the fact directly instead (write "Python powers the backends of large-scale systems", never "Python powers ... as described in the course material").
 - Never reference a source-local example entity the learner cannot see — a scenario label ('Project A'/'Project B'), a sample file/variable/function name, or a one-off value from the reading. If a scenario is needed, define it fully and generically IN THE STEM so it stands alone.
 - Test transferable understanding of the concept, not recall of an arbitrary detail from one example.
 
@@ -144,7 +144,7 @@ _MARKDOWN_RULES = register("gen.markdown_rules", """\
 MARKDOWN FORMATTING
 
 The portal renders the question text and the explanation as MARKDOWN. Write them as clean Markdown, matching the house style of the question bank:
-- INLINE CODE (REQUIRED) — wrap EVERY code-level token you mention in prose in `backticks`: variable and identifier names, function/method names, keywords, operators, literal values, and program output. This applies to the STEM, the OPTIONS, and the EXPLANATION. Examples: "store the result in `result`", "compare `a` and `b`", "the loop calls `range()`", "it prints `10`". Never write a bare variable name or value in prose without backticks.
+- INLINE CODE (REQUIRED) — wrap EVERY code-level token you mention in prose in `backticks`: variable and identifier names, function/method names, keywords, operators, literal values, and program output. This applies to the STEM, the OPTIONS, and the EXPLANATION. Examples: "store the result in `result`", "compare `a` and `b`", "the loop calls `range()`", "it prints `10`". Never write a bare variable name or value in prose without backticks. Backtick ONLY genuine code tokens — NEVER wrap an ordinary English word or concept name in backticks (write "the request-response flow", NOT "the `request-response flow`"; "object-oriented programming", NOT "`object-oriented programming`"). Backticks around plain prose read as machine-generated and are rejected.
 - BOLD THE PIVOTAL VALUE — when the question turns on ONE specific value, result, or output, put THAT term in **bold** (e.g. "the snippet prints **10**", "the expression evaluates to **True**", "this returns **equal**"). Use bold ONLY for that pivot, not decoratively, and not on every key term.
 - Keep the stem a SINGLE SHORT PARAGRAPH. Do NOT use headings (#), and do NOT use bullet or numbered lists in the stem (the question bank never does) — write the prompt as running prose. Reserve a '-' list only for a genuine enumeration in the EXPLANATION.
 - Real code goes in the dedicated `code` field, NEVER as a fenced ``` block inside the stem.
