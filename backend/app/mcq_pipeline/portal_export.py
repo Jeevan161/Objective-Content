@@ -54,11 +54,12 @@ def _slug(value) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
-def _tags(lo: dict, q: dict, n: int) -> list[str]:
-    """Per-question tag_names — one prefixed, snake_cased tag per LO facet:
-    t_ topic · c_ concept · sc_ sub_concept · lo_ learning_outcome ·
+def _tags(lo: dict, q: dict, n: int, course: str = "") -> list[str]:
+    """Per-question tag_names — one prefixed, snake_cased tag per facet:
+    course_ course · t_ topic · c_ concept · sc_ sub_concept · lo_ learning_outcome ·
     bl_ blooms_level · bc_ blooms_cat · la_ learner_action. Empty facets are skipped."""
     facets = {
+        "course": course,
         "t": lo.get("topic"),
         "c": lo.get("concept"),
         "sc": lo.get("sub_concept"),
@@ -274,10 +275,10 @@ def _rearrange(q, lean, key, tags, diff):
     }
 
 
-def _convert(q: dict, lo: dict, n: int):
+def _convert(q: dict, lo: dict, n: int, course: str = ""):
     qt = q.get("question_type")
     lean = q.get("lean") or {}
-    key, tags, diff = _key(lo, q, n), _tags(lo, q, n), _difficulty(q, lo)
+    key, tags, diff = _key(lo, q, n), _tags(lo, q, n, course), _difficulty(q, lo)
     if qt in ("MULTIPLE_CHOICE", "MORE_THAN_ONE_MULTIPLE_CHOICE"):
         return _mcq(q, lean, key, tags, diff, qtype=qt)
     if qt == "TRUE_OR_FALSE":
@@ -300,12 +301,13 @@ def build_groups(result: dict) -> dict[str, list]:
     """Group a run's GENERATED questions into the four portal folders."""
     groups: dict[str, list] = {g: [] for g in GROUPS}
     los = {lo.get("outcome"): lo for lo in (result.get("final_los") or [])}
+    course = result.get("course_name") or result.get("course_id") or ""
     n = 0
     for q in (result.get("questions") or []):
         if q.get("status") != "generated" or not q.get("lean") or q.get("excluded"):
             continue
         n += 1
-        group, obj = _convert(q, los.get(q.get("outcome"), {}), n)
+        group, obj = _convert(q, los.get(q.get("outcome"), {}), n, course)
         if obj is not None:
             groups[group].append(obj)
     return groups
