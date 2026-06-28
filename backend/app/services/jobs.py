@@ -394,3 +394,74 @@ def start_mcq_regen_job(job_id: uuid.UUID, run_id: uuid.UUID, outcome: str,
     )
     thread.start()
     return thread
+
+
+# --- Portal export / load (background) -------------------------------------- #
+def _load_sink(job_id: uuid.UUID):
+    """Progress sink for LOAD/EXPORT jobs: write the current step text onto job.message
+    (the Activity drawer shows that) and keep the job RUNNING. Each flush is its own session."""
+    def sink(snapshot: dict) -> None:
+        from app.models import SyncJob
+        with SessionLocal() as session:
+            job = session.get(SyncJob, job_id)
+            if job is not None:
+                if "message" in snapshot:
+                    job.message = snapshot["message"]
+                if job.status not in (SyncJob.SUCCESS, SyncJob.FAILURE):
+                    job.status = SyncJob.RUNNING
+                job.updated_at = _now()
+                session.commit()
+        progress_broker.publish(str(job_id))
+    return sink
+
+
+def _finalize_load_job(job_id: uuid.UUID, result: dict) -> None:
+    """Mirror a load/export pipeline result onto the SyncJob row (terminal state + message)."""
+    from app.models import SyncJob
+    status = (result or {}).get("status", "SUCCESS")
+    with SessionLocal() as session:
+        job = session.get(SyncJob, job_id)
+        if job is not None:
+            failed = status == "FAILURE"
+            job.status = SyncJob.FAILURE if failed else SyncJob.SUCCESS
+            job.message = (result or {}).get("message", "") or status
+            if failed:
+                job.error = (result or {}).get("message", "")
+            job.progress = {**(job.progress or {}), "result": result}
+            job.updated_at = _now()
+            session.commit()
+    progress_broker.publish(str(job_id))
+
+
+def _run_load_job(job_id: uuid.UUID, run_id: uuid.UUID, body: dict) -> None:
+    from app.services.beta_load import run_load
+    user_id = _bind_user_for_job(job_id)
+    try:
+        result = run_load(job_id, run_id, body, user_id, _load_sink(job_id))
+        _finalize_load_job(job_id, result)
+    except Exception as err:  # noqa: BLE001
+        _fail_job(job_id, err)
+        progress_broker.publish(str(job_id))
+
+
+def _run_export_job(job_id: uuid.UUID, run_id: uuid.UUID, approved_only: bool) -> None:
+    from app.services.beta_load import run_export
+    user_id = _bind_user_for_job(job_id)
+    try:
+        result = run_export(job_id, run_id, approved_only, user_id, _load_sink(job_id))
+        _finalize_load_job(job_id, result)
+    except Exception as err:  # noqa: BLE001
+        _fail_job(job_id, err)
+        progress_broker.publish(str(job_id))
+
+
+def start_load_job(job_id: uuid.UUID, run_id: uuid.UUID, body: dict) -> threading.Thread:
+    thread = threading.Thread(target=_run_load_job, args=(job_id, run_id, body), daemon=True)
+    thread.start()
+    return thread
+
+
+def start_export_job(job_id: uuid.UUID, run_id: uuid.UUID, approved_only: bool) -> threading.Thread:
+    thread = threading.Thread(target=_run_export_job, args=(job_id, run_id, approved_only), daemon=True)
+    thread.start()
+    return thread

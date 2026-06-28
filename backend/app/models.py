@@ -210,6 +210,8 @@ class SyncJob(Base):
     RAG = "RAG"
     MCQ = "MCQ"
     REGEN = "REGEN"                       # one-question regeneration (Review Queue)
+    LOAD = "LOAD"                         # portal "Prepare & Load" (background)
+    EXPORT = "EXPORT"                     # build + upload the questions ZIP (background)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     job_type: Mapped[str] = mapped_column(String(16), default=SYNC)
@@ -500,4 +502,10 @@ class BetaLoad(Base):
     s3_url: Mapped[str] = mapped_column(Text, default="")
     request_id: Mapped[str] = mapped_column(String(64), default="")
     message: Mapped[str] = mapped_column(Text, default="")
+    # Soft link to the background SyncJob that performed this load/export (nullable).
+    job_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
+    # Snapshot of exactly what was loaded/exported: the {**result, "questions": [...]} payload,
+    # so the loaded content can be viewed later even if the run is regenerated. Nullable for
+    # legacy rows predating this column.
+    content: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = created_at_col()

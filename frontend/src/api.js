@@ -222,14 +222,17 @@ export const exportMcqRunZip = (runId, approvedOnly = false) =>
     method: 'POST',
   })
 
-// Full beta-load pipeline: build+upload the ZIP, copy+fill the exam-config sheet,
-// submit the load, poll it, and unlock. Can take up to a couple of minutes.
-// Returns { status, message, sheet_url, resource_id, request_id, total, ... }.
+// Full beta-load pipeline (build+upload ZIP, fill exam-config sheet, submit+poll, unlock).
+// Now runs as a BACKGROUND job — returns a SyncJob (job_type LOAD) to track in Activity.
 export const prepareAndLoadMcqRun = (runId, fields) =>
   request(`/courses/mcq/runs/${runId}/prepare-and-load/`, {
     method: 'POST',
     body: JSON.stringify(fields),
   })
+
+// Portal loads + ZIP exports (newest first). Detail includes the loaded-questions snapshot.
+export const listLoads = (limit = 100) => request(`/courses/mcq/loads/?limit=${limit}`)
+export const getLoad = (loadId) => request(`/courses/mcq/loads/${loadId}/`)
 
 // --- MCQ pipeline & prompts (admin) ---
 // The ordered pipeline stages, each with the prompts that drive it.
