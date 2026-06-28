@@ -234,12 +234,13 @@ def admin_stats(_: User = Depends(require_elevated),
 
 
 @router.get("/admin/logs")
-def admin_logs(level: str | None = None, limit: int = 200,
+def admin_logs(level: str | None = None, limit: int = 200, offset: int = 0,
                _: User = Depends(require_elevated),
                session: Session = Depends(get_session)) -> list[dict]:
-    stmt = select(TaskLog).order_by(TaskLog.created_at.desc()).limit(min(limit, 1000))
+    stmt = select(TaskLog).order_by(TaskLog.created_at.desc())
     if level:
         stmt = stmt.where(TaskLog.level == level.upper())
+    stmt = stmt.offset(max(0, offset)).limit(min(max(1, limit), 1000))
     logs = session.scalars(stmt).all()
     return [{
         "id": t.id, "task_type": t.task_type, "level": t.level, "event": t.event,

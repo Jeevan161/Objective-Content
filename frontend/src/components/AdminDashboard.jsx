@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ShieldCheck, UserCheck, UserX, RefreshCw, KeyRound, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { ShieldCheck, UserCheck, UserX, RefreshCw, KeyRound, ThumbsUp, ThumbsDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   adminStats, adminApproveUser, adminDeactivateUser, adminSetRole, adminLogs,
   adminMcqFeedback, adminAppFeedback,
@@ -16,19 +16,22 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState(null)
   const [logs, setLogs] = useState([])
   const [level, setLevel] = useState('')
+  const [logPage, setLogPage] = useState(0)        // 0-based page for the Task logs table
+  const [logsBusy, setLogsBusy] = useState(false)
   const [appFeedback, setAppFeedback] = useState([])
   const [mcqFeedback, setMcqFeedback] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
 
+  const LOGS_PAGE_SIZE = 50
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, l, af, mf] = await Promise.all([
-        adminStats(), adminLogs(level), adminAppFeedback(), adminMcqFeedback(),
+      const [s, af, mf] = await Promise.all([
+        adminStats(), adminAppFeedback(), adminMcqFeedback(),
       ])
       setStats(s)
-      setLogs(l)
       setAppFeedback(af)
       setMcqFeedback(mf)
     } catch (e) {
@@ -36,9 +39,23 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false)
     }
-  }, [level, toast])
+  }, [toast])
+
+  // Task logs are paginated independently (level filter + page), so changing page or
+  // filter doesn't re-fetch the whole dashboard.
+  const loadLogs = useCallback(async () => {
+    setLogsBusy(true)
+    try {
+      setLogs(await adminLogs(level, LOGS_PAGE_SIZE, logPage * LOGS_PAGE_SIZE))
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not load logs', message: e.message })
+    } finally {
+      setLogsBusy(false)
+    }
+  }, [level, logPage, toast])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadLogs() }, [loadLogs])
 
   async function act(id, fn, label) {
     setBusyId(id)
@@ -143,7 +160,7 @@ export default function AdminDashboard() {
               <div className="admin-log-filters">
                 {['', 'INFO', 'WARNING', 'ERROR'].map((lv) => (
                   <button key={lv || 'all'} className={`mcq-chip ${level === lv ? 'active' : ''}`}
-                    onClick={() => setLevel(lv)}>{lv || 'all'}</button>
+                    onClick={() => { setLevel(lv); setLogPage(0) }}>{lv || 'all'}</button>
                 ))}
               </div>
             </div>
@@ -165,6 +182,19 @@ export default function AdminDashboard() {
                   {logs.length === 0 && <tr><td colSpan={5} className="admin-empty">No logs.</td></tr>}
                 </tbody>
               </table>
+            </div>
+            <div className="admin-pager">
+              <button className="btn btn-soft btn-sm" disabled={logPage === 0 || logsBusy}
+                onClick={() => setLogPage((p) => Math.max(0, p - 1))}>
+                <ChevronLeft size={14} /> Prev
+              </button>
+              <span className="admin-pager-info">
+                Page {logPage + 1}{logsBusy ? ' · loading…' : ''}
+              </span>
+              <button className="btn btn-soft btn-sm" disabled={logs.length < LOGS_PAGE_SIZE || logsBusy}
+                onClick={() => setLogPage((p) => p + 1)}>
+                Next <ChevronRight size={14} />
+              </button>
             </div>
           </div>
 

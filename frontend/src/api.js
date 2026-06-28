@@ -296,8 +296,8 @@ export const adminDeactivateUser = (id) => request(`/admin/users/${id}/deactivat
 export const adminSetRole = (id, role) =>
   request(`/admin/users/${id}/role`, { method: 'POST', body: JSON.stringify({ role }) })
 export const adminStats = () => request('/admin/stats')
-export const adminLogs = (level = '', limit = 200) =>
-  request(`/admin/logs?limit=${limit}${level ? `&level=${level}` : ''}`)
+export const adminLogs = (level = '', limit = 200, offset = 0) =>
+  request(`/admin/logs?limit=${limit}&offset=${offset}${level ? `&level=${level}` : ''}`)
 // All application-level feedback submissions (admin).
 export const adminAppFeedback = (limit = 200) => request(`/admin/feedback?limit=${limit}`)
 // All MCQ reviewer feedback actions (admin).
