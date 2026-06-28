@@ -367,7 +367,8 @@ def serialize_job(job: SyncJob) -> dict:
     }
 
 
-def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "") -> dict:
+def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "",
+                      loaded: bool = False) -> dict:
     # Eligible = generated questions a reviewer hasn't excluded; the load gate compares
     # approved_count against this.
     qs = (run.result or {}).get("questions") or []
@@ -389,6 +390,9 @@ def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "")
         "eligible_count": eligible,
         "excluded_count": excluded,
         "review_status": getattr(run, "review_status", "draft"),
+        # True once this run has been successfully loaded to the portal — the review UI
+        # marks it "Loaded" and hides the load option to prevent re-loading.
+        "loaded": loaded,
         "created_by": getattr(run, "created_by", None),
         "created_at": run.created_at,
     }
