@@ -137,7 +137,10 @@ class QuestionExcludeRequest(BaseModel):
 
 class PrepareSheetRequest(BaseModel):
     """User-facing fields for the exam-config sheet (Form tab). The rest is derived:
-    parent = run.topic_id, number of questions = generated count, name = 'MCQ Practice'."""
+    number of questions = generated count, name = 'MCQ Practice'."""
+    # Parent resource (Form!B14). Defaults to the run's topic_id; the reviewer may override
+    # it at load time (e.g. to attach the exam under a different topic).
+    topic_id: str = ""
     child_order: int
     duration_min: int = 30
     pass_percentage: float = 80.0          # percent (80 → stored as 0.8 in Form!B40)
@@ -361,7 +364,7 @@ def serialize_job(job: SyncJob) -> dict:
     }
 
 
-def serialize_mcq_run(run, *, include_result: bool = True) -> dict:
+def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "") -> dict:
     # Eligible = generated questions a reviewer hasn't excluded; the load gate compares
     # approved_count against this.
     qs = (run.result or {}).get("questions") or []
@@ -372,6 +375,7 @@ def serialize_mcq_run(run, *, include_result: bool = True) -> dict:
         "job_id": run.job_id,
         "course_id": run.course_id,
         "topic_id": run.topic_id,
+        "topic_name": topic_name,
         "unit_id": run.unit_id,
         "version": getattr(run, "version", 1),
         "langsmith_run_url": run.langsmith_run_url,

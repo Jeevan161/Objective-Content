@@ -592,7 +592,17 @@ def list_mcq_runs(
     if unit_id:
         stmt = stmt.where(McqRun.unit_id == unit_id)
     runs = session.scalars(stmt).all()
-    return [serialize_mcq_run(r, include_result=False) for r in runs]
+    # Resolve each run's topic NAME (one query) so the run list can show it next to the id.
+    tids = {r.topic_id for r in runs if r.topic_id}
+    nmap: dict = {}
+    if tids:
+        for c, t, n in session.execute(
+            select(Topic.course_id, Topic.topic_id, Topic.topic_name)
+            .where(Topic.course_id.in_({r.course_id for r in runs}), Topic.topic_id.in_(tids))
+        ):
+            nmap[(c, t)] = n
+    return [serialize_mcq_run(r, include_result=False, topic_name=nmap.get((r.course_id, r.topic_id), ""))
+            for r in runs]
 
 
 @router.get("/courses/mcq/runs/{run_id}/")
@@ -606,7 +616,10 @@ def get_mcq_run(run_id: uuid.UUID, session: Session = Depends(get_session),
     if (run.created_by is not None and run.created_by != user.id
             and user.role != User.ROLE_ADMIN):
         raise HTTPException(status_code=404, detail="MCQ run not found.")
-    return serialize_mcq_run(run)
+    tname = (session.scalar(select(Topic.topic_name).where(
+                 Topic.course_id == run.course_id, Topic.topic_id == run.topic_id))
+             if run.topic_id else "") or ""
+    return serialize_mcq_run(run, topic_name=tname)
 
 
 def _export_filename(run) -> str:
@@ -706,10 +719,12 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     _require_reviewed(run)
-    if not run.topic_id:
+    # Parent resource (Form!B14): the reviewer's override if supplied at load, else the run's topic.
+    parent_topic_id = (body.topic_id or "").strip() or run.topic_id
+    if not parent_topic_id:
         raise HTTPException(status_code=400,
-                            detail="This run has no topic_id, so the exam's parent "
-                                   "resource cannot be set. Re-run with a topic selected.")
+                            detail="No topic_id for the exam's parent resource. Enter a topic "
+                                   "id at load, or re-run with a topic selected.")
 
     # One id per unit, shared by the exam (Form!B5) AND the questions JSON filename in
     # the ZIP, so the loader can match the questions file to the exam unit.
@@ -740,7 +755,7 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
     try:
         sheet = beta_sheet.prepare_sheet(
             resource_id=resource_id,
-            topic_id=run.topic_id,
+            topic_id=parent_topic_id,
             num_questions=info["total_questions"],
             child_order=body.child_order,
             duration_min=body.duration_min,
