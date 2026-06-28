@@ -29,16 +29,20 @@ function ReviewQueuePage({ courses, onTrackJob }) {
   const [run, setRun] = useState(null)
   const [loadingRun, setLoadingRun] = useState(false)
   const [railOpen, setRailOpen] = useState(false)   // collapsed queue opens on click, not hover
+  const [tab, setTab] = useState('queue')           // 'queue' (needs review) | 'reviewed'
 
   const nameOf = useMemo(
     () => Object.fromEntries((courses || []).map((c) => [c.course_id, c.course_name || c.course_id])),
     [courses],
   )
+  const queueRuns = useMemo(() => (runs || []).filter(needsReview), [runs])
+  const reviewedRuns = useMemo(() => (runs || []).filter((r) => !needsReview(r)), [runs])
+  const shownRuns = tab === 'queue' ? queueRuns : reviewedRuns
 
   function load() {
     setRuns(null)
     listAllMcqRuns()
-      .then((rows) => setRuns((rows || []).filter(needsReview)))
+      .then((rows) => setRuns(rows || []))
       .catch((e) => {
         setRuns([])
         toast.push({ kind: 'error', title: 'Could not load review queue', message: e.message })
@@ -64,33 +68,48 @@ function ReviewQueuePage({ courses, onTrackJob }) {
     <div className="runs-page">
       <header className="topbar">
         <div>
-          <h1>Review Queue</h1>
+          <h1>Review</h1>
           <p className="topbar-sub">
-            Runs awaiting review. Approve or reject each question, then load the approved set to the portal.
+            Approve or reject each question, then load the approved set to the portal.
           </p>
         </div>
         <div className="topbar-actions">
-          <button className="btn btn-ghost btn-sm" onClick={load} data-tip="Reload queue">
+          <button className="btn btn-ghost btn-sm" onClick={load} data-tip="Reload">
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
       </header>
 
-      {runs === null && (
-        <div className="mcq-loading">
-          <Spinner size={14} /> Loading review queue…
+      {runs !== null && (
+        <div className="queue-tabs">
+          <button type="button" className={`mcq-chip ${tab === 'queue' ? 'active' : ''}`}
+            onClick={() => { setTab('queue'); setSelectedId(null); setRun(null) }}>
+            Review Queue {queueRuns.length > 0 && <span className="mcq-chip-n">{queueRuns.length}</span>}
+          </button>
+          <button type="button" className={`mcq-chip ${tab === 'reviewed' ? 'active' : ''}`}
+            onClick={() => { setTab('reviewed'); setSelectedId(null); setRun(null) }}>
+            Reviewed {reviewedRuns.length > 0 && <span className="mcq-chip-n">{reviewedRuns.length}</span>}
+          </button>
         </div>
       )}
 
-      {runs && runs.length === 0 && (
+      {runs === null && (
+        <div className="mcq-loading">
+          <Spinner size={14} /> Loading runs…
+        </div>
+      )}
+
+      {runs !== null && shownRuns.length === 0 && (
         <EmptyState
           icon={ClipboardCheck}
-          title="Nothing to review"
-          hint="When a run finishes generating it shows up here until every question is approved."
+          title={tab === 'queue' ? 'Nothing to review' : 'No reviewed sets yet'}
+          hint={tab === 'queue'
+            ? 'When a run finishes generating it shows up here until every question is approved.'
+            : 'Sets you mark reviewed (all questions approved) appear here.'}
         />
       )}
 
-      {runs && runs.length > 0 && (
+      {shownRuns.length > 0 && (
         <div className={`runs-layout queue-layout${selectedId ? ' is-collapsed' : ''}`}>
           <div className={`queue-rail${railOpen ? ' rail-open' : ''}`}>
             {selectedId && (
@@ -101,7 +120,7 @@ function ReviewQueuePage({ courses, onTrackJob }) {
               </button>
             )}
             <ul className="runs-list">
-            {runs.map((r) => (
+            {shownRuns.map((r) => (
               <li key={r.id}>
                 <button
                   type="button"

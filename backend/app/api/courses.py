@@ -762,7 +762,10 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
             pass_percentage=body.pass_percentage / 100.0,
             show_answer_scoring_mode=body.show_answer_scoring_mode,
             should_send_solutions=body.should_send_solutions,
-            share_emails=[(body.reviewer_email or "").strip() or user.email],
+            # Always share with the loader (the current user), plus the reviewer email if given.
+            # The standing "hardcoded users" come from settings.mcq_sheet_share_emails (added inside
+            # prepare_sheet), so they're always included too.
+            share_emails=[e for e in [user.email, (body.reviewer_email or "").strip()] if e],
         )
     except Exception as err:  # noqa: BLE001
         log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
