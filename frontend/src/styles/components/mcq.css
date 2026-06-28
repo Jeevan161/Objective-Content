@@ -1472,6 +1472,28 @@
   .mcq-split-reading { max-height: 60vh; }
 }
 
+/* ── Collapsible card fields (Details / Review / Grounding start collapsed) ── */
+.qc-collapsible-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-3);
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+.qc-collapsible-head:hover { color: var(--text); }
+.qc-collapsible-chev { transition: transform var(--t-fast); flex-shrink: 0; }
+.qc-collapsible.open .qc-collapsible-chev { transform: rotate(90deg); }
+.qc-collapsible-body { margin-top: var(--sp-2); }
+
+/* Review page: Queue / Reviewed tabs */
+.queue-tabs { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+
 /* ── Review deck: Q1/Q2… navigator + one-card-at-a-time view ─────────────── */
 .qc-review-deck {
   display: flex;

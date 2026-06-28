@@ -89,6 +89,22 @@ function Field({ label, children }) {
   )
 }
 
+// A Field whose body can be collapsed behind its label (used for the secondary card
+// sections — metadata, grounding, review — which start collapsed to reduce clutter).
+function Collapsible({ label, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <section className={`qc-field qc-collapsible ${open ? 'open' : ''}`}>
+      <button type="button" className="qc-field-label qc-collapsible-head"
+        onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <ChevronRight size={12} className="qc-collapsible-chev" />
+        {label}
+      </button>
+      {open && <div className="qc-collapsible-body">{children}</div>}
+    </section>
+  )
+}
+
 // Compact, human-readable summary of one recorded RAG call.
 function ragArg(c) {
   const a = c.args || {}
@@ -368,14 +384,16 @@ function QuestionCard({ q, lo, index, review }) {
         <span className="qc-tests-v">{lo?.description || lo?.outcome || q.outcome}</span>
       </div>
 
-      <div className="qc-meta-tags">
-        {lo?.topic && <span className="qc-tag"><b>Topic</b> {lo.topic}</span>}
-        {lo?.concept && <span className="qc-tag"><b>Concept</b> {lo.concept}</span>}
-        {lo?.sub_concept && lo.sub_concept !== lo.concept && (
-          <span className="qc-tag"><b>Sub-concept</b> {lo.sub_concept}</span>
-        )}
-        <span className="qc-tag"><b>LO</b> <code>{lo?.outcome || q.outcome}</code></span>
-      </div>
+      <Collapsible label="Details">
+        <div className="qc-meta-tags">
+          {lo?.topic && <span className="qc-tag"><b>Topic</b> {lo.topic}</span>}
+          {lo?.concept && <span className="qc-tag"><b>Concept</b> {lo.concept}</span>}
+          {lo?.sub_concept && lo.sub_concept !== lo.concept && (
+            <span className="qc-tag"><b>Sub-concept</b> {lo.sub_concept}</span>
+          )}
+          <span className="qc-tag"><b>LO</b> <code>{lo?.outcome || q.outcome}</code></span>
+        </div>
+      </Collapsible>
 
       {q.fallback && (
         <div className="qc-note">
@@ -452,7 +470,7 @@ function QuestionCard({ q, lo, index, review }) {
       )}
 
       {(q.attempts > 0 || issues.length > 0 || q.review?.summary) && (
-        <Field label={`Review${q.attempts ? ` · ${q.attempts} fix attempt${q.attempts === 1 ? '' : 's'}` : ''}`}>
+        <Collapsible label={`Review${q.attempts ? ` · ${q.attempts} fix attempt${q.attempts === 1 ? '' : 's'}` : ''}`}>
           {q.review?.summary && <p className="qc-review-summary">{q.review.summary}</p>}
           {issues.map((iss, i) => (
             <div key={i} className="qc-issue">
@@ -463,11 +481,11 @@ function QuestionCard({ q, lo, index, review }) {
               </span>
             </div>
           ))}
-        </Field>
+        </Collapsible>
       )}
 
       {ragCalls.length > 0 && (
-        <Field label="Grounding"><RagCalls calls={ragCalls} /></Field>
+        <Collapsible label="Grounding"><RagCalls calls={ragCalls} /></Collapsible>
       )}
 
       {review}

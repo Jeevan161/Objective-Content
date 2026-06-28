@@ -139,15 +139,6 @@ function Sidebar({
           {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
         </button>
-        <button
-          className="nav-item nav-collapse"
-          onClick={onToggleCollapse}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          {...tip(collapsed ? 'Expand sidebar' : 'Collapse')}
-        >
-          {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
-          <span>Collapse</span>
-        </button>
       </div>
     </aside>
   )
