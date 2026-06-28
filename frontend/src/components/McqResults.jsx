@@ -799,9 +799,13 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
   const shown = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
   // Review uses a one-card-at-a-time deck with a Q1/Q2… navigator; `current` indexes `shown`.
   const [current, setCurrent] = useState(0)
+  const navRef = useRef(null)
   useEffect(() => {                                  // keep the index in range as the list/filter changes
     if (current > shown.length - 1) setCurrent(Math.max(0, shown.length - 1))
   }, [shown.length, current])
+  useEffect(() => {                                  // keep the active Q chip in view in the navigator
+    navRef.current?.querySelector('.qc-nav-item.active')?.scrollIntoView({ block: 'nearest' })
+  }, [current])
   const curQ = shown[Math.min(current, Math.max(0, shown.length - 1))]
 
   // Reading material sits to the RIGHT of the questions, behind a draggable adjustment bar.
@@ -1035,7 +1039,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
 
           {review ? (
             <div className="qc-review-deck">
-              <nav className="qc-nav" aria-label="Questions">
+              <nav className="qc-nav" aria-label="Questions" ref={navRef}>
                 {shown.map((q, i) => {
                   const st = qStatus(q, regenOutcome)
                   return (
@@ -1043,7 +1047,7 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
                       className={`qc-nav-item st-${st} ${i === current ? 'active' : ''}`}
                       onClick={() => setCurrent(i)}
                       title={`Q${questions.indexOf(q) + 1} — ${STATUS_LABEL[st]}`}>
-                      <span className="qc-nav-ic"><StatusIcon status={st} size={15} /></span>
+                      <span className="qc-nav-ic"><StatusIcon status={st} size={16} /></span>
                       <span className="qc-nav-n">Q{questions.indexOf(q) + 1}</span>
                     </button>
                   )

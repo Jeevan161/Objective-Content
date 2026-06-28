@@ -28,6 +28,7 @@ function ReviewQueuePage({ courses, onTrackJob }) {
   const [selectedId, setSelectedId] = useState(null)
   const [run, setRun] = useState(null)
   const [loadingRun, setLoadingRun] = useState(false)
+  const [railOpen, setRailOpen] = useState(false)   // collapsed queue opens on click, not hover
 
   const nameOf = useMemo(
     () => Object.fromEntries((courses || []).map((c) => [c.course_id, c.course_name || c.course_id])),
@@ -50,6 +51,7 @@ function ReviewQueuePage({ courses, onTrackJob }) {
 
   function open(r) {
     setSelectedId(r.id)
+    setRailOpen(false)            // close the queue overlay after picking a run
     setRun(null)
     setLoadingRun(true)
     getMcqRun(r.id)
@@ -90,9 +92,10 @@ function ReviewQueuePage({ courses, onTrackJob }) {
 
       {runs && runs.length > 0 && (
         <div className={`runs-layout queue-layout${selectedId ? ' is-collapsed' : ''}`}>
-          <div className="queue-rail">
+          <div className={`queue-rail${railOpen ? ' rail-open' : ''}`}>
             {selectedId && (
-              <button type="button" className="queue-handle" aria-label="Show run queue">
+              <button type="button" className="queue-handle" aria-label={railOpen ? 'Hide run queue' : 'Show run queue'}
+                aria-expanded={railOpen} onClick={() => setRailOpen((o) => !o)}>
                 <ChevronRight size={16} />
                 <span className="queue-handle-label">Queue</span>
               </button>
