@@ -1066,18 +1066,20 @@ function McqResults({ run, mode = "view", courseId, unitId, onTrackJob }) {
                     Next <ChevronRight size={14} />
                   </button>
                 </div>
-                {curQ ? (
-                  <QuestionCard key={curQ.outcome} q={curQ} lo={loByOutcome[curQ.outcome]}
-                    index={questions.indexOf(curQ)}
-                    review={curQ.status === 'generated' ? (
-                      <QuestionReview
-                        q={curQ} busy={busyOutcome === curQ.outcome}
-                        onApprove={(approval) => handleSetApproval(curQ.outcome, approval)}
-                        onRegenerate={(fb, tags) => handleRegenerate(curQ.outcome, fb, tags)}
-                        onExclude={(excluded) => handleSetExclusion(curQ.outcome, excluded)}
-                      />
-                    ) : null} />
-                ) : <p className="muted">No questions in this filter.</p>}
+                <div className="qc-deck-body">
+                  {curQ ? (
+                    <QuestionCard key={curQ.outcome} q={curQ} lo={loByOutcome[curQ.outcome]}
+                      index={questions.indexOf(curQ)}
+                      review={curQ.status === 'generated' ? (
+                        <QuestionReview
+                          q={curQ} busy={busyOutcome === curQ.outcome}
+                          onApprove={(approval) => handleSetApproval(curQ.outcome, approval)}
+                          onRegenerate={(fb, tags) => handleRegenerate(curQ.outcome, fb, tags)}
+                          onExclude={(excluded) => handleSetExclusion(curQ.outcome, excluded)}
+                        />
+                      ) : null} />
+                  ) : <p className="muted">No questions in this filter.</p>}
+                </div>
               </div>
             </div>
           ) : (
