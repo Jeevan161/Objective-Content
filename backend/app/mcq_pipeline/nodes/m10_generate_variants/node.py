@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.mcq_pipeline.config import EXCLUDED_QUESTION_TYPES
 from app.mcq_pipeline.prompts.store import get_prompt
 from app.mcq_pipeline.utils import scope
+from app.mcq_pipeline.utils.concurrency import pmap
 from app.mcq_pipeline.nodes.m08_generate_questions.node import generate_lean
 from app.mcq_pipeline.nodes.m10_generate_variants.prompts import (
     _DIRECTIVE, _FIDELITY_SYS, _OBJECTIVE_SYS,
@@ -30,6 +31,9 @@ from app.mcq_pipeline.nodes.m10_generate_variants.prompts import (
 
 CQ_VARIANT_MIN = 4
 CQ_VARIANT_MAX = 10
+# Bases are expanded concurrently. Kept below the m08 default (8) because each base fires
+# several LLM calls (generate_lean + fidelity judge per spec), so this bounds provider load.
+CQ_VARIANT_WORKERS = 4
 
 # Theory angles per Bloom tier (cumulative: a tier includes all lower tiers' angles). Each angle
 # is (key, default_type, instruction). Gating by the LO's clamped tier keeps us within taught depth.
@@ -242,20 +246,24 @@ def _make_variant(spec: dict, lo: dict, objective: dict, base_key: str, idx: int
 def generate_variants_for_questions(
     los: list[dict], questions: list[dict], *, adapter,
     min_n: int = CQ_VARIANT_MIN, max_n: int = CQ_VARIANT_MAX, on_progress=None,
+    workers: int = CQ_VARIANT_WORKERS,
 ) -> tuple[list[dict], list[dict]]:
     """Expand every generated base question into objective-bound variants.
 
-    Returns (variants, shortfalls) where shortfalls = [{base_question_key, outcome, produced,
-    target_min}] for any base that couldn't reach `min_n` distinct defensible variants."""
+    Bases are independent, so they run CONCURRENTLY (pmap rebinds the bound adapter into each
+    worker thread). Within a base, specs stay sequential — the dedup gate (`seen`) and the
+    `max_n` early-stop depend on which variants were already accepted. Returns (variants,
+    shortfalls) where shortfalls = [{base_question_key, outcome, produced, target_min}] for any
+    base that couldn't reach `min_n` distinct defensible variants."""
     scope.set_adapter(adapter)                     # generate_lean grounds via the bound adapter
     has_code = bool(getattr(adapter, "has_code", False))
     is_sql = (getattr(adapter, "domain", "") or "").upper() == "SQL"
     lo_by_outcome = {lo.get("outcome"): lo for lo in los}
-
-    variants: list[dict] = []
-    shortfalls: list[dict] = []
     bases = [q for q in questions if q.get("status") == "generated"]
-    for base in bases:
+
+    def _variants_for_base(base: dict) -> tuple[list[dict], dict | None]:
+        """All accepted variants for ONE base + an optional shortfall record. Mutates only this
+        base's own dict, so it's safe to run concurrently across bases."""
         lo = lo_by_outcome.get(base.get("outcome"))
         base_key = base.get("question_key") or base.get("outcome") or ""
         base["question_key"] = base_key
@@ -263,7 +271,7 @@ def generate_variants_for_questions(
         if lo is None:
             if on_progress:
                 on_progress()
-            continue
+            return [], None
         objective = derive_objective(base)
         base["objective"] = objective
         tier = _norm_tier(objective.get("bloom_tier") or lo.get("bloom_category"))
@@ -285,10 +293,15 @@ def generate_variants_for_questions(
             seen.append(vstem)
             accepted.append(v)
         base["variant_count"] = len(accepted)
+        shortfall = None
         if len(accepted) < min_n:
-            shortfalls.append({"base_question_key": base_key, "outcome": base.get("outcome"),
-                               "produced": len(accepted), "target_min": min_n})
-        variants.extend(accepted)
+            shortfall = {"base_question_key": base_key, "outcome": base.get("outcome"),
+                         "produced": len(accepted), "target_min": min_n}
         if on_progress:
             on_progress()
+        return accepted, shortfall
+
+    results = pmap(_variants_for_base, bases, workers=workers)
+    variants = [v for accepted, _ in results for v in accepted]
+    shortfalls = [s for _, s in results if s is not None]
     return variants, shortfalls
