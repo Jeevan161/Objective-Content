@@ -23,7 +23,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
 
-  const LOGS_PAGE_SIZE = 50
+  const LOGS_PAGE_SIZE = 10
 
   const load = useCallback(async () => {
     setLoading(true)
