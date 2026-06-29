@@ -595,6 +595,17 @@ async def mcq_job_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
             pass
 
 
+def _unit_names(session: Session, unit_ids: list) -> dict:
+    """Map portal unit_id → its human session/unit name (UnitPart.name). One query."""
+    ids = [u for u in unit_ids if u]
+    if not ids:
+        return {}
+    rows = session.execute(
+        select(UnitPart.unit_id, UnitPart.name).where(UnitPart.unit_id.in_(ids))
+    ).all()
+    return {u: n for u, n in rows if n}
+
+
 def _loaded_run_ids(session: Session, run_ids: list) -> set:
     """Subset of run_ids that have a SUCCESSFUL portal load (drives the 'Loaded' badge +
     hiding the load option). One query, empty set when there are no ids."""
@@ -636,8 +647,10 @@ def list_mcq_runs(
         ):
             nmap[(c, t)] = n
     loaded_ids = _loaded_run_ids(session, [r.id for r in runs])
+    unames = _unit_names(session, [r.unit_id for r in runs])
     return [serialize_mcq_run(r, include_result=False,
                               topic_name=nmap.get((r.course_id, r.topic_id), ""),
+                              unit_name=unames.get(r.unit_id, ""),
                               loaded=r.id in loaded_ids)
             for r in runs]
 
@@ -657,7 +670,8 @@ def get_mcq_run(run_id: uuid.UUID, session: Session = Depends(get_session),
                  Topic.course_id == run.course_id, Topic.topic_id == run.topic_id))
              if run.topic_id else "") or ""
     loaded = bool(_loaded_run_ids(session, [run.id]))
-    return serialize_mcq_run(run, topic_name=tname, loaded=loaded)
+    uname = _unit_names(session, [run.unit_id]).get(run.unit_id, "")
+    return serialize_mcq_run(run, topic_name=tname, unit_name=uname, loaded=loaded)
 
 
 @router.post("/courses/mcq/runs/{run_id}/export-beta/", status_code=status.HTTP_202_ACCEPTED)
@@ -720,6 +734,7 @@ def _serialize_beta_load(row, *, include_content: bool = False) -> dict:
     questions = content.get("questions") or []
     out = {
         "id": row.id, "action": row.action, "status": row.status,
+        "unit_name": content.get("session_label") or "",
         "run_id": row.run_id, "job_id": row.job_id, "course_id": getattr(row, "course_id", None),
         "resource_id": row.resource_id, "sheet_url": row.sheet_url, "s3_url": row.s3_url,
         "request_id": row.request_id, "unlock_id": getattr(row, "unlock_id", "") or "",

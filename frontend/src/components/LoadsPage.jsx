@@ -63,11 +63,12 @@ export default function LoadsPage({ openJobId = null, courses = [] }) {
             <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)}>
               <ArrowLeft size={14} /> Back to loads
             </button>
-            <h1 style={{ marginTop: 'var(--sp-2)' }}>
-              {isLoad ? 'Loaded content' : 'Exported content'}
+            <h1 style={{ marginTop: 'var(--sp-2)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', flexWrap: 'wrap' }}>
+              {selected.unit_name || selected.unit_id || (isLoad ? 'Loaded content' : 'Exported content')}
+              <span className="course-badge" title="Course">{courseName(selected.course_id)}</span>
             </h1>
             <p className="topbar-sub">
-              {courseName(selected.course_id)} · {selected.count} question(s) · {when(selected.created_at)}
+              {isLoad ? 'Loaded' : 'Exported'} · {selected.count} question(s) · {when(selected.created_at)}
               {selected.resource_id ? ` · resource ${selected.resource_id}` : ''}
             </p>
           </div>
@@ -138,7 +139,7 @@ export default function LoadsPage({ openJobId = null, courses = [] }) {
           <div className="admin-table-wrap">
             <table className="admin-table">
               <thead>
-                <tr><th>Action</th><th>Course</th><th>By</th><th>Status</th><th>Questions</th><th>When</th><th></th></tr>
+                <tr><th>Action</th><th>Set</th><th>By</th><th>Status</th><th>Questions</th><th>When</th><th></th></tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
@@ -148,7 +149,10 @@ export default function LoadsPage({ openJobId = null, courses = [] }) {
                         {r.action === 'load' ? <Upload size={12} /> : <FileDown size={12} />} {r.action}
                       </span>
                     </td>
-                    <td>{courseName(r.course_id)}</td>
+                    <td>
+                      <div className="loads-set">{r.unit_name || r.unit_id || '—'}</div>
+                      <span className="course-badge" title="Course">{courseName(r.course_id)}</span>
+                    </td>
                     <td>{r.user_name || '—'}</td>
                     <td>
                       <span className={`mcq-status-chip ${r.status === 'SUCCESS' ? 'ok' : r.status === 'FAILURE' ? 'err' : 'warn'}`}>

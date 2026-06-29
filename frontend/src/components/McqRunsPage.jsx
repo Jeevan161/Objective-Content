@@ -95,9 +95,12 @@ function McqRunsPage({ courses }) {
                   onClick={() => open(r)}
                 >
                   <div className="runs-item-head">
-                    <span className="runs-item-course">{nameOf[r.course_id] || r.course_id}</span>
+                    <span className="runs-item-course" title={r.unit_name || r.unit_id}>{r.unit_name || r.unit_id || 'Untitled set'}</span>
                     {r.version != null && <span className="runs-item-ver">v{r.version}</span>}
                     <span className="runs-item-date">{fmtDate(r.created_at)}</span>
+                  </div>
+                  <div className="runs-item-sub">
+                    <span className="course-badge" title="Course">{nameOf[r.course_id] || r.course_id}</span>
                   </div>
                   <div className="runs-item-stats">
                     <span>{r.lo_count} LOs</span>
