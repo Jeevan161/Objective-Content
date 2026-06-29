@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, ChevronRight, Layers } from 'lucide-react'
+import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, ChevronRight, Layers, Ban } from 'lucide-react'
 import {
   classroomQuizIngest,
   classroomQuizListDecks,
@@ -8,6 +8,7 @@ import {
   classroomQuizGenerateScope,
   classroomQuizGenerateVariants,
   classroomQuizResume,
+  cancelMcqJob,
   getMcqRun,
   mcqJobWsUrl,
 } from '../api'
@@ -49,6 +50,7 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
   const [genningVar, setGenningVar] = useState(false)
   const [resuming, setResuming] = useState(false)     // posting the LO-gate decision
   const [genning, setGenning] = useState(false)       // starting this scope's generation
+  const [cancelling, setCancelling] = useState(false) // cancelling the active job
   // Paused at the LO-finalization gate (Gate 1): stop streaming, show the review UI.
   const paused = !!(job && job.status === 'AWAITING_REVIEW' && job.progress?.gate === 'outcomes')
   const streamable = !!(job && job.id && !TERMINAL.includes(job.status) && !paused)
@@ -119,6 +121,20 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [varJob?.id, varStreamable])
 
+  const handleCancel = async () => {
+    const target = varRunning ? varJob : job
+    if (!target?.id) return
+    setCancelling(true)
+    try {
+      const updated = await cancelMcqJob(target.id)
+      if (varRunning) setVarJob(updated)
+      else onJobUpdate(scope.id, updated)
+      toast.push({ kind: 'info', title: 'Cancelling…', message: updated.message || '' })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not cancel', message: e.message })
+    } finally { setCancelling(false) }
+  }
+
   const handleGenerateScope = async () => {
     setGenning(true)
     try {
@@ -176,6 +192,12 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
         <div className="cq-scope-meta">
           {counts && <span className="cq-scope-counts">{counts}</span>}
           {scope.run_id && <CoverageBadge coverage={scope.coverage} />}
+          {(running || varRunning) && (
+            <button className="cq-btn cq-btn-ghost cq-btn-sm" onClick={handleCancel}
+              disabled={cancelling} aria-label="Cancel generation">
+              {cancelling ? <Spinner size={14} /> : <Ban size={14} />} Cancel
+            </button>
+          )}
         </div>
       </div>
 

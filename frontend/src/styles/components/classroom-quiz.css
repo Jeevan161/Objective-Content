@@ -73,6 +73,8 @@
 .cq-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .cq-btn-primary { background: var(--brand); border-color: var(--brand); color: var(--accent-contrast); }
 .cq-btn-primary:hover:not(:disabled) { background: var(--brand-strong); }
+.cq-btn-ghost { background: transparent; border-color: transparent; color: var(--text-3); }
+.cq-btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-2); }
 .cq-icon-btn {
   display: grid; place-items: center;
   width: 34px; height: 34px;
