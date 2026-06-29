@@ -5,6 +5,7 @@ import {
   classroomQuizListDecks,
   classroomQuizGetDeck,
   classroomQuizGenerate,
+  classroomQuizGenerateScope,
   classroomQuizGenerateVariants,
   classroomQuizResume,
   getMcqRun,
@@ -47,6 +48,7 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
   const [varJob, setVarJob] = useState(null)          // phase-2 variant generation job
   const [genningVar, setGenningVar] = useState(false)
   const [resuming, setResuming] = useState(false)     // posting the LO-gate decision
+  const [genning, setGenning] = useState(false)       // starting this scope's generation
   // Paused at the LO-finalization gate (Gate 1): stop streaming, show the review UI.
   const paused = !!(job && job.status === 'AWAITING_REVIEW' && job.progress?.gate === 'outcomes')
   const streamable = !!(job && job.id && !TERMINAL.includes(job.status) && !paused)
@@ -110,6 +112,18 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [varJob?.id, varStreamable])
 
+  const handleGenerateScope = async () => {
+    setGenning(true)
+    try {
+      const j = await classroomQuizGenerateScope(scope.id)
+      onJobUpdate(scope.id, j)         // status -> RUNNING → phase-1 WS attaches
+      toast.push({ kind: 'info', title: `Generating Quiz ${scope.scope_no}`,
+                   message: 'Reading material → learning objectives; it will pause for your review.' })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not start generation', message: e.message })
+    } finally { setGenning(false) }
+  }
+
   const handleResume = async (decision) => {
     setResuming(true)
     try {
@@ -158,6 +172,14 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
         </div>
       </div>
 
+      {!running && !paused && (
+        <div className="cq-scope-actions">
+          <button className="cq-btn cq-btn-sm" onClick={handleGenerateScope} disabled={genning}>
+            {genning ? <Spinner size={14} /> : <Play size={14} />}
+            {scope.run_id ? 'Regenerate this quiz' : 'Generate this quiz'}
+          </button>
+        </div>
+      )}
       {running && !paused && job.progress && <McqProgress progress={job.progress} />}
       {paused && job.progress?.review && (
         <div className="cq-scope-gate">

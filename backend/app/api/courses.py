@@ -594,6 +594,20 @@ def _cq_scopes(session: Session, deck_id) -> list[ClassroomQuizScope]:
     ).all())
 
 
+def _make_cq_scope_job(session: Session, deck: ClassroomQuizDeck,
+                       scope: ClassroomQuizScope, user: User) -> SyncJob:
+    """Create (add + flush) one background generation job for a scope, with the scope context the
+    runner/resume endpoints read back. Caller commits and then calls start_cq_scope_job."""
+    job = SyncJob(
+        course_id=str(deck.id), job_type=SyncJob.CLASSROOM_QUIZ, created_by=user.id,
+        progress={"ctx": {"deck_id": str(deck.id), "scope_id": str(scope.id),
+                          "scope_no": scope.scope_no}},
+    )
+    session.add(job)
+    session.flush()
+    return job
+
+
 @router.post("/classroom-quiz/ingest/", status_code=status.HTTP_201_CREATED)
 def cq_ingest(body: ClassroomQuizIngestRequest, session: Session = Depends(get_session),
               user: User = Depends(require_active)) -> dict:
@@ -659,21 +673,34 @@ def cq_generate(deck_id: uuid.UUID, session: Session = Depends(get_session),
     if not scopes:
         raise HTTPException(status_code=400, detail="This deck has no scopes to generate.")
 
-    started: list[tuple[SyncJob, uuid.UUID]] = []
-    for sc in scopes:
-        job = SyncJob(
-            course_id=str(deck.id), job_type=SyncJob.CLASSROOM_QUIZ, created_by=user.id,
-            progress={"ctx": {"deck_id": str(deck.id), "scope_id": str(sc.id),
-                              "scope_no": sc.scope_no}},
-        )
-        session.add(job)
-        session.flush()
-        started.append((job, sc.id))
+    started = [(_make_cq_scope_job(session, deck, sc, user), sc.id) for sc in scopes]
     deck.status = ClassroomQuizDeck.GENERATING
     session.commit()
     payload = {"deck_id": str(deck.id), "jobs": [serialize_job(j) for j, _ in started]}
     for job, scope_id in started:          # start AFTER commit so the worker can read the row
         start_cq_scope_job(job.id, scope_id)
+    return payload
+
+
+@router.post("/classroom-quiz/scopes/{scope_id}/generate/", status_code=status.HTTP_202_ACCEPTED)
+def cq_generate_scope(scope_id: uuid.UUID, session: Session = Depends(get_session),
+                      user: User = Depends(require_active)) -> dict:
+    """Generate (or regenerate) a SINGLE quiz scope — the same per-scope pipeline as 'generate
+    all', but for one scope, so a user can run quizzes one at a time. Pauses at GATE 1 (LO
+    finalization). Returns the started job."""
+    _require_active_key(session, user)
+    scope = session.get(ClassroomQuizScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="Quiz scope not found.")
+    deck = _cq_deck_or_404(session, scope.deck_id, user)   # ownership/role check
+    if not (scope.slide_text or "").strip():
+        raise HTTPException(status_code=400,
+                            detail="This quiz scope has no slide content to generate from.")
+    job = _make_cq_scope_job(session, deck, scope, user)
+    deck.status = ClassroomQuizDeck.GENERATING
+    session.commit()
+    payload = serialize_job(job)
+    start_cq_scope_job(job.id, scope.id)   # start AFTER commit so the worker can read the row
     return payload
 
 

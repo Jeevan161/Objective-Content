@@ -123,14 +123,19 @@ def segment_scopes(slides: list[dict]) -> list[Scope]:
 
     quizzes = sorted(set(find_marker_slides(slides, QUIZ_MARKER)))
     end = find_marker_slides(slides, END_MARKER)
-    end_slide = min(end) if end else total
+    # "Key Takeaways" (and everything after it) is wrap-up, NEVER quiz content — exclude it.
+    # No Key Takeaways slide -> content runs to the end of the deck.
+    end_slide = min(end) if end else total + 1
+    last_content = end_slide - 1            # last slide that can belong to a scope
 
     last_agenda = max(agenda)
-    # Each quiz slide closes a scope; the final scope closes at Key Takeaways (or the
-    # last slide). When there are no quiz slides, `closers` == [end_slide] -> one scope.
-    closers = list(quizzes)
-    if end_slide > (quizzes[-1] if quizzes else 0):
-        closers.append(end_slide)
+    # Each "Quiz Time!" slide up to the Key-Takeaways boundary closes a scope. If there is
+    # trailing taught content after the last quiz (but before Key Takeaways), it forms a final
+    # scope ending just BEFORE Key Takeaways. A deck with no quiz slides collapses to one scope
+    # (Agenda+1 .. before Key Takeaways).
+    closers = [q for q in quizzes if q <= last_content]
+    if last_content > (closers[-1] if closers else last_agenda):
+        closers.append(last_content)
 
     scopes: list[Scope] = []
     start = last_agenda + 1
