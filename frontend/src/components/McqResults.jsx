@@ -642,7 +642,7 @@ function TraceRow({ span: s, max }) {
 // page and the Runs list. 'review' (Review Queue) adds per-question Approve/Reject and the
 // approval-gated load controls.
 function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTrackJob,
-                      readingMaterial = null }) {
+                      readingMaterial = null, onMutate = null }) {
   const review = mode === 'review'
   const toast = useToast()
   const { user } = useAuth()
@@ -684,6 +684,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
         // would miss it and the card would only update after a manual page refresh.
         const freshQs = fresh?.result?.questions
         if (Array.isArray(freshQs)) setQuestions(freshQs)
+        onMutate?.()
         toast.push({ kind: 'success', title: 'Question regenerated', message: `${outcome} updated from your feedback` })
       } else {
         toast.push({
@@ -703,6 +704,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
     try {
       const res = await setMcqQuestionApproval(run.id, outcome, approval)
       setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, approval: res.approval } : q)))
+      onMutate?.()
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not save approval', message: e.message })
     } finally {
@@ -714,6 +716,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
     try {
       const res = await setMcqQuestionExclusion(run.id, outcome, excluded)
       setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, excluded: res.excluded } : q)))
+      onMutate?.()
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not update exclusion', message: e.message })
     } finally {

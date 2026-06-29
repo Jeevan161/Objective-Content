@@ -62,6 +62,13 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
 
   useEffect(() => { loadRun() }, [loadRun])
 
+  // While base questions are still awaiting approval (no variants yet), open the review
+  // section by default so the gate is visible on the generation page.
+  useEffect(() => {
+    if (run && !(run.result?.questions || []).some((q) => q.is_variant)) setOpen(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.id])
+
   // Phase-1 (base generation) progress stream.
   useEffect(() => {
     if (!streamable) return
@@ -207,7 +214,7 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
               </button>
             ) : (
               <span className="cq-scope-hint">
-                Review &amp; approve base questions in the Review Queue to unlock variant generation.
+                Review &amp; approve base questions below to unlock variant generation.
               </span>
             )}
           </div>
@@ -221,15 +228,18 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
 
           <button className="cq-link" onClick={() => setOpen((o) => !o)}>
             <ChevronRight size={14} className={`cq-chev ${open ? 'open' : ''}`} />
-            {open ? 'Hide' : 'View'} reading material, base questions{hasVariants ? ' & variants' : ''}
+            {open ? 'Hide' : 'Review'} reading material &amp; base questions{hasVariants ? ' & variants' : ''}
           </button>
           {open && (loadingRun
             ? <div className="cq-run-loading"><Spinner /></div>
             : run && (
               <McqResults
                 run={run}
-                mode="view"
+                mode="review"
                 canLoad={false}
+                courseId={run.course_id}
+                unitId={run.unit_id}
+                onMutate={loadRun}
                 readingMaterial={run.result?.reading_material || run.reading_material || ''}
               />
             ))}
