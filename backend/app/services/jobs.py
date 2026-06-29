@@ -348,6 +348,145 @@ def start_mcq_resume_job(job_id: uuid.UUID, course_id: str, topic_id: str, unit_
     return thread
 
 
+# --------------------------------------------------------------------------- #
+# Classroom Quiz — one background job per deck SCOPE (each scope == one McqRun).
+# Reuses the MCQ semaphore, progress sink, cancellation, and WebSocket broker; the
+# only differences are the runner (cq_runner) and the per-scope persistence + the
+# deck status rollup.
+# --------------------------------------------------------------------------- #
+def _rollup_deck_status(deck_id: uuid.UUID) -> None:
+    """Recompute a deck's status from its scopes' runs: GENERATING while any scope is
+    still pending; READY_FOR_REVIEW once every scope has a run (or has failed) with at
+    least one success; FAILED if every scope failed."""
+    from sqlalchemy import select
+
+    from app.models import ClassroomQuizDeck, ClassroomQuizScope
+    with SessionLocal() as session:
+        deck = session.get(ClassroomQuizDeck, deck_id)
+        if deck is None:
+            return
+        scopes = session.scalars(
+            select(ClassroomQuizScope).where(ClassroomQuizScope.deck_id == deck_id)).all()
+        total = len(scopes)
+        done = sum(1 for sc in scopes if sc.run_id is not None)
+        failed = sum(1 for sc in scopes if sc.coverage == ClassroomQuizScope.FAILED)
+        if total == 0:
+            deck.status = ClassroomQuizDeck.FAILED
+        elif done + failed >= total:
+            deck.status = (ClassroomQuizDeck.READY_FOR_REVIEW if done > 0
+                           else ClassroomQuizDeck.FAILED)
+        else:
+            deck.status = ClassroomQuizDeck.GENERATING
+        deck.updated_at = _now()
+        session.commit()
+
+
+def _mark_scope_failed(scope_id) -> None:
+    from app.models import ClassroomQuizScope
+    deck_id = None
+    with SessionLocal() as session:
+        sc = session.get(ClassroomQuizScope, scope_id)
+        if sc is not None:
+            sc.coverage = ClassroomQuizScope.FAILED
+            sc.updated_at = _now()
+            deck_id = sc.deck_id
+            session.commit()
+    if deck_id is not None:
+        _rollup_deck_status(deck_id)
+
+
+def _persist_cq_result(job_id: uuid.UUID, result: dict, scope_id) -> None:
+    """Persist a completed Classroom-Quiz scope run: store the McqRun (with reading material +
+    base questions + variants in `result`), link it on the scope, set the scope coverage flag,
+    mark the job SUCCESS, and roll the deck status up."""
+    from app.models import ClassroomQuizScope, McqRun, SyncJob
+
+    deck_id = None
+    with SessionLocal() as session:
+        job = session.get(SyncJob, job_id)
+        scope_row = session.get(ClassroomQuizScope, scope_id)
+        deck_id = scope_row.deck_id if scope_row is not None else None
+        run = McqRun(
+            job_id=job_id,
+            course_id=str(deck_id) if deck_id else "",   # deck id scopes the run (no portal course)
+            topic_id="", unit_id=str(scope_id),          # scope id is the run's "session"
+            lo_count=result.get("lo_count", 0),
+            question_count=result.get("question_count", 0),
+            needs_human_count=result.get("needs_human_count", 0),
+            version=1, result=result,
+            reading_material=result.get("reading_material", ""),
+            created_by=getattr(job, "created_by", None),
+        )
+        session.add(run)
+        session.flush()                                  # assign run.id before linking the scope
+        if scope_row is not None:
+            scope_row.run_id = run.id
+            scope_row.reading_material = result.get("reading_material", "")
+            scope_row.coverage = result.get("coverage", ClassroomQuizScope.OK)
+            scope_row.updated_at = _now()
+        if job is not None:
+            job.status = SyncJob.SUCCESS
+            job.message = (
+                f"{result.get('question_count', 0)} questions "
+                f"({result.get('base_count', 0)} base + {result.get('variant_count', 0)} variants), "
+                f"{result.get('lo_count', 0)} LOs."
+            )
+            prog = dict(job.progress or {})
+            prog.pop("awaiting_review", None)
+            prog.pop("review", None)
+            job.progress = prog
+            job.updated_at = _now()
+        session.commit()
+    if deck_id is not None:
+        _rollup_deck_status(deck_id)
+    progress_broker.publish(str(job_id))
+
+
+def _run_cq_scope_job(job_id: uuid.UUID, scope_id) -> None:
+    """Generate ONE classroom-quiz scope (reading material → LOs → base questions → variants),
+    streaming progress onto the SyncJob row, then persist + roll the deck up."""
+    import traceback
+
+    from app.mcq_pipeline.cq_runner import run_classroom_quiz_pipeline
+    from app.mcq_pipeline.utils.progress import JobCancelled
+    from app.services.task_log import ERROR, log_task
+
+    user_id = _bind_user_for_job(job_id)
+    cancel_event = _register_cancel(job_id)
+    log_task(task_type="MCQ", event="cq_start", job_id=job_id, user_id=user_id,
+             message=f"scope={scope_id}")
+    try:
+        with _MCQ_SEMAPHORE:
+            if cancel_event.is_set():
+                raise JobCancelled()
+            result = run_classroom_quiz_pipeline(
+                scope_id=scope_id, review=True, hitl_enabled=False,
+                progress_sink=_mcq_sink(job_id), thread_id=str(job_id),
+                cancel_check=cancel_event.is_set,
+            )
+        _persist_cq_result(job_id, result, scope_id)
+        log_task(task_type="MCQ", event="cq_complete", job_id=job_id, user_id=user_id,
+                 message=str(result.get("status", "completed")))
+    except JobCancelled:
+        log_task(task_type="MCQ", event="cq_cancelled", job_id=job_id, user_id=user_id,
+                 message="cancelled by user")
+        _mark_scope_failed(scope_id)
+        _cancel_job(job_id)
+    except Exception as err:  # noqa: BLE001 — surface failure on the job + scope rows
+        log_task(task_type="MCQ", event="cq_error", level=ERROR, job_id=job_id, user_id=user_id,
+                 message=str(err), detail={"trace": traceback.format_exc()[:8000]})
+        _mark_scope_failed(scope_id)
+        _fail_job(job_id, err)
+    finally:
+        _clear_cancel(job_id)
+
+
+def start_cq_scope_job(job_id: uuid.UUID, scope_id) -> threading.Thread:
+    thread = threading.Thread(target=_run_cq_scope_job, args=(job_id, scope_id), daemon=True)
+    thread.start()
+    return thread
+
+
 def _run_mcq_regen_job(job_id: uuid.UUID, run_id: uuid.UUID, outcome: str,
                        feedback: str, tags: list[str] | None, reviewer: str) -> None:
     """Regenerate ONE question for its LO in the background so the action is tracked as an

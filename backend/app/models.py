@@ -212,6 +212,7 @@ class SyncJob(Base):
     REGEN = "REGEN"                       # one-question regeneration (Review Queue)
     LOAD = "LOAD"                         # portal "Prepare & Load" (background)
     EXPORT = "EXPORT"                     # build + upload the questions ZIP (background)
+    CLASSROOM_QUIZ = "CLASSROOM_QUIZ"     # generate one classroom-quiz scope (slides -> RM -> LOs -> Qs -> variants)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     job_type: Mapped[str] = mapped_column(String(16), default=SYNC)
@@ -301,7 +302,12 @@ class McqRun(Base):
     review_status: Mapped[str] = mapped_column(String(20), default="draft")
 
     # final_los + questions + question_reviews + notes + apply_tool_trace + prompt versions.
+    # For Classroom Quiz runs, `questions` also holds the per-base variants (linked by
+    # `base_question_key`).
     result: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Classroom Quiz: the session reading material generated for this scope (m00 output).
+    # Empty for portal-sourced MCQ runs, which read reading material from UnitParts.
+    reading_material: Mapped[str] = mapped_column(Text, default="")
     # The user who generated this run (nullable for pre-auth rows). Carried from the job.
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
@@ -510,3 +516,72 @@ class BetaLoad(Base):
     # legacy rows predating this column.
     content: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = created_at_col()
+
+
+# --------------------------------------------------------------------------- #
+# Classroom Quiz — a published Slides deck segmented into per-quiz "scopes".
+# A deck is the ingest unit; each scope is generated independently (one McqRun
+# per scope, reusing the MCQ LangGraph with no-RAG, session-only grounding).
+# --------------------------------------------------------------------------- #
+class ClassroomQuizDeck(Base):
+    """One published Google Slides deck submitted for Classroom Quiz generation.
+    `scope_slides()` segments it into `ClassroomQuizScope` rows at ingest time."""
+
+    __tablename__ = "classroom_quiz_decks"
+
+    SCOPED = "SCOPED"                     # ingested + segmented into scopes
+    GENERATING = "GENERATING"             # at least one scope job is running
+    READY_FOR_REVIEW = "READY_FOR_REVIEW"  # all scope runs settled, awaiting human review
+    APPROVED = "APPROVED"                 # all scopes approved
+    FAILED = "FAILED"                     # ingest failed (no scopes produced)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    slides_url: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(20), default=SCOPED, index=True)
+    scope_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Optional course/domain attribution (drives code-path gating + provenance); the deck
+    # itself is NOT tied to a portal Course row.
+    question_domain: Mapped[str] = mapped_column(String(16), default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = created_at_col()
+    updated_at: Mapped[datetime] = updated_at_col()
+
+    scopes: Mapped[list["ClassroomQuizScope"]] = relationship(
+        back_populates="deck", cascade="all, delete-orphan", order_by="ClassroomQuizScope.scope_no"
+    )
+
+
+class ClassroomQuizScope(Base):
+    """One quiz-worth of slides from a deck. Holds the raw slide copy and the generated
+    reading material; `run_id` links to the McqRun that produced its LOs/questions/variants."""
+
+    __tablename__ = "classroom_quiz_scopes"
+    __table_args__ = (UniqueConstraint("deck_id", "scope_no", name="uq_cq_scope_deck_no"),)
+
+    # Coverage flags set by the LO stage (see lo_config clamp: ceiling 6 / floor 4 / hard 3).
+    OK = "OK"
+    THIN = "THIN"                         # only 3 assessable LOs were feasible
+    INSUFFICIENT = "INSUFFICIENT"         # fewer than 3 — needs a human / not enough taught
+    FAILED = "FAILED"                     # the scope's generation job errored
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    deck_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("classroom_quiz_decks.id", ondelete="CASCADE"), index=True
+    )
+    scope_no: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(20), default="")       # "Quiz Time!" | "Key Takeaways"
+    slide_start: Mapped[int] = mapped_column(Integer, default=0)
+    slide_end: Mapped[int] = mapped_column(Integer, default=0)
+    slide_text: Mapped[str] = mapped_column(Text, default="")        # raw readable slide copy
+    reading_material: Mapped[str] = mapped_column(Text, default="")  # m00 output (the handout)
+    coverage: Mapped[str] = mapped_column(String(16), default=OK)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("mcq_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = created_at_col()
+    updated_at: Mapped[datetime] = updated_at_col()
+
+    deck: Mapped["ClassroomQuizDeck"] = relationship(back_populates="scopes")

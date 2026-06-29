@@ -68,6 +68,44 @@ class McqGenerateRequest(BaseModel):
     reason: str = ""
 
 
+class ClassroomQuizIngestRequest(BaseModel):
+    """Ingest a published Google Slides deck for Classroom Quiz generation. The deck is
+    segmented into per-quiz scopes (Agenda+1 → each 'Quiz Time!' → … → 'Key Takeaways')."""
+    slides_url: str
+    title: str = ""
+    # Optional course domain (e.g. "SQL") — gates code-path question/variant types. Empty = generic.
+    question_domain: str = ""
+
+
+def serialize_cq_scope(scope) -> dict:
+    """A deck scope + its run summary (lo/question/variant counts, coverage)."""
+    return {
+        "id": str(scope.id),
+        "scope_no": scope.scope_no,
+        "kind": scope.kind,
+        "slide_start": scope.slide_start,
+        "slide_end": scope.slide_end,
+        "coverage": scope.coverage,
+        "has_reading_material": bool((scope.reading_material or "").strip()),
+        "run_id": str(scope.run_id) if scope.run_id else None,
+    }
+
+
+def serialize_cq_deck(deck, scopes=None) -> dict:
+    out = {
+        "id": str(deck.id),
+        "slides_url": deck.slides_url,
+        "title": deck.title,
+        "status": deck.status,
+        "scope_count": deck.scope_count,
+        "question_domain": deck.question_domain,
+        "created_at": deck.created_at.isoformat() if deck.created_at else None,
+    }
+    if scopes is not None:
+        out["scopes"] = [serialize_cq_scope(s) for s in scopes]
+    return out
+
+
 class McqReviewRequest(BaseModel):
     """A human decision at a HITL gate, plus the run context needed to resume the paused
     pipeline (rebuilds the run-scoped RAG adapter; the job_id is the checkpoint thread_id)."""

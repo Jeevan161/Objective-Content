@@ -22,16 +22,32 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_session
 from app.api.deps import get_current_user, require_active
-from app.models import BetaLoad, Course, McqRun, McqTrace, RagChunk, SyncJob, Topic, Unit, UnitPart, User
+from app.models import (
+    BetaLoad,
+    ClassroomQuizDeck,
+    ClassroomQuizScope,
+    Course,
+    McqRun,
+    McqTrace,
+    RagChunk,
+    SyncJob,
+    Topic,
+    Unit,
+    UnitPart,
+    User,
+)
 from app.schemas import (
     ALLOWED_QUESTION_DOMAINS,
     ApproveRunRequest,
     BuildRagRequest,
+    ClassroomQuizIngestRequest,
     CourseSettingsRequest,
     ExecuteCodeRequest,
     ExtractRequest,
     McqGenerateRequest,
     McqReviewRequest,
+    serialize_cq_deck,
+    serialize_cq_scope,
     PrepareSheetRequest,
     QuestionApprovalRequest,
     QuestionExcludeRequest,
@@ -66,6 +82,7 @@ from app.services.jobs import (
     start_export_job,
     start_extraction_job,
     start_load_job,
+    start_cq_scope_job,
     start_mcq_job,
     start_mcq_regen_job,
     start_mcq_resume_job,
@@ -541,6 +558,120 @@ def cancel_mcq_job(job_id: uuid.UUID, session: Session = Depends(get_session),
     session.commit()
     progress_broker.publish(str(job_id))
     return serialize_job(job)
+
+
+# --------------------------------------------------------------------------- #
+# Classroom Quiz — a published Slides deck → per-quiz scopes → reading material →
+# LOs (4–6) → base questions → objective-bound variants (per scope, no RAG).
+# --------------------------------------------------------------------------- #
+def _require_active_key(session: Session, user: User) -> None:
+    from app.services.user_keys import active_provider, user_has_active_key
+    if not user_has_active_key(session, user.id):
+        prov = active_provider(session)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Add your API key for the active connector "
+                   f"'{prov.name if prov else ''}' (Account) before generating.")
+
+
+def _cq_deck_or_404(session: Session, deck_id: uuid.UUID, user: User) -> ClassroomQuizDeck:
+    deck = session.get(ClassroomQuizDeck, deck_id)
+    if deck is None:
+        raise HTTPException(status_code=404, detail="Deck not found.")
+    if (deck.created_by is not None and deck.created_by != user.id
+            and user.role != User.ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="You can only access your own decks.")
+    return deck
+
+
+def _cq_scopes(session: Session, deck_id) -> list[ClassroomQuizScope]:
+    return list(session.scalars(
+        select(ClassroomQuizScope)
+        .where(ClassroomQuizScope.deck_id == deck_id)
+        .order_by(ClassroomQuizScope.scope_no)
+    ).all())
+
+
+@router.post("/classroom-quiz/ingest/", status_code=status.HTTP_201_CREATED)
+def cq_ingest(body: ClassroomQuizIngestRequest, session: Session = Depends(get_session),
+              user: User = Depends(require_active)) -> dict:
+    """Ingest a published Google Slides deck: fetch it, segment into per-quiz scopes, and
+    persist the deck + scopes. Generation is kicked off separately (per scope)."""
+    from app.services.quiz_scopes import scope_slides
+
+    url = (body.slides_url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="slides_url is required.")
+    try:
+        scopes = scope_slides(url)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    except Exception as err:  # noqa: BLE001 — fetch/parse failure → actionable 400
+        raise HTTPException(status_code=400, detail=f"Could not read the slides deck: {err}")
+    if not scopes:
+        raise HTTPException(status_code=400,
+                            detail="No quiz scopes found (need an 'Agenda for Today's Session' slide).")
+
+    deck = ClassroomQuizDeck(
+        slides_url=url, title=(body.title or "").strip(), status=ClassroomQuizDeck.SCOPED,
+        scope_count=len(scopes), question_domain=(body.question_domain or "").strip().upper(),
+        created_by=user.id,
+    )
+    session.add(deck)
+    session.flush()
+    for sc in scopes:
+        session.add(ClassroomQuizScope(
+            deck_id=deck.id, scope_no=sc.scope_no, kind=sc.kind,
+            slide_start=sc.slide_start, slide_end=sc.slide_end, slide_text=sc.slide_text,
+        ))
+    session.commit()
+    return serialize_cq_deck(deck, _cq_scopes(session, deck.id))
+
+
+@router.get("/classroom-quiz/decks/")
+def cq_list_decks(session: Session = Depends(get_session),
+                  user: User = Depends(require_active)) -> list[dict]:
+    stmt = select(ClassroomQuizDeck).order_by(ClassroomQuizDeck.created_at.desc())
+    if user.role != User.ROLE_ADMIN:
+        stmt = stmt.where(ClassroomQuizDeck.created_by == user.id)
+    return [serialize_cq_deck(d) for d in session.scalars(stmt).all()]
+
+
+@router.get("/classroom-quiz/decks/{deck_id}/")
+def cq_get_deck(deck_id: uuid.UUID, session: Session = Depends(get_session),
+                user: User = Depends(require_active)) -> dict:
+    deck = _cq_deck_or_404(session, deck_id, user)
+    return serialize_cq_deck(deck, _cq_scopes(session, deck.id))
+
+
+@router.post("/classroom-quiz/decks/{deck_id}/generate/", status_code=status.HTTP_202_ACCEPTED)
+def cq_generate(deck_id: uuid.UUID, session: Session = Depends(get_session),
+                user: User = Depends(require_active)) -> dict:
+    """Fan out one background generation job PER SCOPE. Each job runs the full pipeline
+    (reading material → LOs → base questions → variants) and persists an McqRun linked to
+    its scope. Progress streams over the existing `/courses/mcq/jobs/{job_id}/ws` socket."""
+    _require_active_key(session, user)
+    deck = _cq_deck_or_404(session, deck_id, user)
+    scopes = _cq_scopes(session, deck.id)
+    if not scopes:
+        raise HTTPException(status_code=400, detail="This deck has no scopes to generate.")
+
+    started: list[tuple[SyncJob, uuid.UUID]] = []
+    for sc in scopes:
+        job = SyncJob(
+            course_id=str(deck.id), job_type=SyncJob.CLASSROOM_QUIZ, created_by=user.id,
+            progress={"ctx": {"deck_id": str(deck.id), "scope_id": str(sc.id),
+                              "scope_no": sc.scope_no}},
+        )
+        session.add(job)
+        session.flush()
+        started.append((job, sc.id))
+    deck.status = ClassroomQuizDeck.GENERATING
+    session.commit()
+    payload = {"deck_id": str(deck.id), "jobs": [serialize_job(j) for j, _ in started]}
+    for job, scope_id in started:          # start AFTER commit so the worker can read the row
+        start_cq_scope_job(job.id, scope_id)
+    return payload
 
 
 # --- live job progress over WebSocket (replaces the frontend poll) -------------- #
