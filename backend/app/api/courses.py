@@ -860,6 +860,12 @@ def list_mcq_runs(
         stmt = stmt.where(McqRun.created_by == user.id)
     if course_id:
         stmt = stmt.where(McqRun.course_id == course_id)
+    else:
+        # The unscoped listing (Review Queue) shows portal MCQ runs only — Classroom Quiz runs
+        # are reviewed on the CQ generation page, so exclude any run scoped to a quiz deck.
+        deck_ids = [str(d) for d in session.scalars(select(ClassroomQuizDeck.id)).all()]
+        if deck_ids:
+            stmt = stmt.where(McqRun.course_id.not_in(deck_ids))
     if unit_id:
         stmt = stmt.where(McqRun.unit_id == unit_id)
     runs = session.scalars(stmt).all()
