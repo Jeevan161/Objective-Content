@@ -121,6 +121,70 @@ def run_classroom_quiz_pipeline(
                             session_label=scope_label, thread_id=thread_id)
 
 
+def _load_scope_reading_material(scope_id) -> str:
+    """The reading material stashed on the scope row when a HITL run first parked at the LO gate
+    (used to rebuild the no-RAG adapter on resume — the adapter is not checkpointed)."""
+    with SessionLocal() as session:
+        scope_row = session.get(ClassroomQuizScope, scope_id)
+        return (getattr(scope_row, "reading_material", "") or "") if scope_row else ""
+
+
+def resume_classroom_quiz_pipeline(
+    *, scope_id, decision, thread_id: str, review: bool = True, lo_budget: int | None = 6,
+    progress_sink: Callable[[dict], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> dict:
+    """GATE 1 (LO finalization): resume a classroom-quiz scope paused at the LO-review gate after
+    a human decision. Rebuilds the no-RAG adapter from the reading material stashed on the scope
+    at the park (the adapter/reporter are NOT checkpointed), re-registers the RunContext under the
+    same thread_id, and resumes the LangGraph from its checkpoint with `decision`. If the LO gate
+    re-pauses (rejected LOs went through the repair loop), returns another awaiting_review payload;
+    otherwise the graph produces the base questions and we return the Phase-1 (base) result — which
+    then flows into the existing base-question review + variants finalization (Phase 2)."""
+    from langgraph.types import Command
+
+    from app.mcq_pipeline.runner import _persist_lo_feedback
+
+    disable_langsmith()
+    _slide, deck_id, domain, title, scope_no = _load_scope(scope_id)
+    reading_material = _load_scope_reading_material(scope_id)
+    if not reading_material.strip():
+        raise ValueError("Cannot resume: this scope has no stored reading material.")
+    scope_label = f"Quiz {scope_no}" + (f" — {title}" if title else "")
+
+    adapter = RagAdapter(course_ids=[deck_id], prereq_units=[],
+                         reading_material=reading_material, ingested=False, domain=domain)
+    graph = get_lo_graph()
+    cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": 80}
+
+    # Seed the fresh reporter so stages completed before the LO gate stay 'done' on the board.
+    payload = _interrupt_payload(graph, cfg) or {}
+    _persist_lo_feedback(thread_id, decision, payload, adapter)
+    keys = [d["key"] for d in CQ_BASE_STAGE_DEFS]
+    seed_done = ([k for k in keys[:keys.index("review_outcomes")] if k != "repair"]
+                 if "review_outcomes" in keys else [])
+    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id),
+                                seed_done=seed_done, cancel_check=cancel_check,
+                                stage_defs=CQ_BASE_STAGE_DEFS)
+    ctx = RunContext(rag=adapter, progress=progress, db_prereq_units=[],
+                     review_questions=review, question_budget=None,
+                     hitl_enabled=True, lo_budget=lo_budget)
+    REGISTRY.register(thread_id, ctx)
+    set_call_context(unit=scope_label)
+    try:
+        state = graph.invoke(Command(resume=decision), config=cfg)
+        paused = _interrupt_payload(graph, cfg)
+    finally:
+        REGISTRY.pop(thread_id)
+
+    if paused is not None:                   # LO gate re-paused (LOs regenerated)
+        return {"status": "awaiting_review", "thread_id": thread_id, "review": paused,
+                "reading_material": reading_material, "session_label": scope_label,
+                "durable_checkpoint": _checkpoint_durable(), "trace_job_id": thread_id}
+    return _assemble_result(state, reading_material=reading_material,
+                            session_label=scope_label, thread_id=thread_id)
+
+
 def _assemble_result(state: dict, *, reading_material: str, session_label: str,
                      thread_id: str) -> dict:
     """Phase-1 completion path: BASE questions only. Variants are NOT generated here — they

@@ -83,6 +83,7 @@ from app.services.jobs import (
     start_extraction_job,
     start_load_job,
     start_cq_scope_job,
+    start_cq_resume_job,
     start_cq_variants_job,
     start_mcq_job,
     start_mcq_regen_job,
@@ -648,9 +649,10 @@ def cq_get_deck(deck_id: uuid.UUID, session: Session = Depends(get_session),
 @router.post("/classroom-quiz/decks/{deck_id}/generate/", status_code=status.HTTP_202_ACCEPTED)
 def cq_generate(deck_id: uuid.UUID, session: Session = Depends(get_session),
                 user: User = Depends(require_active)) -> dict:
-    """Fan out one background generation job PER SCOPE. Each job runs the full pipeline
-    (reading material → LOs → base questions → variants) and persists an McqRun linked to
-    its scope. Progress streams over the existing `/courses/mcq/jobs/{job_id}/ws` socket."""
+    """Fan out one background generation job PER SCOPE. Each job runs reading material → LOs and
+    then PAUSES at GATE 1 (LO finalization) — resume it via `/classroom-quiz/jobs/{job_id}/resume/`
+    to produce base questions, which are then reviewed and expanded into variants (Phase 2).
+    Progress streams over the existing `/courses/mcq/jobs/{job_id}/ws` socket."""
     _require_active_key(session, user)
     deck = _cq_deck_or_404(session, deck_id, user)
     scopes = _cq_scopes(session, deck.id)
@@ -673,6 +675,40 @@ def cq_generate(deck_id: uuid.UUID, session: Session = Depends(get_session),
     for job, scope_id in started:          # start AFTER commit so the worker can read the row
         start_cq_scope_job(job.id, scope_id)
     return payload
+
+
+@router.post("/classroom-quiz/jobs/{job_id}/resume/", status_code=status.HTTP_202_ACCEPTED)
+def cq_resume(job_id: uuid.UUID, body: McqReviewRequest,
+              session: Session = Depends(get_session),
+              user: User = Depends(require_active)) -> dict:
+    """GATE 1 (LO finalization): resume a classroom-quiz scope paused at the LO-review gate after
+    a per-LO decision. `action='approve'` accepts the LOs as-is; `action='reject'` regenerates the
+    rejected LOs (via `rejected`/`rejected_ids` + per-LO feedback) and re-pauses. Once the LOs are
+    accepted, the run produces base questions and the existing base-question review + variants
+    finalization (Phase 2) takes over."""
+    job = session.get(SyncJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status != SyncJob.AWAITING_REVIEW:
+        raise HTTPException(status_code=409, detail="Job is not awaiting review.")
+    sid = ((job.progress or {}).get("ctx") or {}).get("scope_id")
+    if not sid:
+        raise HTTPException(status_code=400, detail="Job is missing its scope context.")
+    try:
+        scope_id = uuid.UUID(str(sid))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Job has an invalid scope id.")
+    action = (body.action or "approve").strip().lower()
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'.")
+    decision = {"action": action, "rejected": body.rejected or [],
+                "rejected_ids": body.rejected_ids or [], "note": body.note or "",
+                "lo_feedback": body.lo_feedback or [], "reviewer": _reviewer_name(user)}
+    job.status = SyncJob.RUNNING
+    job.message = f"Resuming after {action}…"
+    session.commit()
+    start_cq_resume_job(job.id, scope_id, decision)
+    return serialize_job(job)
 
 
 @router.post("/classroom-quiz/runs/{run_id}/variants/", status_code=status.HTTP_202_ACCEPTED)

@@ -164,6 +164,12 @@
   color: var(--red); font-size: var(--fs-sm);
   background: var(--red-soft); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
 }
+.cq-scope-gate { margin-top: var(--sp-3); }
+.cq-scope-gate-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  color: var(--brand); font-size: var(--fs-sm); font-weight: 600;
+}
 .cq-scope-body { margin-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
 .cq-scope-actions { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
 .cq-btn-sm { height: 34px; padding: 0 var(--sp-3); font-size: var(--fs-xs); }

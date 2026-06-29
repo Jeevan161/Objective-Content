@@ -396,12 +396,42 @@ def _mark_scope_failed(scope_id) -> None:
 
 
 def _persist_cq_result(job_id: uuid.UUID, result: dict, scope_id) -> None:
-    """Persist a completed Classroom-Quiz scope run: store the McqRun (with reading material +
-    base questions + variants in `result`), link it on the scope, set the scope coverage flag,
-    mark the job SUCCESS, and roll the deck status up."""
+    """Persist the outcome of a (possibly paused) Classroom-Quiz scope run.
+
+    - GATE 1 (status=awaiting_review): the run paused at the LO-review gate — no McqRun yet.
+      Stash the reading material on the scope (so the resume can rebuild the no-RAG adapter) and
+      park the job at AWAITING_REVIEW with the LO review payload.
+    - completed: store the McqRun (Phase-1 base questions), link it on the scope, set the scope
+      coverage flag, mark the job SUCCESS, and roll the deck status up.
+    """
     from app.models import ClassroomQuizScope, McqRun, SyncJob
 
     deck_id = None
+    if result.get("status") == "awaiting_review":
+        with SessionLocal() as session:
+            job = session.get(SyncJob, job_id)
+            scope_row = session.get(ClassroomQuizScope, scope_id)
+            deck_id = scope_row.deck_id if scope_row is not None else None
+            if scope_row is not None:                    # stash reading material for the resume
+                scope_row.reading_material = (result.get("reading_material", "")
+                                              or scope_row.reading_material)
+                scope_row.updated_at = _now()
+            if job is not None:
+                prog = dict(job.progress or {})
+                prog["review"] = result.get("review")
+                prog["awaiting_review"] = True
+                prog["gate"] = "outcomes"
+                prog["durable_checkpoint"] = result.get("durable_checkpoint", True)
+                job.progress = prog
+                job.status = SyncJob.AWAITING_REVIEW
+                job.message = "Awaiting review: learning objectives."
+                job.updated_at = _now()
+            session.commit()
+        if deck_id is not None:
+            _rollup_deck_status(deck_id)
+        progress_broker.publish(str(job_id))
+        return
+
     with SessionLocal() as session:
         job = session.get(SyncJob, job_id)
         scope_row = session.get(ClassroomQuizScope, scope_id)
@@ -442,9 +472,11 @@ def _persist_cq_result(job_id: uuid.UUID, result: dict, scope_id) -> None:
     progress_broker.publish(str(job_id))
 
 
-def _run_cq_scope_job(job_id: uuid.UUID, scope_id) -> None:
-    """Generate ONE classroom-quiz scope (reading material → LOs → base questions → variants),
-    streaming progress onto the SyncJob row, then persist + roll the deck up."""
+def _run_cq_scope_job(job_id: uuid.UUID, scope_id, hitl_enabled: bool = True) -> None:
+    """Generate ONE classroom-quiz scope (reading material → LOs → base questions), streaming
+    progress onto the SyncJob row, then persist + roll the deck up. With hitl_enabled (the
+    default), the run PAUSES at GATE 1 (LO finalization) instead of generating base questions
+    straight away; a human resumes it via the CQ resume endpoint."""
     import traceback
 
     from app.mcq_pipeline.cq_runner import run_classroom_quiz_pipeline
@@ -460,7 +492,7 @@ def _run_cq_scope_job(job_id: uuid.UUID, scope_id) -> None:
             if cancel_event.is_set():
                 raise JobCancelled()
             result = run_classroom_quiz_pipeline(
-                scope_id=scope_id, review=True, hitl_enabled=False,
+                scope_id=scope_id, review=True, hitl_enabled=hitl_enabled,
                 progress_sink=_mcq_sink(job_id), thread_id=str(job_id),
                 cancel_check=cancel_event.is_set,
             )
@@ -481,8 +513,55 @@ def _run_cq_scope_job(job_id: uuid.UUID, scope_id) -> None:
         _clear_cancel(job_id)
 
 
-def start_cq_scope_job(job_id: uuid.UUID, scope_id) -> threading.Thread:
-    thread = threading.Thread(target=_run_cq_scope_job, args=(job_id, scope_id), daemon=True)
+def start_cq_scope_job(job_id: uuid.UUID, scope_id, hitl_enabled: bool = True) -> threading.Thread:
+    thread = threading.Thread(target=_run_cq_scope_job, args=(job_id, scope_id, hitl_enabled),
+                              daemon=True)
+    thread.start()
+    return thread
+
+
+def _resume_cq_scope_job(job_id: uuid.UUID, scope_id, decision: dict) -> None:
+    """GATE 1: resume a classroom-quiz scope paused at the LO-review gate after a human decision.
+    Re-enters the LangGraph checkpoint with the decision; may re-pause at GATE 1 (LOs regenerated)
+    or complete the base questions (Phase-1 result → base-question review)."""
+    import traceback
+
+    from app.mcq_pipeline.cq_runner import resume_classroom_quiz_pipeline
+    from app.mcq_pipeline.utils.progress import JobCancelled
+    from app.services.task_log import ERROR, log_task
+
+    user_id = _bind_user_for_job(job_id)
+    cancel_event = _register_cancel(job_id)
+    log_task(task_type="MCQ", event="cq_resume", job_id=job_id, user_id=user_id,
+             message=f"scope={scope_id}")
+    try:
+        with _MCQ_SEMAPHORE:
+            if cancel_event.is_set():
+                raise JobCancelled()
+            result = resume_classroom_quiz_pipeline(
+                scope_id=scope_id, decision=decision, thread_id=str(job_id),
+                progress_sink=_mcq_sink(job_id), cancel_check=cancel_event.is_set,
+            )
+        _persist_cq_result(job_id, result, scope_id)
+        log_task(task_type="MCQ", event="cq_resume_done", job_id=job_id, user_id=user_id,
+                 message=str(result.get("status", "completed")))
+    except JobCancelled:
+        log_task(task_type="MCQ", event="cq_cancelled", job_id=job_id, user_id=user_id,
+                 message="cancelled by user")
+        _mark_scope_failed(scope_id)
+        _cancel_job(job_id)
+    except Exception as err:  # noqa: BLE001
+        log_task(task_type="MCQ", event="cq_error", level=ERROR, job_id=job_id, user_id=user_id,
+                 message=str(err), detail={"trace": traceback.format_exc()[:8000]})
+        _mark_scope_failed(scope_id)
+        _fail_job(job_id, err)
+    finally:
+        _clear_cancel(job_id)
+
+
+def start_cq_resume_job(job_id: uuid.UUID, scope_id, decision: dict) -> threading.Thread:
+    thread = threading.Thread(target=_resume_cq_scope_job, args=(job_id, scope_id, decision),
+                              daemon=True)
     thread.start()
     return thread
 
