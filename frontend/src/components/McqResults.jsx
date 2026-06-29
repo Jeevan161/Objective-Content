@@ -24,7 +24,7 @@ const STATUS_LABEL = {
   regenerated: 'Regenerated', excluded: 'Excluded', failed: 'Failed', pending: 'Pending',
 }
 function qStatus(q, regenOutcome) {
-  if (regenOutcome && q.outcome === regenOutcome) return 'regenerating'
+  if (regenOutcome && (q.question_key || q.outcome) === regenOutcome) return 'regenerating'
   if (q.excluded) return 'excluded'
   if (q.status !== 'generated') return 'failed'
   if (q.approval === 'approved') return 'approved'
@@ -379,6 +379,8 @@ function QuestionCard({ q, lo, index, review }) {
         )}
       </header>
 
+      {review && <div className="qc-review-top">{review}</div>}
+
       <div className="qc-tests">
         <span className="qc-tests-k">Tests outcome</span>
         <span className="qc-tests-v">{lo?.description || lo?.outcome || q.outcome}</span>
@@ -487,8 +489,6 @@ function QuestionCard({ q, lo, index, review }) {
       {ragCalls.length > 0 && (
         <Collapsible label="Grounding"><RagCalls calls={ragCalls} /></Collapsible>
       )}
-
-      {review}
     </article>
   )
 }
@@ -642,8 +642,11 @@ function TraceRow({ span: s, max }) {
 // page and the Runs list. 'review' (Review Queue) adds per-question Approve/Reject and the
 // approval-gated load controls.
 function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTrackJob,
-                      readingMaterial = null, onMutate = null }) {
+                      readingMaterial = null, onMutate = null, reviewScope = null }) {
   const review = mode === 'review'
+  // Variants share their base's `outcome`; `question_key` is the unique id. Use it for every
+  // per-question review action so an action targets the exact base OR variant.
+  const qid = (q) => q?.question_key || q?.outcome
   const toast = useToast()
   const { user } = useAuth()
   const r = run?.result || {}
@@ -703,7 +706,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
     setBusyOutcome(outcome)
     try {
       const res = await setMcqQuestionApproval(run.id, outcome, approval)
-      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, approval: res.approval } : q)))
+      setQuestions((qs) => qs.map((q) => (qid(q) === outcome ? { ...q, approval: res.approval } : q)))
       onMutate?.()
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not save approval', message: e.message })
@@ -715,7 +718,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
     setBusyOutcome(outcome)
     try {
       const res = await setMcqQuestionExclusion(run.id, outcome, excluded)
-      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, excluded: res.excluded } : q)))
+      setQuestions((qs) => qs.map((q) => (qid(q) === outcome ? { ...q, excluded: res.excluded } : q)))
       onMutate?.()
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not update exclusion', message: e.message })
@@ -834,7 +837,9 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
   const [tab, setTab] = useState('questions')
   const [filter, setFilter] = useState('all') // all | review
 
-  const shown = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
+  const filtered = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
+  // Generation page reviews BASE questions only; variants are reviewed in the Review Queue.
+  const shown = reviewScope === 'base' ? filtered.filter((q) => !q.is_variant) : filtered
   // Classroom Quiz: group each base question with its variants (linked by base_question_key)
   // so the lineage is visible. MCQ runs have no variants, so every base stands alone and the
   // list is unchanged. Orphan variants (whose base is filtered out) render standalone.
@@ -1101,7 +1106,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
             </div>
           )}
 
-          {review ? (
+          {review && reviewScope !== 'variant' ? (
             <div className="qc-review-deck">
               <nav className="qc-nav" aria-label="Questions" ref={navRef}>
                 {shown.map((q, i) => {
@@ -1132,14 +1137,14 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
                 </div>
                 <div className="qc-deck-body">
                   {curQ ? (
-                    <QuestionCard key={curQ.outcome} q={curQ} lo={loByOutcome[curQ.outcome]}
+                    <QuestionCard key={qid(curQ)} q={curQ} lo={loByOutcome[curQ.outcome]}
                       index={questions.indexOf(curQ)}
                       review={curQ.status === 'generated' ? (
                         <QuestionReview
-                          q={curQ} busy={busyOutcome === curQ.outcome}
-                          onApprove={(approval) => handleSetApproval(curQ.outcome, approval)}
-                          onRegenerate={(fb, tags) => handleRegenerate(curQ.outcome, fb, tags)}
-                          onExclude={(excluded) => handleSetExclusion(curQ.outcome, excluded)}
+                          q={curQ} busy={busyOutcome === qid(curQ)}
+                          onApprove={(approval) => handleSetApproval(qid(curQ), approval)}
+                          onRegenerate={(fb, tags) => handleRegenerate(qid(curQ), fb, tags)}
+                          onExclude={(excluded) => handleSetExclusion(qid(curQ), excluded)}
                         />
                       ) : null} />
                   ) : <p className="muted">No questions in this filter.</p>}
@@ -1167,7 +1172,15 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
                             </span>
                           </div>
                           <QuestionCard q={v} lo={loByOutcome[v.outcome]}
-                            index={questions.indexOf(v)} review={null} />
+                            index={questions.indexOf(v)}
+                            review={(review && reviewScope === 'variant' && v.status === 'generated') ? (
+                              <QuestionReview
+                                q={v} busy={busyOutcome === qid(v)}
+                                onApprove={(approval) => handleSetApproval(qid(v), approval)}
+                                onRegenerate={(fb, tags) => handleRegenerate(qid(v), fb, tags)}
+                                onExclude={(excluded) => handleSetExclusion(qid(v), excluded)}
+                              />
+                            ) : null} />
                         </div>
                       ))}
                     </div>

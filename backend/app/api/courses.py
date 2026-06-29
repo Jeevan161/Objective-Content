@@ -17,7 +17,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_session
@@ -861,11 +861,15 @@ def list_mcq_runs(
     if course_id:
         stmt = stmt.where(McqRun.course_id == course_id)
     else:
-        # The unscoped listing (Review Queue) shows portal MCQ runs only — Classroom Quiz runs
-        # are reviewed on the CQ generation page, so exclude any run scoped to a quiz deck.
+        # The unscoped listing (Review Queue) shows portal MCQ runs, PLUS Classroom-Quiz runs
+        # that have reached variant review (phase == "variants"). CQ BASE-question review happens
+        # on the generation page, so CQ runs without variants yet stay out of the queue.
         deck_ids = [str(d) for d in session.scalars(select(ClassroomQuizDeck.id)).all()]
         if deck_ids:
-            stmt = stmt.where(McqRun.course_id.not_in(deck_ids))
+            stmt = stmt.where(or_(
+                McqRun.course_id.not_in(deck_ids),
+                McqRun.result["phase"].astext == "variants",
+            ))
     if unit_id:
         stmt = stmt.where(McqRun.unit_id == unit_id)
     runs = session.scalars(stmt).all()

@@ -335,6 +335,17 @@ def _approved_count(qs: list) -> int:
     return sum(1 for q in _eligible(qs) if q.get("approval") == "approved")
 
 
+def _find_idx(qs: list, ident: str) -> int:
+    """Index of the question identified by `ident`. Variants share their base's `outcome`, so
+    we match the UNIQUE `question_key` first (bases have question_key == outcome), then fall back
+    to `outcome` for older runs that predate question_key."""
+    i = next((i for i, q in enumerate(qs)
+              if (q.get("question_key") or q.get("outcome")) == ident), -1)
+    if i >= 0:
+        return i
+    return next((i for i, q in enumerate(qs) if q.get("outcome") == ident), -1)
+
+
 def regenerate_question(run_id, outcome: str, feedback: str, *,
                         reviewer: str = "", tags: list | None = None) -> dict:
     """Regenerate the question for `outcome`, injecting the human feedback as a
@@ -463,7 +474,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
             raise ValueError("MCQ run not found.")
         fresh = dict(run.result or {})
         qs = list(fresh.get("questions") or [])
-        fidx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        fidx = _find_idx(qs, outcome)
         if fidx >= 0:
             qs[fidx] = new_q
         else:
@@ -526,9 +537,9 @@ def set_question_approval(run_id, outcome: str, approval: str, *, reviewer: str 
             raise ValueError("MCQ run not found.")
         fresh = dict(run.result or {})
         qs = list(fresh.get("questions") or [])
-        idx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        idx = _find_idx(qs, outcome)
         if idx < 0:
-            raise ValueError(f"No question found for outcome {outcome!r}.")
+            raise ValueError(f"No question found for {outcome!r}.")
         q = dict(qs[idx])
         q["approval"] = None if approval == "pending" else approval
         qs[idx] = q
@@ -559,9 +570,9 @@ def set_question_exclusion(run_id, outcome: str, excluded: bool, *, reviewer: st
             raise ValueError("MCQ run not found.")
         fresh = dict(run.result or {})
         qs = list(fresh.get("questions") or [])
-        idx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        idx = _find_idx(qs, outcome)
         if idx < 0:
-            raise ValueError(f"No question found for outcome {outcome!r}.")
+            raise ValueError(f"No question found for {outcome!r}.")
         q = dict(qs[idx])
         q["excluded"] = bool(excluded)
         qs[idx] = q
