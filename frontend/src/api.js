@@ -171,6 +171,10 @@ export const classroomQuizGetDeck = (deckId) => request(`/classroom-quiz/decks/$
 export const classroomQuizGenerate = (deckId) =>
   request(`/classroom-quiz/decks/${deckId}/generate/`, { method: 'POST' })
 
+// Phase 1, one quiz at a time — generate (or regenerate) a single scope; returns its job.
+export const classroomQuizGenerateScope = (scopeId) =>
+  request(`/classroom-quiz/scopes/${scopeId}/generate/`, { method: 'POST' })
+
 // Gate 1 — resume a scope paused at the LO-review gate with a per-LO decision
 // ({ action, rejected, rejected_ids, lo_feedback, note }).
 export const classroomQuizResume = (jobId, decision) =>
