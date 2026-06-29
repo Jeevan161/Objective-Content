@@ -171,6 +171,14 @@ export const classroomQuizGetDeck = (deckId) => request(`/classroom-quiz/decks/$
 export const classroomQuizGenerate = (deckId) =>
   request(`/classroom-quiz/decks/${deckId}/generate/`, { method: 'POST' })
 
+// Gate 1 — resume a scope paused at the LO-review gate with a per-LO decision
+// ({ action, rejected, rejected_ids, lo_feedback, note }).
+export const classroomQuizResume = (jobId, decision) =>
+  request(`/classroom-quiz/jobs/${jobId}/resume/`, {
+    method: 'POST',
+    body: JSON.stringify(decision),
+  })
+
 // Phase 2 — generate variants for a scope run's APPROVED base questions (gated on review).
 export const classroomQuizGenerateVariants = (runId) =>
   request(`/classroom-quiz/runs/${runId}/variants/`, { method: 'POST' })

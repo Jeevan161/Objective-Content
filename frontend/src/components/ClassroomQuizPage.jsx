@@ -6,6 +6,7 @@ import {
   classroomQuizGetDeck,
   classroomQuizGenerate,
   classroomQuizGenerateVariants,
+  classroomQuizResume,
   getMcqRun,
   mcqJobWsUrl,
 } from '../api'
@@ -13,6 +14,7 @@ import { EmptyState, Spinner } from './ui'
 import { useToast } from './Toast'
 import McqProgress from './McqProgress'
 import McqResults from './McqResults'
+import McqReviewGate from './McqReviewGate'
 
 const TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
 const COVERAGE = {
@@ -44,7 +46,10 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
   const [loadingRun, setLoadingRun] = useState(false)
   const [varJob, setVarJob] = useState(null)          // phase-2 variant generation job
   const [genningVar, setGenningVar] = useState(false)
-  const streamable = !!(job && job.id && !TERMINAL.includes(job.status))
+  const [resuming, setResuming] = useState(false)     // posting the LO-gate decision
+  // Paused at the LO-finalization gate (Gate 1): stop streaming, show the review UI.
+  const paused = !!(job && job.status === 'AWAITING_REVIEW' && job.progress?.gate === 'outcomes')
+  const streamable = !!(job && job.id && !TERMINAL.includes(job.status) && !paused)
   const varStreamable = !!(varJob && varJob.id && !TERMINAL.includes(varJob.status))
 
   const loadRun = useCallback(() => {
@@ -105,6 +110,20 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [varJob?.id, varStreamable])
 
+  const handleResume = async (decision) => {
+    setResuming(true)
+    try {
+      const j = await classroomQuizResume(job.id, decision)
+      onJobUpdate(scope.id, j)        // status flips back to RUNNING → phase-1 WS reattaches
+      toast.push({ kind: 'info', title: 'Review submitted',
+                   message: decision.action === 'reject'
+                     ? 'Regenerating the flagged learning objectives…'
+                     : 'Generating base questions…' })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not submit review', message: e.message })
+    } finally { setResuming(false) }
+  }
+
   const handleVariants = async () => {
     if (!run) return
     setGenningVar(true)
@@ -139,7 +158,15 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
         </div>
       </div>
 
-      {running && job.progress && <McqProgress progress={job.progress} />}
+      {running && !paused && job.progress && <McqProgress progress={job.progress} />}
+      {paused && job.progress?.review && (
+        <div className="cq-scope-gate">
+          <div className="cq-scope-gate-head">
+            <Sparkles size={14} /> Finalize the learning objectives for this quiz before questions are generated.
+          </div>
+          <McqReviewGate review={job.progress.review} busy={resuming} onDecide={handleResume} />
+        </div>
+      )}
       {failed && (
         <div className="cq-scope-err">
           <AlertTriangle size={14} /> Generation failed{job?.error ? `: ${job.error}` : ''}
