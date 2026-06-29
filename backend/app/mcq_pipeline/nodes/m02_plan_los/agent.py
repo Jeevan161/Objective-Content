@@ -22,16 +22,42 @@ from app.mcq_pipeline.nodes.m02_plan_los import gate
 from app.mcq_pipeline.nodes.m07_recommend_question_type import recommend_one
 from app.mcq_pipeline.nodes.m08_generate_questions import _course_is_sql
 from app.mcq_pipeline.nodes.m02_plan_los.prompts import (CONSOLIDATE_CRITIC_SYS, CONSOLIDATE_SYS,
-                                                         PLAN_CRITIC_SYS, PLAN_SYS,
+                                                         PLAN_CRITIC_SYS, PLAN_SYS, SESSION_FOCUS_SYS,
                                                          generate_sys_verb_subbed)
 
 
+# ── PHASE 0 · derive the session focus ("motive") ─────────────────────────── #
+def derive_focus(title: str, source_text: str) -> dict:
+    """Derive {objective, central_concepts, incidental} from the session title + reading material,
+    so later stages keep outcomes on-focus. Best-effort — returns {} on any failure (no drift gate
+    then, behaviour unchanged)."""
+    payload = {"title": title or "", "reading": (source_text or "")[:12000]}
+    try:
+        data = parse_json(chat(
+            [{"role": "system", "content": get_prompt("lo.session_focus_sys", SESSION_FOCUS_SYS)},
+             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], temperature=0))
+    except Exception:  # noqa: BLE001 — never block planning on the focus call
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {"objective": str(data.get("objective") or "").strip(),
+            "central_concepts": [c for c in (data.get("central_concepts") or []) if isinstance(c, str)],
+            "incidental": [c for c in (data.get("incidental") or []) if isinstance(c, str)]}
+
+
 # ── PHASE 1 · per-section author ──────────────────────────────────────────── #
-def author_section(topic: dict, sys: str | None = None) -> list:
+def author_section(topic: dict, sys: str | None = None, session_objective: str = "",
+                   incidental: list | None = None) -> list:
     sys = sys or generate_sys_verb_subbed()
+    head = ""
+    if session_objective:
+        head = f"SESSION OBJECTIVE: {session_objective}\n"
+        if incidental:
+            head += f"INCIDENTAL (do NOT author outcomes for these — scaffolding only): {', '.join(incidental)}\n"
+        head += "\n"
     data = parse_json(chat([{"role": "system", "content": sys},
                             {"role": "user", "content":
-                             f"SECTION: {topic['title']} ({topic['topic_id']})\n\n{topic['text'][:6000]}"}],
+                             f"{head}SECTION: {topic['title']} ({topic['topic_id']})\n\n{topic['text'][:6000]}"}],
                            temperature=TEMP_AUTHOR)) or []
     items = data if isinstance(data, list) else []
     return [p for it in items if isinstance(it, dict) and (p := gate.proto_outcome(it, topic))]
@@ -48,8 +74,10 @@ def _sub_concept_payload(protos: list) -> list:
     return list(idx.values())
 
 
-def _consolidate_call(subs: list, source_text: str) -> list:
-    payload = {"reading": (source_text or "")[:12000], "sub_concepts": subs}
+def _consolidate_call(subs: list, source_text: str, session_objective: str = "",
+                      incidental: list | None = None) -> list:
+    payload = {"session_objective": session_objective or "", "incidental": incidental or [],
+               "reading": (source_text or "")[:12000], "sub_concepts": subs}
     try:
         data = parse_json(chat(
             [{"role": "system", "content": get_prompt("lo.consolidate_sys", CONSOLIDATE_SYS)},
@@ -91,14 +119,15 @@ def _consolidate_critic(subs: list, groups: list) -> list | None:
     return revised if isinstance(revised, list) and revised else None
 
 
-def consolidate(protos: list, source_text: str) -> tuple[list, dict]:
+def consolidate(protos: list, source_text: str, session_objective: str = "",
+                incidental: list | None = None) -> tuple[list, dict]:
     """Semantic merge + taught depth, with a gated critic. Returns (groups, meta) — meta records
     whether the critic fired, for the trace. [] groups on failure → the gate treats each
     sub-concept standalone at moderate depth (degraded but never blocking)."""
     subs = _sub_concept_payload(protos)
     if not subs:
         return [], {"critic_gated": False, "critic_fired": False}
-    groups = _consolidate_call(subs, source_text)
+    groups = _consolidate_call(subs, source_text, session_objective, incidental)
     gated = bool(groups) and _consolidation_suspicious(groups, len(subs))
     fired = False
     if gated:

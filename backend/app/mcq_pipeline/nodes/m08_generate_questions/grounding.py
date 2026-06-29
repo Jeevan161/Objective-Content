@@ -72,7 +72,13 @@ def _ground(lo: dict, max_seq: int | None) -> str:
 
 def _lo_block(lo: dict) -> str:
     keys = ("outcome", "concept", "sub_concept", "description", "learner_action", "syntax", "source_evidence")
-    return "\n".join(f"{k}: {lo.get(k)}" for k in keys if lo.get(k))
+    block = "\n".join(f"{k}: {lo.get(k)}" for k in keys if lo.get(k))
+    # Lead with the session's focus so the question stays on-topic and doesn't drift onto
+    # incidental scaffolding present in the grounding material.
+    obj = (lo.get("session_objective") or "").strip()
+    if obj:
+        block = f"SESSION FOCUS (keep the question within this): {obj}\n{block}"
+    return block
 
 
 def _coverage(lo: dict, qtype: str, max_seq: int | None):

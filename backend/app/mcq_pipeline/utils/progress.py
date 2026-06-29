@@ -26,6 +26,7 @@ class JobCancelled(BaseException):
 STAGE_DEFS = [
     # LO-creation stage — the LO-first pipeline.
     {"key": "parse_structure", "label": "Parse structure"},
+    {"key": "derive_session_focus", "label": "Derive session focus"},
     {"key": "author_outcomes", "label": "Author candidate outcomes"},
     {"key": "consolidate_concepts", "label": "Consolidate concepts + taught depth"},
     {"key": "graph_outcomes", "label": "Build outcome graph (weights)"},

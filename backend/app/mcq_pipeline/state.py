@@ -29,6 +29,13 @@ class LOState(TypedDict, total=False):
     title: str
     source_text: str
 
+    # ---- derived session focus ("motive") — keeps LOs/questions on-topic --- #
+    # {objective: <one paragraph>, central_concepts: [...], incidental: [...]} derived once from
+    # title + source_text by the derive_session_focus node; session_objective is the flat string
+    # threaded into authoring / consolidation / validation / generation / review prompts.
+    session_focus: dict
+    session_objective: str
+
     # ---- POC forward-only artifacts --------------------------------------- #
     sections: list
     raw_concepts: list                     # POC "_raw_concepts"

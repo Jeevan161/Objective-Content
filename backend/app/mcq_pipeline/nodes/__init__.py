@@ -12,14 +12,15 @@ Flow (LO-first):
 """
 from app.mcq_pipeline.nodes.m01_parse_structure import parse_structure
 from app.mcq_pipeline.nodes.m02_plan_los import (author_outcomes, consolidate_concepts,
-                                                 graph_outcomes, select_outcomes)
+                                                 derive_session_focus, graph_outcomes,
+                                                 select_outcomes)
 from app.mcq_pipeline.nodes.m03_resolve_prerequisites import resolve_prerequisites
 from app.mcq_pipeline.nodes.m04_review_and_validate import review_and_validate
 from app.mcq_pipeline.nodes.m05_repair import repair
 from app.mcq_pipeline.nodes.m06_sequence_outcomes import sequence_outcomes
 
 __all__ = [
-    "parse_structure", "author_outcomes", "consolidate_concepts", "graph_outcomes",
+    "parse_structure", "derive_session_focus", "author_outcomes", "consolidate_concepts", "graph_outcomes",
     "select_outcomes", "resolve_prerequisites", "review_and_validate",
     "repair", "sequence_outcomes",
 ]
