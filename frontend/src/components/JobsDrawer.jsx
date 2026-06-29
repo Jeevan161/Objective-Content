@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, ListChecks, Trash2, Activity, RotateCcw, Ban, ChevronRight, Upload, FileDown } from 'lucide-react'
+import { X, CheckCircle2, XCircle, RefreshCw, FileText, Database, ListChecks, Trash2, Activity, RotateCcw, Ban, ChevronRight, Upload, FileDown, Presentation } from 'lucide-react'
 import { EnvBadge, Spinner, EmptyState } from './ui'
 
 const TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
@@ -12,6 +12,7 @@ const JOB_TYPE_META = {
   EXTRACT: { label: 'Content extraction', icon: FileText },
   RAG: { label: 'RAG ingestion', icon: Database },
   MCQ: { label: 'MCQ generation', icon: ListChecks },
+  CLASSROOM_QUIZ: { label: 'Classroom Quiz', icon: Presentation },
   REGEN: { label: 'Question regeneration', icon: RotateCcw },
   LOAD: { label: 'Portal load', icon: Upload },
   EXPORT: { label: 'ZIP export', icon: FileDown },
@@ -33,7 +34,7 @@ function JobRow({ job, onDismiss, onCancel, onOpen }) {
   // MCQ jobs reopen to their exact page/stage; LOAD/EXPORT open the Loads page. Only MCQ
   // can be cancelled while live.
   const canOpen = onOpen && REOPENABLE.includes(job.job_type)
-  const canCancel = onCancel && active && job.job_type === 'MCQ'
+  const canCancel = onCancel && active && (job.job_type === 'MCQ' || job.job_type === 'CLASSROOM_QUIZ')
 
   return (
     <div className={`job-row job-${job.status.toLowerCase()} ${canOpen ? 'job-row-clickable' : ''}`}

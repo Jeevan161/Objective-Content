@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, ChevronRight, Layers } from 'lucide-react'
+import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, ChevronRight, Layers, Ban } from 'lucide-react'
 import {
   classroomQuizIngest,
   classroomQuizListDecks,
@@ -8,6 +8,7 @@ import {
   classroomQuizGenerateScope,
   classroomQuizGenerateVariants,
   classroomQuizResume,
+  cancelMcqJob,
   getMcqRun,
   mcqJobWsUrl,
 } from '../api'
@@ -49,6 +50,7 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
   const [genningVar, setGenningVar] = useState(false)
   const [resuming, setResuming] = useState(false)     // posting the LO-gate decision
   const [genning, setGenning] = useState(false)       // starting this scope's generation
+  const [cancelling, setCancelling] = useState(false) // cancelling the active job
   // Paused at the LO-finalization gate (Gate 1): stop streaming, show the review UI.
   const paused = !!(job && job.status === 'AWAITING_REVIEW' && job.progress?.gate === 'outcomes')
   const streamable = !!(job && job.id && !TERMINAL.includes(job.status) && !paused)
@@ -61,6 +63,13 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
   }, [scope.run_id])
 
   useEffect(() => { loadRun() }, [loadRun])
+
+  // While base questions are still awaiting approval (no variants yet), open the review
+  // section by default so the gate is visible on the generation page.
+  useEffect(() => {
+    if (run && !(run.result?.questions || []).some((q) => q.is_variant)) setOpen(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.id])
 
   // Phase-1 (base generation) progress stream.
   useEffect(() => {
@@ -111,6 +120,20 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
     return () => { stopped = true; if (retry) clearTimeout(retry); if (ws) ws.close() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [varJob?.id, varStreamable])
+
+  const handleCancel = async () => {
+    const target = varRunning ? varJob : job
+    if (!target?.id) return
+    setCancelling(true)
+    try {
+      const updated = await cancelMcqJob(target.id)
+      if (varRunning) setVarJob(updated)
+      else onJobUpdate(scope.id, updated)
+      toast.push({ kind: 'info', title: 'Cancelling…', message: updated.message || '' })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not cancel', message: e.message })
+    } finally { setCancelling(false) }
+  }
 
   const handleGenerateScope = async () => {
     setGenning(true)
@@ -169,6 +192,12 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
         <div className="cq-scope-meta">
           {counts && <span className="cq-scope-counts">{counts}</span>}
           {scope.run_id && <CoverageBadge coverage={scope.coverage} />}
+          {(running || varRunning) && (
+            <button className="cq-btn cq-btn-ghost cq-btn-sm" onClick={handleCancel}
+              disabled={cancelling} aria-label="Cancel generation">
+              {cancelling ? <Spinner size={14} /> : <Ban size={14} />} Cancel
+            </button>
+          )}
         </div>
       </div>
 
@@ -207,7 +236,7 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
               </button>
             ) : (
               <span className="cq-scope-hint">
-                Review &amp; approve base questions in the Review Queue to unlock variant generation.
+                Review &amp; approve base questions below to unlock variant generation.
               </span>
             )}
           </div>
@@ -221,15 +250,18 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
 
           <button className="cq-link" onClick={() => setOpen((o) => !o)}>
             <ChevronRight size={14} className={`cq-chev ${open ? 'open' : ''}`} />
-            {open ? 'Hide' : 'View'} reading material, base questions{hasVariants ? ' & variants' : ''}
+            {open ? 'Hide' : 'Review'} reading material &amp; base questions{hasVariants ? ' & variants' : ''}
           </button>
           {open && (loadingRun
             ? <div className="cq-run-loading"><Spinner /></div>
             : run && (
               <McqResults
                 run={run}
-                mode="view"
+                mode="review"
                 canLoad={false}
+                courseId={run.course_id}
+                unitId={run.unit_id}
+                onMutate={loadRun}
                 readingMaterial={run.result?.reading_material || run.reading_material || ''}
               />
             ))}
