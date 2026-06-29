@@ -22,16 +22,35 @@ from app.mcq_pipeline.nodes.m02_plan_los import agent, gate, tools
 from app.mcq_pipeline.nodes.m02_plan_los.prompts import generate_sys_verb_subbed
 
 
+def derive_session_focus(state, config) -> dict:
+    """PHASE 0 · derive the session's focus/objective ("motive") from title + reading material,
+    so authoring/consolidation/validation/generation keep outcomes ON-FOCUS (no drift onto
+    incidental scaffolding). Best-effort — empty focus leaves behaviour unchanged."""
+    _bind_rag(config)
+    prog = _prog(config)
+    prog.start("derive_session_focus")
+    focus = agent.derive_focus(state.get("title", ""), state.get("source_text", ""))
+    objective = focus.get("objective", "")
+    prog.done("derive_session_focus",
+              detail=(objective[:80] or "no objective derived"),
+              snapshot={"objective": objective, "central_concepts": focus.get("central_concepts", []),
+                        "incidental": focus.get("incidental", [])})
+    return {"session_focus": focus, "session_objective": objective,
+            "log": [{"node": "derive_session_focus", "has_objective": bool(objective)}]}
+
+
 def author_outcomes(state, config) -> dict:
     """PHASE 1 · author candidate outcomes per section (parallel)."""
     _bind_rag(config)
     prog = _prog(config)
     sections = state["sections"]
     sys = generate_sys_verb_subbed()
+    objective = state.get("session_objective", "")
+    incidental = (state.get("session_focus") or {}).get("incidental", [])
     on_done = prog.counter("author_outcomes", len(sections))
 
     def _one(topic):
-        protos = agent.author_section(topic, sys)
+        protos = agent.author_section(topic, sys, session_objective=objective, incidental=incidental)
         on_done()
         return protos
 
@@ -51,7 +70,10 @@ def consolidate_concepts(state, config) -> dict:
     prog.start("consolidate_concepts")
     protos = [dict(o) for o in state["outcomes"]]
     sec_text = {s["topic_id"]: s["text"] for s in state["sections"]}
-    groups, cmeta = agent.consolidate(protos, state.get("source_text", ""))
+    incidental = (state.get("session_focus") or {}).get("incidental", [])
+    groups, cmeta = agent.consolidate(protos, state.get("source_text", ""),
+                                      session_objective=state.get("session_objective", ""),
+                                      incidental=incidental)
     inv, outcomes = gate.build_inventory(protos, groups, sec_text)
     in_scope = sum(1 for c in inv if c.get("in_scope"))
     critic = " · critic revised" if cmeta.get("critic_fired") else (

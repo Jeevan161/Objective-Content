@@ -44,6 +44,8 @@ Submodules:
 from __future__ import annotations
 
 from app.mcq_pipeline.nodes.m02_plan_los.node import (author_outcomes, consolidate_concepts,
-                                                      graph_outcomes, select_outcomes)
+                                                      derive_session_focus, graph_outcomes,
+                                                      select_outcomes)
 
-__all__ = ["author_outcomes", "consolidate_concepts", "graph_outcomes", "select_outcomes"]
+__all__ = ["derive_session_focus", "author_outcomes", "consolidate_concepts",
+           "graph_outcomes", "select_outcomes"]

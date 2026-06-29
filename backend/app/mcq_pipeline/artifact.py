@@ -186,4 +186,9 @@ def build_final_los(state: dict, db_prereq_units: list) -> list[dict]:
     sec_text = {s["topic_id"]: s.get("text", "") for s in state.get("sections", [])}
     sec_title = {s["topic_id"]: s.get("title", "") for s in state.get("sections", [])}
     src = state.get("artifact", {}).get("outcomes") or state.get("outcomes", [])
-    return [lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text, sec_title) for o in src]
+    objective = state.get("session_objective", "") or ""
+    los = [lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text, sec_title) for o in src]
+    if objective:
+        for lo in los:                       # carry the session focus so generation/review stay on-topic
+            lo["session_objective"] = objective
+    return los

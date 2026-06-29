@@ -29,7 +29,7 @@ from app.mcq_pipeline.prompts import rules as lo_rules  # noqa: F401 — registe
 from app.mcq_pipeline.utils import scope
 from app.mcq_pipeline.artifact import build_final_los, finalize as _finalize_artifact
 from app.mcq_pipeline.config import MAX_RETRIES
-from app.mcq_pipeline.nodes import author_outcomes, consolidate_concepts, graph_outcomes, parse_structure, repair, resolve_prerequisites, review_and_validate, select_outcomes, sequence_outcomes
+from app.mcq_pipeline.nodes import author_outcomes, consolidate_concepts, derive_session_focus, graph_outcomes, parse_structure, repair, resolve_prerequisites, review_and_validate, select_outcomes, sequence_outcomes
 from app.mcq_pipeline.state import LOState, run_ctx
 from app.mcq_pipeline.utils._common import _prog
 from app.mcq_pipeline.nodes.m08_generate_questions import generate_for_los
@@ -274,6 +274,7 @@ def get_checkpointer():
 def build_lo_graph(*, checkpointer=None):
     g = StateGraph(LOState)
     g.add_node("parse_structure", parse_structure)
+    g.add_node("derive_session_focus", derive_session_focus)
     g.add_node("author_outcomes", author_outcomes)
     g.add_node("consolidate_concepts", consolidate_concepts)
     g.add_node("graph_outcomes", graph_outcomes)
@@ -290,7 +291,9 @@ def build_lo_graph(*, checkpointer=None):
     g.add_node("review_questions", review_questions_node)
 
     g.add_edge(START, "parse_structure")
-    g.add_edge("parse_structure", "author_outcomes")       # plan_los sub-graph (4 nodes)
+    g.add_edge("parse_structure", "derive_session_focus")  # PHASE 0 — derive the session "motive"
+    g.add_edge("derive_session_focus", "author_outcomes")  # plan_los sub-graph
+
     g.add_edge("author_outcomes", "consolidate_concepts")
     g.add_edge("consolidate_concepts", "graph_outcomes")
     g.add_edge("graph_outcomes", "select_outcomes")

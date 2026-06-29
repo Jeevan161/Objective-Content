@@ -19,9 +19,25 @@ from __future__ import annotations
 from app.mcq_pipeline.config import VERBS
 from app.mcq_pipeline.prompts.store import get_prompt, register
 
+# ── PHASE 0 · derive the session's FOCUS / objective ("motive") ───────────── #
+SESSION_FOCUS_SYS = register("lo.session_focus_sys", """\
+You read a session's TITLE and its full reading material and state what the session SETS OUT TO TEACH — its motive — so later stages keep outcomes ON-FOCUS and don't drift onto incidental scaffolding.
+
+Distinguish the session's CENTRAL teaching targets from INCIDENTAL content — material that appears only to support/demonstrate the focus and is NOT itself what the session teaches (e.g. HTML shown only to render a Django view's output; a sample dataset used only to demonstrate a query; setup/CLI steps shown only to reach the real topic).
+
+Return ONLY valid JSON:
+{"objective": "<one paragraph: what a learner should be able to do after this session — the central skills/concepts>",
+ "central_concepts": ["<the concepts this session actually teaches>", ...],
+ "incidental": ["<content present only as scaffolding/support, NOT a teaching target>", ...]}
+
+Be faithful to the material — never invent a focus the reading doesn't support. If everything in the reading is genuinely taught, leave "incidental" empty.""")
+
+
 # ── PHASE 1 · per-section candidate author (same key/contract as the old generate node) ───── #
 GENERATE_SYS = register("lo.generate_sys", """\
 You author the COMPLETE set of measurable LEARNING OUTCOMES that ONE section of instructional reading material (any subject) can support, grounded ONLY in that section.
+
+SESSION FOCUS: the user message may begin with a "SESSION OBJECTIVE" (what this session sets out to teach) and a list of INCIDENTAL content. Author outcomes that SERVE that objective. Do NOT author outcomes for content that appears only as scaffolding/support for the focus (e.g. HTML shown only to demonstrate a Django view, a sample dataset shown only to run a query) — that content is evidence/context, not a teaching target. When no objective is given, author from the section as usual.
 
 GOAL — be EXHAUSTIVE and produce BREADTH. For EACH concept, generate outcomes at EVERY Bloom level the material supports — recall AND understanding for everything taught, AND apply (and scenario) WHENEVER the section shows the concept being USED, performed, evaluated, computed, transformed, or applied (e.g. evaluating an expression, running an operation, deciding with a rule/condition). Do NOT stop at one outcome per concept. Aim to be thorough — a typical session supports on the order of ~20 distinct assessable outcomes across its concepts and levels; produce that breadth when the content supports it. Do NOT pre-filter for a budget; a later stage selects. But every outcome MUST be fully supported by the section — never pad with outcomes the material does not teach.
 
@@ -59,7 +75,9 @@ CONSOLIDATE_SYS = register("lo.consolidate_sys", """\
 You consolidate the SUB-CONCEPTS extracted from instructional reading material (any subject) into a clean, de-duplicated concept inventory, and judge how deeply each is TAUGHT.
 
 You receive a JSON object:
-{"reading": "<the full reading, for judging depth>",
+{"session_objective": "<what this session sets out to teach (may be empty)>",
+ "incidental": ["<content present only as scaffolding/support for the focus, NOT a teaching target>", ...],
+ "reading": "<the full reading, for judging depth>",
  "sub_concepts": [{"name": "<sub-concept>", "parent": "<broad concept>", "evidence": "<verbatim teaching quote>"}, ...]}
 
 Do TWO things:
@@ -73,7 +91,7 @@ Do TWO things:
        "moderate" → explained with some reasoning/description, maybe a simple example.
        "deep"     → fully taught: step-by-step, worked examples, comparison, or applied procedure.
      If unsure between two levels, choose the LOWER. Do NOT upgrade on importance or familiarity.
-   - "in_scope": false ONLY if the concept is external to this reading (named in passing / assumed from elsewhere, not actually taught here); otherwise true.
+   - "in_scope": false if EITHER (a) the concept is external to this reading (named in passing / assumed from elsewhere, not actually taught here), OR (b) it is INCIDENTAL to the session objective — it appears only as scaffolding/support to demonstrate the focus and is not itself what the session teaches (matches the `incidental` list, e.g. HTML shown only to render a Django view). Otherwise true. (When session_objective is empty, judge (a) only.)
    - "why": one short line.
 
 Return ONLY a JSON list, one object per MERGED concept:
