@@ -664,7 +664,8 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
   // State is seeded from `run` on mount; the parent passes key={run.id} so a
   // different run remounts this component (no setState-in-effect needed).
   // Once a run has been loaded to the portal, mark it "Loaded" and hide the load option.
-  const runLoaded = !!run?.loaded
+  const [loadedLocal, setLoadedLocal] = useState(false)   // flips on a successful load this session
+  const runLoaded = !!run?.loaded || loadedLocal
 
   async function handleRegenerate(outcome, feedback, tags) {
     setBusyOutcome(outcome)
@@ -764,10 +765,19 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
         approved_only: true,   // only approved questions are ever loaded
       })
       onTrackJob?.(job)
-      toast.push({
-        kind: 'info', title: 'Load started',
-        message: 'Loading to the portal — follow it in Activity; the result and sheet link appear on the Loads page.',
-      })
+      toast.push({ kind: 'info', title: 'Load started', message: 'Loading approved questions to the portal…' })
+      // Keep the inline spinner up while the background job runs (it's also in Activity),
+      // then reflect the outcome here so the reviewer gets feedback without leaving the page.
+      const done = await pollJobDone(job.id)
+      if (done?.status === 'SUCCESS') {
+        setLoadedLocal(true)
+        toast.push({ kind: 'success', title: 'Loaded', message: 'Approved questions are live in the portal. See the Loads page for details.' })
+      } else {
+        toast.push({
+          kind: 'error', title: 'Load did not complete',
+          message: done?.error || done?.message || 'Check the Loads page / Activity for what happened.',
+        })
+      }
     } catch (e) {
       toast.push({ kind: 'error', title: 'Prepare & load failed', message: e.message })
     } finally {
@@ -1046,7 +1056,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
                   disabled={prepBusy || approvedCount < 1}
                   title={approvedCount < 1 ? 'Approve at least one question to load' : ''}>
                   {prepBusy ? <Spinner size={13} /> : <FileSpreadsheet size={13} />}
-                  {prepBusy ? 'Starting…' : `Load approved (${approvedCount})`}
+                  {prepBusy ? 'Loading… (up to ~2 min)' : `Load approved (${approvedCount})`}
                 </button>
                 {prepResult && (
                   <span className={`mcq-status-chip ${prepResult.status === 'SUCCESS' ? 'ok' : 'warn'}`}>

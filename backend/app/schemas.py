@@ -368,12 +368,15 @@ def serialize_job(job: SyncJob) -> dict:
 
 
 def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "",
-                      loaded: bool = False) -> dict:
+                      unit_name: str = "", loaded: bool = False) -> dict:
     # Eligible = generated questions a reviewer hasn't excluded; the load gate compares
     # approved_count against this.
     qs = (run.result or {}).get("questions") or []
     eligible = sum(1 for q in qs if q.get("status") == "generated" and not q.get("excluded"))
     excluded = sum(1 for q in qs if q.get("status") == "generated" and q.get("excluded"))
+    # The human-readable session/unit name identifies the set everywhere in the UI (the
+    # course is shown as a secondary badge). Prefer the run's stored session_label.
+    unit_name = unit_name or (run.result or {}).get("session_label") or ""
     out = {
         "id": run.id,
         "job_id": run.job_id,
@@ -381,6 +384,7 @@ def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "",
         "topic_id": run.topic_id,
         "topic_name": topic_name,
         "unit_id": run.unit_id,
+        "unit_name": unit_name,
         "version": getattr(run, "version", 1),
         "langsmith_run_url": run.langsmith_run_url,
         "lo_count": run.lo_count,
