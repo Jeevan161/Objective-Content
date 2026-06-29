@@ -16,6 +16,7 @@
 @import './components/chat.css';
 @import './components/generation.css';
 @import './components/mcq.css';
+@import './components/classroom-quiz.css';
 @import './components/pipeline-page.css';
 @import './components/llm-providers.css';
 @import './components/auth.css';

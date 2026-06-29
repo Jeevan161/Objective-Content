@@ -93,6 +93,9 @@ class RunContext:
     run_coverage_gate: bool = True         # run the unified LLM Judge (R1–R8) over LOs (V13)
     question_budget: Any = None            # user-supplied budget (default ceiling = QUESTION_BUDGET)
     hitl_enabled: bool = False             # pause at review gates (Gate 1 / 2); off for tests/headless
+    # Classroom Quiz: clamp the final LO set to this ceiling (with floor 4 / hard-floor 3). None =
+    # the standard MCQ budget logic. Read by select_outcomes (m02/m06) only when set.
+    lo_budget: Any = None
 
 
 class _Registry:

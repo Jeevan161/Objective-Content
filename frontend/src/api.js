@@ -156,6 +156,21 @@ export const listMcqRuns = (courseId, unitId) =>
 // Full result of a single run.
 export const getMcqRun = (runId) => request(`/courses/mcq/runs/${runId}/`)
 
+// --- Classroom Quiz: a published Slides deck → per-quiz scopes → reading material → LOs → Qs → variants
+export const classroomQuizIngest = (slidesUrl, title = '', questionDomain = '') =>
+  request('/classroom-quiz/ingest/', {
+    method: 'POST',
+    body: JSON.stringify({ slides_url: slidesUrl, title, question_domain: questionDomain }),
+  })
+
+export const classroomQuizListDecks = () => request('/classroom-quiz/decks/')
+
+export const classroomQuizGetDeck = (deckId) => request(`/classroom-quiz/decks/${deckId}/`)
+
+// Fans out one generation job per scope; returns { deck_id, jobs: [job, ...] }.
+export const classroomQuizGenerate = (deckId) =>
+  request(`/classroom-quiz/decks/${deckId}/generate/`, { method: 'POST' })
+
 // Node-by-node execution trace for a run (our own tracing), by the run's job id.
 export const getMcqTrace = (jobId) => request(`/courses/mcq/jobs/${jobId}/trace/`)
 

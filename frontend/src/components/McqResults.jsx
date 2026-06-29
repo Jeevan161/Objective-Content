@@ -641,7 +641,8 @@ function TraceRow({ span: s, max }) {
 // `mode`: 'view' (default) shows generation details read-only — used by the generation
 // page and the Runs list. 'review' (Review Queue) adds per-question Approve/Reject and the
 // approval-gated load controls.
-function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTrackJob }) {
+function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTrackJob,
+                      readingMaterial = null }) {
   const review = mode === 'review'
   const toast = useToast()
   const { user } = useAuth()
@@ -1189,7 +1190,7 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
             onMouseDown={(e) => { e.preventDefault(); setDragging(true) }}
             onKeyDown={onSplitKey}
           />
-          <ReadingMaterialPane courseId={cId} unitId={uId} />
+          <ReadingMaterialPane courseId={cId} unitId={uId} content={readingMaterial} />
         </>
       )}
       {confirm && (

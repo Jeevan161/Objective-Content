@@ -10,6 +10,7 @@ import IngestModal from './components/IngestModal'
 import ChatPage from './components/ChatPage'
 import GenerationStudio from './components/GenerationStudio'
 import McqGenerationPage from './components/McqGenerationPage'
+import ClassroomQuizPage from './components/ClassroomQuizPage'
 import McqRunsPage from './components/McqRunsPage'
 import ReviewQueuePage from './components/ReviewQueuePage'
 import PipelinePage from './components/PipelinePage'
@@ -370,6 +371,7 @@ function Workspace() {
         <main className="main">
         {page === 'chat' && <ChatPage courses={courses} />}
         {page === 'generation' && <GenerationStudio onNavigate={setPage} />}
+        {page === 'classroom-quiz' && <ClassroomQuizPage />}
         {page === 'pipeline' && <PipelinePage />}
         {page === 'llm-providers' && <LLMProvidersPage />}
         {/* Kept mounted (just hidden) so navigating away and back restores the exact

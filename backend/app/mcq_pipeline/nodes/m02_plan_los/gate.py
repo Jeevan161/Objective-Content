@@ -159,14 +159,22 @@ def _clamp_to_feasible(o: dict, concept: dict) -> dict:
             "learner_action": verb, "skill_type": skill}
 
 
-def _quantize_budget(requested: int, capacity: int, n_concepts: int) -> tuple:
+def _quantize_budget(requested: int, capacity: int, n_concepts: int,
+                     ceiling: int | None = None) -> tuple:
     """Budget is now a TARGET (enforced): aim for `requested` outcomes. `_select` picks as many
     distinct base outcomes (concept × Bloom) as the material supports up to this target, and any
     shortfall is filled afterwards with same-outcome question-type variants. So the budget is NOT
     stepped down to the base-candidate capacity — it stays at the target (never below the coverage
-    floor). A thin session that can't justify the target falls short (flagged, not padded)."""
+    floor). A thin session that can't justify the target falls short (flagged, not padded).
+
+    `ceiling` is a HARD upper bound (Classroom Quiz: 6 LOs). When set it overrides the
+    `n_concepts` coverage floor — a broad session is trimmed to its most central concepts
+    rather than getting one LO per concept. `_select`'s weight-ranked truncation keeps the
+    heaviest. Below the ceiling the count stays feasibility-driven (a thin session falls short)."""
     flags = []
     final = max(MIN_BUDGET, requested, n_concepts)      # target the requested; never below coverage
+    if ceiling is not None:
+        final = min(final, max(1, int(ceiling)))        # HARD cap (CQ) — central concepts only
     if capacity < requested:
         flags.append({"flag": "few_base_candidates", "base": capacity, "target": requested,
                       "reason": f"only ~{capacity} distinct base outcomes; the rest are filled with "
@@ -238,9 +246,11 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
 
 
 def enforce(state, inv: list, outcomes: list, concept_graph: dict, outcome_graph: dict,
-            requested: int, prefer_ids: list | None) -> dict:
+            requested: int, prefer_ids: list | None, ceiling: int | None = None) -> dict:
     """Clamp to feasibility, select toward budget (agent-preferred order, code-guaranteed coverage),
-    and assemble every state key the old m04-m06 nodes emitted."""
+    and assemble every state key the old m04-m06 nodes emitted.
+
+    `ceiling` (Classroom Quiz) hard-caps the final LO count — passed through to `_quantize_budget`."""
     inv_by_id = {c["concept_id"]: c for c in inv}
     parent_of = {c["concept_id"]: (c.get("parent_concept") or c["concept_id"]) for c in inv}
     in_scope_ids = {c["concept_id"] for c in inv if c.get("in_scope")}
@@ -258,7 +268,7 @@ def enforce(state, inv: list, outcomes: list, concept_graph: dict, outcome_graph
     dropped_oos = [o["id"] for o in outcomes if o.get("concept_id") not in in_scope_ids]
 
     capacity = max(MIN_BUDGET, len(candidates) or MIN_BUDGET)
-    final_budget, flags = _quantize_budget(requested, capacity, n)
+    final_budget, flags = _quantize_budget(requested, capacity, n, ceiling=ceiling)
 
     # Prereq-safe flag (RAG-free): an apply/scenario candidate is "risky" if its DAG prerequisite
     # closure contains a concept that is neither in-scope (taught here) nor a declared assumed-prior

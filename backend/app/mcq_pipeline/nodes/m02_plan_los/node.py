@@ -112,20 +112,29 @@ def select_outcomes(state, config) -> dict:
     prog = _prog(config)
     prog.start("select_outcomes")
     ctx = _ctx(config)
-    requested = int(getattr(ctx, "question_budget", None) or QUESTION_BUDGET)
+    # Classroom Quiz mode (lo_budget set): the budget is a HARD ceiling of distinct LOs (4–6,
+    # floor handled downstream as a coverage flag). A broad session is trimmed to its most
+    # central concepts; we do NOT pad with type-variants — variants are produced from the base
+    # questions by m10, at the question level, not by inflating the LO set.
+    lo_budget = getattr(ctx, "lo_budget", None)
+    cq_mode = lo_budget is not None
+    requested = int(lo_budget) if cq_mode else int(getattr(ctx, "question_budget", None) or QUESTION_BUDGET)
     inv = state["concept_inventory"]
     outcomes = state["outcomes"]
     prefer, pmeta = agent.plan(inv, outcomes, requested)
     res = gate.enforce(state, inv, outcomes, state["concept_graph"], state["outcome_graph"],
-                       requested, prefer)
+                       requested, prefer, ceiling=(int(lo_budget) if cq_mode else None))
     # PHASE 3b — plan the question TYPE alongside each selected LO (parallel), so each outcome leaves
     # planning as a complete unit (concept + tier + question type) and the review gate shows it.
     res["outcomes"] = pmap(agent.recommend_type, res["outcomes"])
-    # ENFORCE the target count: if fewer distinct outcomes than the budget, fill toward it with
-    # same-outcome variants in different question formats (best-effort; thin sessions stay below).
     base_n = len(res["outcomes"])
-    res["outcomes"] = agent.expand_to_target(res["outcomes"], requested)
-    n_variants = len(res["outcomes"]) - base_n
+    if cq_mode:
+        n_variants = 0       # no type-variant padding in CQ mode (see note above)
+    else:
+        # ENFORCE the target count: if fewer distinct outcomes than the budget, fill toward it with
+        # same-outcome variants in different question formats (best-effort; thin sessions stay below).
+        res["outcomes"] = agent.expand_to_target(res["outcomes"], requested)
+        n_variants = len(res["outcomes"]) - base_n
     if isinstance(res.get("allocation_plan"), dict):      # keep budget target consistent post-expand
         res["allocation_plan"]["question_budget"] = len(res["outcomes"])
     qtypes = Counter(o.get("question_type") for o in res["outcomes"])

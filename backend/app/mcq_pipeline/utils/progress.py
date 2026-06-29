@@ -44,6 +44,16 @@ STAGE_DEFS = [
     {"key": "review_questions", "label": "Review & fix"},
 ]
 
+# Classroom Quiz board: the same LO+question pipeline, BRACKETED by two runner-level
+# stages — reading-material generation (m00, before the graph) and variant generation
+# (m10, after it). A separate list so these two stages never show as perpetually-pending
+# on a normal MCQ run (which has neither).
+CQ_STAGE_DEFS = (
+    [{"key": "reading_material", "label": "Generate reading material"}]
+    + STAGE_DEFS
+    + [{"key": "generate_variants", "label": "Generate variants (per base)"}]
+)
+
 
 # Cap LLM calls recorded per node span so a fan-out node (e.g. K-sample voting over many
 # concepts) can't bloat the trace row. The detail string still reports totals.
@@ -78,7 +88,8 @@ class ProgressReporter:
     def __init__(self, sink: Callable[[dict], None] | None = None,
                  trace_sink: Callable[[dict], None] | None = None,
                  seed_done: list[str] | None = None,
-                 cancel_check: Callable[[], bool] | None = None):
+                 cancel_check: Callable[[], bool] | None = None,
+                 stage_defs: list[dict] | None = None):
         self._lock = threading.Lock()
         self._sink = sink
         self._trace_sink = trace_sink          # emits one span per node entry (our own trace)
@@ -86,18 +97,23 @@ class ProgressReporter:
         # frequently). When it returns True we raise JobCancelled, which unwinds the graph.
         self._cancel_check = cancel_check
         self._open: dict[str, tuple] = {}       # node key -> (started_dt, started_perf)
+        # The stage board to render. Defaults to the MCQ pipeline; the Classroom Quiz runner
+        # passes CQ_STAGE_DEFS (adds reading_material + generate_variants). Calls to start/done
+        # for a key absent from this board are silent no-ops (see `_set`).
+        self._stage_defs = list(stage_defs) if stage_defs is not None else STAGE_DEFS
         # seed_done: stages already completed before this reporter took over (a HITL RESUME builds a
         # fresh reporter; without seeding, every prior stage would reset to 'pending' on the board).
         # Seeded stages open no span (their trace spans were already emitted on the original run).
         _seeded = set(seed_done or ())
         self._stages: dict[str, dict] = {
-            d["key"]: {**d, "state": "done" if d["key"] in _seeded else "pending"} for d in STAGE_DEFS
+            d["key"]: {**d, "state": "done" if d["key"] in _seeded else "pending"}
+            for d in self._stage_defs
         }
 
     def snapshot(self) -> dict:
         with self._lock:
             return {
-                "stages": [dict(self._stages[d["key"]]) for d in STAGE_DEFS],
+                "stages": [dict(self._stages[d["key"]]) for d in self._stage_defs],
                 "updated_at": _now_iso(),
             }
 
