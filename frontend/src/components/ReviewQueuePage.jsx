@@ -155,7 +155,18 @@ function ReviewQueuePage({ courses, onTrackJob }) {
                 <Spinner size={14} /> Loading run…
               </div>
             )}
-            {!loadingRun && run && <McqResults key={run.id} run={run} mode="review" canLoad={tab === 'reviewed'} courseId={run.course_id} unitId={run.unit_id} onTrackJob={onTrackJob} />}
+            {!loadingRun && run && (() => {
+              // Classroom-Quiz runs reach the queue for VARIANT review — render clustered
+              // (base read-only → its variants reviewable). Portal MCQ runs review normally.
+              const isCQ = (run.result?.phase === 'variants')
+                || (run.result?.questions || []).some((q) => q.is_variant)
+              return (
+                <McqResults key={run.id} run={run} mode="review"
+                  reviewScope={isCQ ? 'variant' : null}
+                  canLoad={tab === 'reviewed'} courseId={run.course_id} unitId={run.unit_id}
+                  onTrackJob={onTrackJob} />
+              )
+            })()}
             {!loadingRun && !run && (
               <EmptyState
                 icon={ListChecks}

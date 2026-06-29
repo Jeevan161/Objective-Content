@@ -705,6 +705,8 @@
 .qc.flagged { border-left: 3px solid var(--amber); }
 
 .qc-top { display: flex; align-items: center; gap: var(--sp-2); }
+/* Approve/reject controls sit at the TOP of the card (moved from the bottom). */
+.qc-review-top { margin: var(--sp-2) 0 var(--sp-3); padding-bottom: var(--sp-3); border-bottom: 1px solid var(--border); }
 .qc-num {
   width: 26px; height: 26px; flex-shrink: 0; border-radius: var(--r-full);
   display: grid; place-items: center; font-size: 12px; font-weight: 700;

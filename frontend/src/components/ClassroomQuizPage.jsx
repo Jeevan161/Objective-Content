@@ -62,12 +62,23 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
     getMcqRun(scope.run_id).then(setRun).catch(() => {}).finally(() => setLoadingRun(false))
   }, [scope.run_id])
 
+  // Silent refresh after an in-place review action (approve/exclude/regenerate): update the run
+  // (so approved_count unlocks the variants button) WITHOUT toggling loadingRun — otherwise the
+  // McqResults review deck would unmount/remount and snap back to the first question.
+  const refreshRun = useCallback(() => {
+    if (!scope.run_id) return
+    getMcqRun(scope.run_id).then(setRun).catch(() => {})
+  }, [scope.run_id])
+
   useEffect(() => { loadRun() }, [loadRun])
 
   // While base questions are still awaiting approval (no variants yet), open the review
   // section by default so the gate is visible on the generation page.
   useEffect(() => {
-    if (run && !(run.result?.questions || []).some((q) => q.is_variant)) setOpen(true)
+    const qs = run?.result?.questions || []
+    const pending = qs.some((q) => !q.is_variant && q.status === 'generated'
+      && !q.excluded && q.approval !== 'approved')
+    if (run && !qs.some((q) => q.is_variant) && pending) setOpen(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id])
 
@@ -180,6 +191,13 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
   const approved = run?.approved_count || 0
   const hasVariants = (run?.result?.questions || []).some((q) => q.is_variant)
   const varRunning = !!(varJob && !TERMINAL.includes(varJob.status))
+  // Base-question review (Gate 2) lives here. It's "done" once every generated base is resolved
+  // (approved or excluded). Variants are reviewed in the Review Queue, not here.
+  const bases = (run?.result?.questions || []).filter((q) => !q.is_variant && q.status === 'generated')
+  const pendingBases = bases.filter((b) => !b.excluded && b.approval !== 'approved')
+  const baseReviewDone = bases.length > 0 && pendingBases.length === 0
+  // Show the inline base-question review only while it's still needed (and variants don't exist).
+  const showBaseReview = !hasVariants && !baseReviewDone
 
   return (
     <div className="cq-scope">
@@ -248,23 +266,34 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
             </div>
           )}
 
-          <button className="cq-link" onClick={() => setOpen((o) => !o)}>
-            <ChevronRight size={14} className={`cq-chev ${open ? 'open' : ''}`} />
-            {open ? 'Hide' : 'Review'} reading material &amp; base questions{hasVariants ? ' & variants' : ''}
-          </button>
-          {open && (loadingRun
-            ? <div className="cq-run-loading"><Spinner /></div>
-            : run && (
-              <McqResults
-                run={run}
-                mode="review"
-                canLoad={false}
-                courseId={run.course_id}
-                unitId={run.unit_id}
-                onMutate={loadRun}
-                readingMaterial={run.result?.reading_material || run.reading_material || ''}
-              />
-            ))}
+          {showBaseReview ? (
+            <>
+              <button className="cq-link" onClick={() => setOpen((o) => !o)}>
+                <ChevronRight size={14} className={`cq-chev ${open ? 'open' : ''}`} />
+                {open ? 'Hide' : 'Review'} base questions
+              </button>
+              {open && (loadingRun
+                ? <div className="cq-run-loading"><Spinner /></div>
+                : run && (
+                  <McqResults
+                    run={run}
+                    mode="review"
+                    reviewScope="base"
+                    canLoad={false}
+                    courseId={run.course_id}
+                    unitId={run.unit_id}
+                    onMutate={refreshRun}
+                    readingMaterial={run.result?.reading_material || run.reading_material || ''}
+                  />
+                ))}
+            </>
+          ) : (
+            <span className="cq-scope-hint">
+              {hasVariants
+                ? 'Variants generated — review them in the Review Queue.'
+                : 'Base questions approved. Generate variants above, then review them in the Review Queue.'}
+            </span>
+          )}
         </div>
       )}
     </div>
