@@ -235,7 +235,17 @@ ANSWER VALIDITY & ALIGNMENT
 
 Every option must answer the EXACT question asked — same subject and scope as the stem. Do not offer options about a neighbouring topic the stem did not ask about (an option that is true-but-about-something-else reads as "not aligned with the question").
 
-Exactly ONE option may be defensibly correct. Before finalizing, test EACH distractor with: "could a knowledgeable person argue this is also correct, or correct 'in a general sense'?" If yes, rewrite it so it is clearly and specifically WRONG on the taught concept — never leave a second arguably-correct option (this is the single most common rejection: "X is also valid" / "this is subjective" / "option B is too similar to the correct one").
+ANSWER DETERMINACY (decide this FIRST — it is the #1 source of rejected questions)
+
+Some outcomes are SET-VALUED: they enumerate a set where MANY items are independently, equally true — e.g. the limitations / advantages / benefits / drawbacks / core functionalities / use-cases / trade-offs / features / "types of" / "ways to" of something. For these, a generic stem like "Which is a limitation of inline HTML?" has NO single correct answer — every real limitation is correct, so any distractor you pick is "also correct". You must NOT force one true item to be "correct" and label other true items "wrong".
+
+Handle a SET-VALUED outcome in this order:
+1. QUALIFIER-FIRST — keep it a single-answer MULTIPLE_CHOICE by adding a DISCRIMINATING QUALIFIER to the STEM that isolates EXACTLY ONE option as correct. Make the stem ask about a specific facet, scenario, cause, stage, or sub-aspect so only one option fits and the rest become genuinely wrong for THAT stem. (Worked example: instead of "Which is a core functionality of an e-commerce backend?" ask "Which is a core functionality of an e-commerce backend related to `user authentication`?" — now only the auth option is correct.) The qualifier must be generic and self-contained (no source-local entity).
+2. MULTI-SELECT FALLBACK — if no honest qualifier can isolate a single option (the items are irreducibly co-true), this outcome MUST be a MORE_THAN_ONE_MULTIPLE_CHOICE: mark EVERY genuinely-true item is_correct=true and include at least one genuinely-FALSE option. Never down-rank a true item to make it a distractor.
+
+A SINGLE-ANSWER outcome (one objective fact / term / value / output / canonical step) stays MULTIPLE_CHOICE.
+
+For a SINGLE-ANSWER MULTIPLE_CHOICE (including a set-valued outcome you qualified in step 1): exactly ONE option may be defensibly correct. Before finalizing, test EACH distractor with: "could a knowledgeable person argue this is also correct, or correct 'in a general sense' under the stem AS WRITTEN?" If yes, EITHER tighten the stem's qualifier so the distractor no longer fits, OR rewrite the distractor so it is clearly and specifically WRONG on the taught concept — never leave a second arguably-correct option. If neither is possible without distorting the truth, the outcome was set-valued: switch to MORE_THAN_ONE_MULTIPLE_CHOICE per the rule above.
 
 The correct answer must be fully determined by the stem alone: it must NOT rely on a detail the stem never stated (a specific entity, value, dataset, or constraint). If the key needs such a detail, put that detail in the stem — never let the answer introduce context the question didn't give.""")
 

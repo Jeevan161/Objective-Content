@@ -70,6 +70,15 @@ def _common_option_prefix(opts: list[dict]) -> str:
     return ""
 
 
+def _is_multi_correct_shape(lean: dict) -> bool:
+    """True when an option set is a VALID multiple-correct shape: 4-6 options with at least 2
+    correct and at least 1 incorrect. Used to honor a set-valued escalation from a single MCQ."""
+    opts = (lean or {}).get("options") or []
+    n = len(opts)
+    ncorrect = sum(1 for o in opts if o.get("is_correct"))
+    return 4 <= n <= 6 and 2 <= ncorrect < n
+
+
 def _enforce_options(lo: dict, res: dict, max_seq: int | None) -> dict:
     """Deterministic option guards for option MCQs: enforce count + exactly-one/2-3
     correct and de-duplicate near-identical options, feeding precise issues to the
@@ -78,6 +87,12 @@ def _enforce_options(lo: dict, res: dict, max_seq: int | None) -> dict:
     qtype = res["question_type"]
     if qtype not in ("MULTIPLE_CHOICE", "MORE_THAN_ONE_MULTIPLE_CHOICE"):
         return res
+    # Honor a set-valued ESCALATION: a MULTIPLE_CHOICE whose generated options came back as a valid
+    # multi-correct set (2..n-1 correct over 4-6 options) means the outcome was irreducibly
+    # set-valued and the generator (per ANSWER DETERMINACY) produced a multi-select. Accept it as
+    # MORE_THAN_ONE_MULTIPLE_CHOICE instead of forcing it back to exactly one correct.
+    if qtype == "MULTIPLE_CHOICE" and _is_multi_correct_shape(res.get("lean") or {}):
+        res["question_type"] = qtype = "MORE_THAN_ONE_MULTIPLE_CHOICE"
     fix_lo = {**lo, "question_type": qtype}
     ctx = _ground(fix_lo, max_seq)
     for _ in range(2):                      # separate small option-fix budget

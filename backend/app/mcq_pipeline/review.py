@@ -232,9 +232,13 @@ _INTENT_FIX = {
         "The marked correct answer is wrong. Mark the genuinely correct option per the COURSE MATERIAL "
         "and keep EXACTLY one correct; do not change the question's meaning."),
     "multi_valid": ("OPTION RULES",
-        "More than one option is defensibly correct (or two are too similar). Keep EXACTLY one correct "
-        "and rewrite the others so each is clearly, specifically WRONG on the taught concept — no "
-        "second arguable answer."),
+        "More than one option is defensibly correct because the outcome is SET-VALUED (several items "
+        "are genuinely true). Resolve it by ANSWER DETERMINACY, qualifier-first: (1) add a "
+        "DISCRIMINATING QUALIFIER to the stem (a specific facet/scenario/sub-aspect) so EXACTLY ONE "
+        "option is correct and the rest become genuinely wrong for that stem; (2) only if no honest "
+        "qualifier can isolate a single answer, make this a MORE_THAN_ONE_MULTIPLE_CHOICE — keep 4-6 "
+        "options, mark EVERY genuinely-true option correct and at least one genuinely-FALSE option. "
+        "Do NOT down-rank a true item to a distractor just to keep one correct."),
     "not_self_contained": ("SELF-CONTAINMENT",
         "Make the question stand alone: remove any reference to the source/reading/session, and move "
         "EVERY detail the answer depends on INTO the stem. The answer must be fully determined by the "
@@ -338,6 +342,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     Returns the new question dict."""
     from app.mcq_pipeline.utils import scope
     from app.mcq_pipeline.nodes.m08_generate_questions import _ground, difficulty_of, fix_lean, generate_lean
+    from app.mcq_pipeline.nodes.m08_generate_questions.enforce import _is_multi_correct_shape
     from app.mcq_pipeline.nodes.m09_review_questions import review_and_fix_one
     from app.mcq_pipeline.nodes.m07_recommend_question_type import recommend_one
     from app.mcq_pipeline.runner import build_adapter
@@ -415,6 +420,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
             alignment_note = ("Reviewer flagged the learning outcome as misaligned/out-of-scope, but no "
                               "reserve (dropped) outcome is stored for this run; regenerated against the "
                               "same outcome and flagged for your decision.")
+
+    # Honor a set-valued escalation: when qualifier-first still yields a valid multi-correct set
+    # (e.g. the "this is also correct" intent on an irreducibly set-valued outcome), accept it as
+    # MORE_THAN_ONE_MULTIPLE_CHOICE rather than leaving a forced single "correct" among co-true items.
+    if gen.get("question_type") == "MULTIPLE_CHOICE" and _is_multi_correct_shape(gen.get("lean") or {}):
+        gen["question_type"] = "MORE_THAN_ONE_MULTIPLE_CHOICE"
 
     # the LO this slot now belongs to (the reserve when swapped) and its outcome key.
     effective_lo = swap_lo or lo

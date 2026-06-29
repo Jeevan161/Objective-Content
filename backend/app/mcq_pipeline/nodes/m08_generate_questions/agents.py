@@ -99,7 +99,9 @@ Use Assertion–Reason only when the LO explicitly involves causal reasoning.
 
 If the concept is narrow, build distractors from sibling or contrasting taught concepts rather than rewordings of the key; otherwise use a choose-the-incorrect framing.
 
-Generate one stem and four options with EXACTLY one is_correct=true.""")
+If the outcome is SET-VALUED (it enumerates limitations / advantages / functionalities / use-cases / trade-offs / "types of" — where several options would each be true under a generic stem), the stem MUST carry a DISCRIMINATING QUALIFIER that isolates exactly one correct option (see ANSWER DETERMINACY in OPTION RULES). If no honest qualifier can do that, generate a MORE_THAN_ONE_MULTIPLE_CHOICE instead (all genuinely-true options is_correct=true + at least one genuinely-false option) rather than forcing a single "correct" among co-true items.
+
+Generate one stem and four options with EXACTLY one is_correct=true (unless the outcome is irreducibly set-valued, per above).""")
 register("gen.extra.TRUE_OR_FALSE",
          "Write one statement and whether it is true. If the LO is about code, its output, "
          "or its behavior, include a short snippet in `code` and judge a claim about it; "

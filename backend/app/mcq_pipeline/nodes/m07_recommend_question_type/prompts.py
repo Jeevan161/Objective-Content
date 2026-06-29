@@ -89,10 +89,18 @@ STEP 4 — EXACT SHORT ANSWER CHECK
 - An exact code OUTPUT/result → CODE_ANALYSIS_MULTIPLE_CHOICE (the output is the correct option,
   with plausible wrong outputs as distractors).
 
-STEP 5 — DEFAULT CONCEPTUAL ASSESSMENT
-- Otherwise:
-  → MULTIPLE_CHOICE (preferred default)
-  → TRUE_OR_FALSE only if statement is simple binary claim
+STEP 5 — ANSWER DETERMINACY (conceptual outcomes)
+- First decide if the outcome is SET-VALUED — it enumerates a set where MANY items are
+  independently, equally true (limitations / advantages / benefits / drawbacks / core
+  functionalities / features / use-cases / trade-offs / "types of" / "ways to" of something) —
+  versus SINGLE-ANSWER (one objective fact / term / value / canonical step).
+- SET-VALUED → still prefer MULTIPLE_CHOICE *provided* the question can be made single-answer
+  by a DISCRIMINATING QUALIFIER in the stem (a specific facet/scenario/sub-aspect that isolates
+  exactly one option). Use MORE_THAN_ONE_MULTIPLE_CHOICE only when no honest qualifier can isolate
+  a single answer (the items are irreducibly co-true, or the LO literally says "select all"/"which
+  of these").
+- SINGLE-ANSWER → MULTIPLE_CHOICE.
+- TRUE_OR_FALSE only if the statement is a simple binary claim.
 
 ────────────────────────────────────────
 CRITICAL CONSTRAINTS
