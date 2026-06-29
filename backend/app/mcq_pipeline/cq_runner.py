@@ -37,7 +37,7 @@ from app.mcq_pipeline.runner import (
 )
 from app.mcq_pipeline.state import REGISTRY, RunContext, new_state
 from app.mcq_pipeline.utils.llm import set_call_context
-from app.mcq_pipeline.utils.progress import CQ_STAGE_DEFS, ProgressReporter
+from app.mcq_pipeline.utils.progress import CQ_BASE_STAGE_DEFS, CQ_VARIANT_STAGE_DEFS, ProgressReporter
 from app.mcq_pipeline.utils.rag_adapter import RagAdapter
 from app.mcq_pipeline.utils.tracing import disable_langsmith
 
@@ -81,7 +81,7 @@ def run_classroom_quiz_pipeline(
     scope_label = f"Quiz {scope_no}" + (f" — {title}" if title else "")
 
     progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id),
-                                cancel_check=cancel_check, stage_defs=CQ_STAGE_DEFS)
+                                cancel_check=cancel_check, stage_defs=CQ_BASE_STAGE_DEFS)
     # Proxy metadata `unit` field (no-op for providers that don't use extra_body metadata).
     set_call_context(unit=scope_label)
 
@@ -117,39 +117,29 @@ def run_classroom_quiz_pipeline(
                     "reading_material": reading_material, "session_label": scope_label,
                     "durable_checkpoint": _checkpoint_durable(), "trace_job_id": thread_id}
 
-    return _assemble_result(state, reading_material=reading_material, adapter=adapter,
-                            session_label=scope_label, thread_id=thread_id, progress=progress)
+    return _assemble_result(state, reading_material=reading_material,
+                            session_label=scope_label, thread_id=thread_id)
 
 
-def _assemble_result(state: dict, *, reading_material: str, adapter, session_label: str,
-                     thread_id: str, progress) -> dict:
-    """Shared completion path (also reused by the CQ HITL resume in P5). m10 expands each base
-    question into objective-bound variants; variants live alongside the bases in `questions`,
-    linked by `base_question_key`."""
+def _assemble_result(state: dict, *, reading_material: str, session_label: str,
+                     thread_id: str) -> dict:
+    """Phase-1 completion path: BASE questions only. Variants are NOT generated here — they
+    are created in a separate, review-gated phase (`generate_variants_for_run`) once a human
+    has reviewed and finalized the base questions in the Review Queue."""
     los = state.get("final_los", [])
     questions = state.get("questions", [])
     _attach_dependencies(questions, los, state)
-
-    # --- m10: variants (per base) — runner-level stage, sharing the run's adapter -------- #
-    from app.mcq_pipeline.nodes.m10_generate_variants import (
-        CQ_VARIANT_MIN, generate_variants_for_questions,
-    )
-    bases = [q for q in questions if q.get("status") == "generated"]
-    on_var = progress.counter("generate_variants", len(bases) or 1)
-    variants, shortfalls = generate_variants_for_questions(los, questions, adapter=adapter,
-                                                           on_progress=on_var)
-    questions = questions + variants
-    progress.done("generate_variants",
-                  detail=f"{len(variants)} variants for {len(bases)} bases"
-                         + (f" · {len(shortfalls)} below min {CQ_VARIANT_MIN}" if shortfalls else ""),
-                  snapshot={"bases": len(bases), "variants": len(variants),
-                            "shortfalls": shortfalls})
+    # Tag every base so the UI + the variant phase can identify them unambiguously.
+    for q in questions:
+        q.setdefault("question_key", q.get("outcome"))
+        q.setdefault("is_variant", False)
 
     artifact = state.get("artifact", {})
     generated = [q for q in questions if q.get("status") == "generated"]
     lo_count = len(artifact.get("outcomes", los))
     return {
         "status": "completed",
+        "phase": "base",
         "session_label": session_label,
         "reading_material": reading_material,
         "ingested": False,
@@ -168,8 +158,72 @@ def _assemble_result(state: dict, *, reading_material: str, adapter, session_lab
         "trace_job_id": thread_id,
         "lo_count": lo_count,
         "question_count": len(generated),
+        "base_count": len(generated),
+        "variant_count": 0,
+        "needs_human_count": sum(1 for q in questions if q.get("needs_human")),
+    }
+
+
+def generate_variants_for_run(*, run_id, progress_sink: Callable[[dict], None] | None = None,
+                              thread_id: str | None = None,
+                              cancel_check: Callable[[], bool] | None = None) -> dict:
+    """Phase 2: expand each APPROVED, non-excluded base question of an existing Classroom-Quiz
+    run into objective-bound variants (m10). Re-runnable: it drops any prior variants and
+    regenerates for the current approved set. Returns the FULL updated result for persistence."""
+    disable_langsmith()
+    thread_id = thread_id or str(uuid.uuid4())
+
+    from app.models import ClassroomQuizDeck, McqRun
+    with SessionLocal() as session:
+        run = session.get(McqRun, run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found.")
+        result = dict(run.result or {})
+        reading_material = run.reading_material or result.get("reading_material", "")
+        deck = session.get(ClassroomQuizDeck, run.course_id) if run.course_id else None
+        domain = (deck.question_domain if deck is not None else "") or ""
+        deck_id = run.course_id or "cq"
+        label = result.get("session_label") or "variants"
+
+    los = result.get("final_los", [])
+    questions = result.get("questions", [])
+    non_variants = [q for q in questions if not q.get("is_variant")]
+    # Only APPROVED (and not excluded) base questions earn variants — the human's finalization.
+    bases = [q for q in non_variants
+             if q.get("status") == "generated" and q.get("approval") == "approved"
+             and not q.get("excluded")]
+
+    progress = ProgressReporter(sink=progress_sink, trace_sink=_make_trace_sink(thread_id),
+                                cancel_check=cancel_check, stage_defs=CQ_VARIANT_STAGE_DEFS)
+    set_call_context(unit=label)
+    adapter = RagAdapter(course_ids=[deck_id], prereq_units=[],
+                         reading_material=reading_material, ingested=False, domain=domain)
+
+    from app.mcq_pipeline.nodes.m10_generate_variants import (
+        CQ_VARIANT_MIN, generate_variants_for_questions,
+    )
+    on_var = progress.counter("generate_variants", len(bases) or 1)
+    variants, shortfalls = generate_variants_for_questions(los, bases, adapter=adapter,
+                                                           on_progress=on_var)
+    progress.done("generate_variants",
+                  detail=f"{len(variants)} variants for {len(bases)} approved base(s)"
+                         + (f" · {len(shortfalls)} below min {CQ_VARIANT_MIN}" if shortfalls else ""),
+                  snapshot={"bases": len(bases), "variants": len(variants), "shortfalls": shortfalls})
+
+    new_questions = non_variants + variants            # prior variants dropped, fresh set appended
+    result["questions"] = new_questions
+    result["variant_count"] = len(variants)
+    result["variant_shortfalls"] = shortfalls
+    result["phase"] = "variants"
+    generated = [q for q in new_questions if q.get("status") == "generated"]
+    return {
+        "status": "completed",
+        "run_id": str(run_id),
+        "result": result,
+        "question_count": len(generated),
         "base_count": len(bases),
         "variant_count": len(variants),
         "variant_shortfalls": shortfalls,
-        "needs_human_count": sum(1 for q in questions if q.get("needs_human")),
+        "needs_human_count": sum(1 for q in new_questions if q.get("needs_human")),
+        "trace_job_id": thread_id,
     }

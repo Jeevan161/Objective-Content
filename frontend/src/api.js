@@ -167,9 +167,13 @@ export const classroomQuizListDecks = () => request('/classroom-quiz/decks/')
 
 export const classroomQuizGetDeck = (deckId) => request(`/classroom-quiz/decks/${deckId}/`)
 
-// Fans out one generation job per scope; returns { deck_id, jobs: [job, ...] }.
+// Phase 1 — fans out one base-question generation job per scope; returns { deck_id, jobs: [...] }.
 export const classroomQuizGenerate = (deckId) =>
   request(`/classroom-quiz/decks/${deckId}/generate/`, { method: 'POST' })
+
+// Phase 2 — generate variants for a scope run's APPROVED base questions (gated on review).
+export const classroomQuizGenerateVariants = (runId) =>
+  request(`/classroom-quiz/runs/${runId}/variants/`, { method: 'POST' })
 
 // Node-by-node execution trace for a run (our own tracing), by the run's job id.
 export const getMcqTrace = (jobId) => request(`/courses/mcq/jobs/${jobId}/trace/`)

@@ -832,6 +832,27 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
   const [filter, setFilter] = useState('all') // all | review
 
   const shown = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
+  // Classroom Quiz: group each base question with its variants (linked by base_question_key)
+  // so the lineage is visible. MCQ runs have no variants, so every base stands alone and the
+  // list is unchanged. Orphan variants (whose base is filtered out) render standalone.
+  const grouped = useMemo(() => {
+    const variantsByBase = {}
+    for (const q of shown) {
+      if (q.is_variant) (variantsByBase[q.base_question_key] ||= []).push(q)
+    }
+    const usedKeys = new Set()
+    const groups = []
+    for (const q of shown) {
+      if (q.is_variant) continue
+      const key = q.question_key || q.outcome
+      usedKeys.add(key)
+      groups.push({ base: q, variants: variantsByBase[key] || [] })
+    }
+    for (const [bk, vs] of Object.entries(variantsByBase)) {
+      if (!usedKeys.has(bk)) vs.forEach((v) => groups.push({ base: v, variants: [] }))
+    }
+    return groups
+  }, [shown])
   // Review uses a one-card-at-a-time deck with a Q1/Q2… navigator; `current` indexes `shown`.
   const [current, setCurrent] = useState(0)
   const navRef = useRef(null)
@@ -1124,9 +1145,31 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
             </div>
           ) : (
             <div className="qc-list">
-              {shown.map((q) => (
-                <QuestionCard key={q.outcome} q={q} lo={loByOutcome[q.outcome]}
-                  index={questions.indexOf(q)} review={null} />
+              {grouped.map(({ base, variants }) => (
+                <div className={`qc-group${variants.length ? ' has-variants' : ''}`}
+                  key={base.question_key || base.outcome}>
+                  <QuestionCard q={base} lo={loByOutcome[base.outcome]}
+                    index={questions.indexOf(base)} review={null} />
+                  {variants.length > 0 && (
+                    <div className="qc-variants">
+                      <div className="qc-variants-head">{variants.length} variant{variants.length === 1 ? '' : 's'}</div>
+                      {variants.map((v, i) => (
+                        <div className="qc-variant" key={v.question_key || `${base.outcome}-v${i}`}>
+                          <div className="qc-variant-tag">
+                            Variant {i + 1}
+                            <span className="qc-variant-meta">
+                              {(v.variant_axis || '').replace(/_/g, ' ')}
+                              {(v.variant_angle || v.question_type)
+                                ? ` · ${(v.variant_angle || v.question_type).replace(/_/g, ' ')}` : ''}
+                            </span>
+                          </div>
+                          <QuestionCard q={v} lo={loByOutcome[v.outcome]}
+                            index={questions.indexOf(v)} review={null} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ))}
               {shown.length === 0 && <p className="muted">No questions in this filter.</p>}
             </div>
@@ -1190,7 +1233,8 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
             onMouseDown={(e) => { e.preventDefault(); setDragging(true) }}
             onKeyDown={onSplitKey}
           />
-          <ReadingMaterialPane courseId={cId} unitId={uId} content={readingMaterial} />
+          <ReadingMaterialPane courseId={cId} unitId={uId}
+            content={readingMaterial ?? run?.result?.reading_material ?? run?.reading_material ?? null} />
         </>
       )}
       {confirm && (
