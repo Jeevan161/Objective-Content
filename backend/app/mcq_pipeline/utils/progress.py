@@ -44,15 +44,13 @@ STAGE_DEFS = [
     {"key": "review_questions", "label": "Review & fix"},
 ]
 
-# Classroom Quiz board: the same LO+question pipeline, BRACKETED by two runner-level
-# stages — reading-material generation (m00, before the graph) and variant generation
-# (m10, after it). A separate list so these two stages never show as perpetually-pending
-# on a normal MCQ run (which has neither).
-CQ_STAGE_DEFS = (
-    [{"key": "reading_material", "label": "Generate reading material"}]
-    + STAGE_DEFS
-    + [{"key": "generate_variants", "label": "Generate variants (per base)"}]
-)
+# Classroom Quiz is TWO phases, each its own job + board:
+#   Phase 1 (base): reading material (m00) + the LO/question pipeline — produces the BASE
+#     questions, which a human then reviews & finalizes in the Review Queue.
+#   Phase 2 (variants): m10 expands each APPROVED base into variants. Runs only after review.
+# Separate boards so neither phase shows the other's stages as perpetually pending.
+CQ_BASE_STAGE_DEFS = [{"key": "reading_material", "label": "Generate reading material"}] + STAGE_DEFS
+CQ_VARIANT_STAGE_DEFS = [{"key": "generate_variants", "label": "Generate variants (per approved base)"}]
 
 
 # Cap LLM calls recorded per node span so a fan-out node (e.g. K-sample voting over many

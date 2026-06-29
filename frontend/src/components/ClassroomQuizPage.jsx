@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, ChevronRight } from 'lucide-react'
+import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, ChevronRight, Layers } from 'lucide-react'
 import {
   classroomQuizIngest,
   classroomQuizListDecks,
   classroomQuizGetDeck,
   classroomQuizGenerate,
+  classroomQuizGenerateVariants,
   getMcqRun,
   mcqJobWsUrl,
 } from '../api'
@@ -37,17 +38,28 @@ const STATUS_LABEL = {
 // One scope: owns its own progress WebSocket; renders the live stage board while generating
 // and the generated run (reading material + base questions + variants) via McqResults when done.
 function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
+  const toast = useToast()
   const [run, setRun] = useState(null)
   const [open, setOpen] = useState(false)
   const [loadingRun, setLoadingRun] = useState(false)
+  const [varJob, setVarJob] = useState(null)          // phase-2 variant generation job
+  const [genningVar, setGenningVar] = useState(false)
   const streamable = !!(job && job.id && !TERMINAL.includes(job.status))
+  const varStreamable = !!(varJob && varJob.id && !TERMINAL.includes(varJob.status))
 
+  const loadRun = useCallback(() => {
+    if (!scope.run_id) return
+    setLoadingRun(true)
+    getMcqRun(scope.run_id).then(setRun).catch(() => {}).finally(() => setLoadingRun(false))
+  }, [scope.run_id])
+
+  useEffect(() => { loadRun() }, [loadRun])
+
+  // Phase-1 (base generation) progress stream.
   useEffect(() => {
     if (!streamable) return
     const url = mcqJobWsUrl(job.id)
-    let ws = null
-    let stopped = false
-    let retry = null
+    let ws = null, stopped = false, retry = null
     const connect = () => {
       ws = new WebSocket(url)
       ws.onmessage = (e) => {
@@ -57,8 +69,7 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
         const updated = msg.data
         onJobUpdate(scope.id, updated)
         if (TERMINAL.includes(updated.status)) {
-          stopped = true
-          ws.close()
+          stopped = true; ws.close()
           if (updated.status === 'SUCCESS') onSettled?.()
         }
       }
@@ -69,22 +80,50 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job?.id, streamable])
 
+  // Phase-2 (variant generation) progress stream — refetch the run on success.
   useEffect(() => {
-    if (!scope.run_id) return
-    let alive = true
-    setLoadingRun(true)
-    getMcqRun(scope.run_id)
-      .then((r) => { if (alive) setRun(r) })
-      .catch(() => {})
-      .finally(() => { if (alive) setLoadingRun(false) })
-    return () => { alive = false }
-  }, [scope.run_id])
+    if (!varStreamable) return
+    const url = mcqJobWsUrl(varJob.id)
+    let ws = null, stopped = false, retry = null
+    const connect = () => {
+      ws = new WebSocket(url)
+      ws.onmessage = (e) => {
+        let msg
+        try { msg = JSON.parse(e.data) } catch { return }
+        if (msg.type !== 'job') return
+        const updated = msg.data
+        setVarJob(updated)
+        if (TERMINAL.includes(updated.status)) {
+          stopped = true; ws.close()
+          if (updated.status === 'SUCCESS') { loadRun(); setOpen(true) }
+        }
+      }
+      ws.onclose = () => { if (!stopped) retry = setTimeout(connect, 1500) }
+    }
+    connect()
+    return () => { stopped = true; if (retry) clearTimeout(retry); if (ws) ws.close() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [varJob?.id, varStreamable])
+
+  const handleVariants = async () => {
+    if (!run) return
+    setGenningVar(true)
+    try {
+      const j = await classroomQuizGenerateVariants(run.id)
+      setVarJob(j)
+      toast.push({ kind: 'info', title: 'Generating variants',
+                   message: 'For the approved base questions — watch the progress below.' })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not generate variants', message: e.message })
+    } finally { setGenningVar(false) }
+  }
 
   const running = !!(job && !TERMINAL.includes(job.status))
   const failed = (job && job.status === 'FAILURE') || scope.coverage === 'FAILED'
-  const counts = run
-    ? `${run.lo_count} LOs · ${run.question_count} questions`
-    : null
+  const counts = run ? `${run.lo_count} LOs · ${run.question_count} questions` : null
+  const approved = run?.approved_count || 0
+  const hasVariants = (run?.result?.questions || []).some((q) => q.is_variant)
+  const varRunning = !!(varJob && !TERMINAL.includes(varJob.status))
 
   return (
     <div className="cq-scope">
@@ -109,9 +148,31 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
 
       {scope.run_id && (
         <div className="cq-scope-body">
+          <div className="cq-scope-actions">
+            {approved > 0 ? (
+              <button className="cq-btn cq-btn-primary cq-btn-sm"
+                onClick={handleVariants} disabled={genningVar || varRunning}>
+                {(genningVar || varRunning) ? <Spinner size={14} /> : <Layers size={15} />}
+                {hasVariants ? 'Regenerate variants'
+                  : `Generate variants (${approved} approved base${approved === 1 ? '' : 's'})`}
+              </button>
+            ) : (
+              <span className="cq-scope-hint">
+                Review &amp; approve base questions in the Review Queue to unlock variant generation.
+              </span>
+            )}
+          </div>
+
+          {varRunning && varJob.progress && <McqProgress progress={varJob.progress} />}
+          {varJob && varJob.status === 'FAILURE' && (
+            <div className="cq-scope-err">
+              <AlertTriangle size={14} /> Variant generation failed{varJob.error ? `: ${varJob.error}` : ''}
+            </div>
+          )}
+
           <button className="cq-link" onClick={() => setOpen((o) => !o)}>
             <ChevronRight size={14} className={`cq-chev ${open ? 'open' : ''}`} />
-            {open ? 'Hide' : 'View'} reading material, base questions & variants
+            {open ? 'Hide' : 'View'} reading material, base questions{hasVariants ? ' & variants' : ''}
           </button>
           {open && (loadingRun
             ? <div className="cq-run-loading"><Spinner /></div>

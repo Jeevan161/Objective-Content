@@ -487,6 +487,73 @@ def start_cq_scope_job(job_id: uuid.UUID, scope_id) -> threading.Thread:
     return thread
 
 
+def _persist_cq_variants_result(job_id: uuid.UUID, result: dict, run_id) -> None:
+    """Phase-2 persistence: replace the run's questions with the variant-augmented set and
+    refresh the summary counts. The base questions + their approvals are preserved (the
+    variant phase only drops/re-adds the variant entries)."""
+    from app.models import McqRun, SyncJob
+
+    with SessionLocal() as session:
+        job = session.get(SyncJob, job_id)
+        run = session.get(McqRun, run_id)
+        if run is not None:
+            run.result = result.get("result", run.result)
+            run.question_count = result.get("question_count", run.question_count)
+            run.needs_human_count = result.get("needs_human_count", run.needs_human_count)
+        if job is not None:
+            job.status = SyncJob.SUCCESS
+            job.message = (f"{result.get('variant_count', 0)} variants for "
+                           f"{result.get('base_count', 0)} approved base question(s).")
+            prog = dict(job.progress or {})
+            prog.pop("awaiting_review", None)
+            prog.pop("review", None)
+            job.progress = prog
+            job.updated_at = _now()
+        session.commit()
+    progress_broker.publish(str(job_id))
+
+
+def _run_cq_variants_job(job_id: uuid.UUID, run_id) -> None:
+    """Phase 2: generate variants for the APPROVED base questions of a finalized scope run."""
+    import traceback
+
+    from app.mcq_pipeline.cq_runner import generate_variants_for_run
+    from app.mcq_pipeline.utils.progress import JobCancelled
+    from app.services.task_log import ERROR, log_task
+
+    user_id = _bind_user_for_job(job_id)
+    cancel_event = _register_cancel(job_id)
+    log_task(task_type="MCQ", event="cq_variants_start", job_id=job_id, user_id=user_id,
+             message=f"run={run_id}")
+    try:
+        with _MCQ_SEMAPHORE:
+            if cancel_event.is_set():
+                raise JobCancelled()
+            result = generate_variants_for_run(
+                run_id=run_id, progress_sink=_mcq_sink(job_id),
+                thread_id=str(job_id), cancel_check=cancel_event.is_set,
+            )
+        _persist_cq_variants_result(job_id, result, run_id)
+        log_task(task_type="MCQ", event="cq_variants_complete", job_id=job_id, user_id=user_id,
+                 message=f"{result.get('variant_count', 0)} variants")
+    except JobCancelled:
+        log_task(task_type="MCQ", event="cq_variants_cancelled", job_id=job_id, user_id=user_id,
+                 message="cancelled by user")
+        _cancel_job(job_id)
+    except Exception as err:  # noqa: BLE001
+        log_task(task_type="MCQ", event="cq_variants_error", level=ERROR, job_id=job_id,
+                 user_id=user_id, message=str(err), detail={"trace": traceback.format_exc()[:8000]})
+        _fail_job(job_id, err)
+    finally:
+        _clear_cancel(job_id)
+
+
+def start_cq_variants_job(job_id: uuid.UUID, run_id) -> threading.Thread:
+    thread = threading.Thread(target=_run_cq_variants_job, args=(job_id, run_id), daemon=True)
+    thread.start()
+    return thread
+
+
 def _run_mcq_regen_job(job_id: uuid.UUID, run_id: uuid.UUID, outcome: str,
                        feedback: str, tags: list[str] | None, reviewer: str) -> None:
     """Regenerate ONE question for its LO in the background so the action is tracked as an

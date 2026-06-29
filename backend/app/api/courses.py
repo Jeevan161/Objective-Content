@@ -83,6 +83,7 @@ from app.services.jobs import (
     start_extraction_job,
     start_load_job,
     start_cq_scope_job,
+    start_cq_variants_job,
     start_mcq_job,
     start_mcq_regen_job,
     start_mcq_resume_job,
@@ -672,6 +673,37 @@ def cq_generate(deck_id: uuid.UUID, session: Session = Depends(get_session),
     for job, scope_id in started:          # start AFTER commit so the worker can read the row
         start_cq_scope_job(job.id, scope_id)
     return payload
+
+
+@router.post("/classroom-quiz/runs/{run_id}/variants/", status_code=status.HTTP_202_ACCEPTED)
+def cq_generate_variants(run_id: uuid.UUID, session: Session = Depends(get_session),
+                         user: User = Depends(require_active)) -> dict:
+    """Phase 2 — generate variants for a scope's APPROVED base questions. Gated on the base
+    questions having been reviewed & finalized (at least one approved). Re-runnable: it drops
+    any prior variants and regenerates for the current approved set."""
+    _require_active_key(session, user)
+    run = session.get(McqRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    deck = session.get(ClassroomQuizDeck, run.course_id) if run.course_id else None
+    if deck is None:
+        raise HTTPException(status_code=400, detail="This is not a Classroom Quiz run.")
+    if (deck.created_by is not None and deck.created_by != user.id
+            and user.role != User.ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="You can only generate for your own decks.")
+    if (run.approved_count or 0) < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Review and approve at least one base question (Review Queue) before generating variants.")
+
+    job = SyncJob(
+        course_id=str(deck.id), job_type=SyncJob.CLASSROOM_QUIZ, created_by=user.id,
+        progress={"ctx": {"deck_id": str(deck.id), "run_id": str(run_id), "phase": "variants"}},
+    )
+    session.add(job)
+    session.commit()
+    start_cq_variants_job(job.id, run_id)
+    return serialize_job(job)
 
 
 # --- live job progress over WebSocket (replaces the frontend poll) -------------- #
