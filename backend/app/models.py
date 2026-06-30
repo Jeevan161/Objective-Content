@@ -446,6 +446,31 @@ class User(Base):
     updated_at: Mapped[datetime] = updated_at_col()
 
 
+class CourseCollaborator(Base):
+    """Grants a user access to work on (generate content for) a course they don't own.
+    Added by the course owner or an admin; the grant is immediate — there is no approval
+    step. Effective access to a course = its owner (``Course.created_by``) OR a row here
+    OR any admin. Unowned/legacy courses (created_by is None) stay open to everyone."""
+
+    __tablename__ = "course_collaborators"
+    __table_args__ = (
+        UniqueConstraint("course_id", "user_id", name="uq_course_collaborator"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    course_id: Mapped[str] = mapped_column(
+        ForeignKey("courses.course_id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # Who granted the access (owner or admin). Kept for audit; SET NULL if they're removed.
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = created_at_col()
+
+
 class UserLlmKey(Base):
     """A user's personal API key for ONE LLM connector. A user supplies a key per
     connector they use (up to one per `llm_providers` row); only the key is per-user —

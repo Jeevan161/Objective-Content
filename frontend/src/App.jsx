@@ -237,15 +237,10 @@ function Workspace() {
       )
   }
 
-  // Per-unit "Sync content": re-extract just one learning set. If its reading
-  // materials already have stored resource ids we go token-free via the admin
-  // panel; otherwise we open the token modal scoped to that unit.
-  function handleSyncUnit(course, unitIds, needsToken) {
-    if (needsToken) {
-      setExtractFor({ course, unitIds, env: course.environment })
-    } else {
-      handleExtractSubmit(course, {}, unitIds)
-    }
+  // Per-unit "Sync content": re-extract just one learning set, always token-free
+  // via the content-loading admin panel.
+  function handleSyncUnit(course, unitIds) {
+    handleExtractSubmit(course, {}, unitIds)
   }
 
   function handleIngestSubmit(course, unitIds) {
@@ -551,7 +546,6 @@ function Workspace() {
         <TokenModal
           course={extractFor.course}
           unitIds={extractFor.unitIds}
-          requireEnv={extractFor.env}
           onClose={() => setExtractFor(null)}
           onSubmit={handleExtractSubmit}
         />

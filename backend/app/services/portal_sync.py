@@ -200,6 +200,21 @@ def run_sync_job(session: Session, job_id: uuid.UUID) -> None:
         job.message = f"Saved {topic_count} topics, {unit_count} units."
         job.updated_at = _now()
         session.commit()
+
+        # A Sync also refreshes reading-material content: chain a token-free
+        # extraction (learning_resource ids are discovered via the content-loading
+        # admin's CSV). Skip for prerequisite syncs — extracting the parent course
+        # already walks its prerequisites recursively, so this avoids redundant runs.
+        if not job.prerequisite_for:
+            extract_job = SyncJob(
+                course_id=job.course_id,
+                job_type=SyncJob.EXTRACT,
+                created_by=getattr(job, "created_by", None),
+            )
+            session.add(extract_job)
+            session.commit()
+            from app.services.jobs import start_extraction_job  # deferred: avoids import cycle
+            start_extraction_job(extract_job.id, {}, None)
     except Exception as err:  # noqa: BLE001 — report any failure onto the job row
         session.rollback()
         job = session.get(SyncJob, job_id)

@@ -322,7 +322,8 @@ def serialize_topic(topic: Topic, *, part_counts: dict | None = None,
 
 
 def serialize_course_list(
-    course: Course, *, ingested_chunk_count: int = 0, content_issue_count: int = 0
+    course: Course, *, ingested_chunk_count: int = 0, content_issue_count: int = 0,
+    collaborator_ids: list | None = None,
 ) -> dict:
     """Summary fields needed to render a (top-level or nested) course card."""
     return {
@@ -343,7 +344,14 @@ def serialize_course_list(
         # Reading materials that ran extraction but came back EMPTY/ERROR.
         "content_issue_count": content_issue_count,
         "created_by": getattr(course, "created_by", None),
+        # Users explicitly granted access (owner can generate regardless of this list).
+        "collaborator_ids": collaborator_ids or [],
     }
+
+
+class CollaboratorRequest(BaseModel):
+    """Add a course collaborator by email (owner/admin only)."""
+    email: str = ""
 
 
 def serialize_course_detail(
