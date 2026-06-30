@@ -1,8 +1,11 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 
 // Centered overlay dialog. Closes on backdrop click or Escape.
 // size: 'sm' | 'md' | 'lg'
+// Rendered through a portal to <body> so it always escapes the stacking context
+// of whatever rendered it (e.g. a course card's transform), never trapped behind siblings.
 function Modal({ title, subtitle, size = 'md', onClose, children, footer }) {
   useEffect(() => {
     function onKey(e) {
@@ -12,7 +15,7 @@ function Modal({ title, subtitle, size = 'md', onClose, children, footer }) {
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
         className={`modal modal-${size}`}
@@ -32,7 +35,8 @@ function Modal({ title, subtitle, size = 'md', onClose, children, footer }) {
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
