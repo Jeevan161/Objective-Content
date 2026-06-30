@@ -223,7 +223,8 @@ def feasible_question_types(o: dict) -> list[str]:
     is_apply = (o.get("bloom_level") or "").lower() in ("apply", "scenario")
     if has_syntax:
         types = ["CODE_ANALYSIS_MULTIPLE_CHOICE", "MULTIPLE_CHOICE",
-                 "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE", "TRUE_OR_FALSE"]
+                 "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE", "TRUE_OR_FALSE",
+                 "MORE_THAN_ONE_MULTIPLE_CHOICE"]
         if is_apply:                                    # write/complete-code variant for apply-code LOs
             types = [("SQL_FIB_CODING" if _course_is_sql() else "FIB_CODING")] + types
     else:
