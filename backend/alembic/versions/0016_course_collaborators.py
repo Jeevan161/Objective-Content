@@ -1,7 +1,7 @@
 """course collaborators (per-course access grants)
 
 Revision ID: 0016_course_collaborators
-Revises: f8a2c1d4e5b6
+Revises: 0015_classroom_quiz
 Create Date: 2026-06-30 00:00:00.000000
 
 Adds the course_collaborators table: a course owner (courses.created_by) or an
@@ -14,7 +14,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = '0016_course_collaborators'
-down_revision: Union[str, None] = 'f8a2c1d4e5b6'
+down_revision: Union[str, None] = '0015_classroom_quiz'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
