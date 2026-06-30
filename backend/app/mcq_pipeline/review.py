@@ -380,6 +380,50 @@ def _qtype_for(result: dict, outcome: str) -> str:
     return (result.get("questions") or [{}])[i].get("question_type", "") if i >= 0 else ""
 
 
+# --- "what changed" summary + no-op detection (a regen that silently changes nothing is a top --- #
+# reviewer pain point; surface a note and flag it instead of persisting an identical question). --- #
+def _stem(lean: dict) -> str:
+    return ((lean or {}).get("question") or (lean or {}).get("statement") or "").strip()
+
+
+def _opt_texts(lean: dict) -> list:
+    return [((o.get("text") or o.get("content") or "") if isinstance(o, dict) else str(o))
+            for o in ((lean or {}).get("options") or [])]
+
+
+def _correct_texts(lean: dict) -> list:
+    return sorted((o.get("text") or o.get("content") or "") for o in ((lean or {}).get("options") or [])
+                  if isinstance(o, dict) and o.get("is_correct"))
+
+
+_LEAN_FIELDS = ("code", "blank_answer", "test_input", "test_output", "answer", "explanation")
+
+
+def _lean_changed(a: dict, b: dict) -> bool:
+    if _stem(a) != _stem(b) or _opt_texts(a) != _opt_texts(b) or _correct_texts(a) != _correct_texts(b):
+        return True
+    return any((a.get(k) or "") != (b.get(k) or "") for k in _LEAN_FIELDS)
+
+
+def _summarize_change(a: dict, b: dict, type_change: dict | None) -> str:
+    """A concise human-readable note of what the regeneration changed, for the review UI."""
+    parts = []
+    if type_change:
+        parts.append(f"changed type {type_change.get('from')} → {type_change.get('to')}")
+    if _stem(a) != _stem(b):
+        parts.append("reworded the question")
+    oa, ob = _opt_texts(a), _opt_texts(b)
+    if oa != ob:
+        n = max(len([o for o in ob if o not in oa]), len([o for o in oa if o not in ob]))
+        parts.append(f"changed {n} option(s)" if n else "reordered the options")
+    if _correct_texts(a) != _correct_texts(b):
+        parts.append("changed the correct answer")
+    for k, label in (("code", "code"), ("blank_answer", "blank"), ("explanation", "explanation")):
+        if (a.get(k) or "") != (b.get(k) or ""):
+            parts.append(f"updated the {label}")
+    return "; ".join(parts)
+
+
 def _eligible(qs: list) -> list:
     """Questions that count toward approval — the ones actually generated, minus any a
     reviewer has excluded (excluded questions stay in the list but are not loaded)."""
@@ -530,6 +574,20 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     if actual_qtype != current_qtype:
         new_q["type_change"] = {"from": current_qtype, "to": actual_qtype, "requested": new_qtype}
         effective_lo["question_type"] = actual_qtype   # keep the run-result LO object in sync
+
+    # "WHAT CHANGED" note + no-op guard: tell the reviewer exactly what the regen altered, and if it
+    # changed NOTHING (e.g. vague feedback the model couldn't act on), flag it instead of silently
+    # persisting an identical question — the #1/#2 reviewer complaints ("not changing anything").
+    old_lean = old_q.get("lean") or {}
+    new_lean = new_q.get("lean") or {}
+    if _lean_changed(old_lean, new_lean):
+        new_q["change_summary"] = _summarize_change(old_lean, new_lean, new_q.get("type_change"))
+        new_q["unchanged"] = False
+    else:
+        new_q["unchanged"] = True
+        new_q["needs_human"] = True
+        new_q["change_summary"] = ("No change was produced — the feedback may be too vague to act on. "
+                                   "Tell me exactly what to change (which option, the stem, or the answer).")
 
     # 3) carry forward revision + feedback history on the question
     prev = {k: v for k, v in old_q.items() if k != "revisions"}
