@@ -423,6 +423,14 @@ function QuestionCard({ q, lo, index, review }) {
         </div>
       )}
 
+      {q.change_summary && (
+        <div className={`qc-note ${q.unchanged ? '' : 'qc-note-ok'}`}>
+          {q.unchanged
+            ? <><AlertTriangle size={12} /> {q.change_summary}</>
+            : <><CheckCircle2 size={12} /> What changed: {q.change_summary}</>}
+        </div>
+      )}
+
       {!generated ? (
         <Field label="Status"><p className="qc-muted">{q.reason || 'Not generated.'}</p></Field>
       ) : (
