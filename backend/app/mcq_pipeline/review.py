@@ -12,6 +12,7 @@ this module from the API stays cheap.
 
 from __future__ import annotations
 
+import json
 import re
 
 from app.db.session import SessionLocal
@@ -260,6 +261,60 @@ def _intent_issue(intent: str, feedback: str) -> dict:
     }
 
 
+# --- regeneration MEMORY: feed prior rejected attempts back in so a regen fixes ALL --- #
+# past complaints and never reproduces a version already rejected (the #1 driver of the
+# observed ~2.4-regens-to-converge tail). The data is already on the question object
+# (revisions + human_feedback); it was just never consumed.
+def _q_text(lean: dict) -> str:
+    return ((lean or {}).get("question") or (lean or {}).get("statement") or "").strip()
+
+
+def _memory_issue(old_q: dict) -> dict | None:
+    """Build a high-severity 'do not repeat' issue from this question's prior rejected attempts."""
+    revs = old_q.get("revisions") or []
+    fbs = old_q.get("human_feedback") or []
+    past_fb = [str(f.get("feedback", "")).strip() for f in fbs if str(f.get("feedback", "")).strip()]
+    past_q = [t[:200] for r in revs if (t := _q_text(r.get("lean") or {}))]
+    if not past_fb and not past_q:
+        return None
+    parts = [f"This question has already been regenerated {len(revs)} time(s); earlier attempts were REJECTED."]
+    if past_fb:
+        parts.append("Prior reviewer complaints — satisfy ALL of them, not just the latest: "
+                     + " | ".join(past_fb[-5:]))
+    if past_q:
+        parts.append("Earlier REJECTED versions — do NOT reproduce or lightly reword any of these: "
+                     + " || ".join(past_q[-3:]))
+    return {"severity": "high", "rule": "REGENERATION MEMORY", "problem": "\n".join(parts),
+            "suggested_fix": ("Produce a question that fixes EVERY prior complaint and is materially "
+                              "different from every earlier rejected version above.")}
+
+
+# --- self-check: did the regen actually RESOLVE the reviewer's complaint? One bounded repair --- #
+_FEEDBACK_SATISFIED_SYS = register("review.feedback_satisfied_sys", (
+    "You verify whether a regenerated multiple-choice question now RESOLVES a reviewer's complaint. "
+    "You are given the reviewer feedback and the NEW question (as JSON: stem, options, correct flag). "
+    "Decide ONLY whether the SPECIFIC issue the reviewer raised is now fixed — not general quality. "
+    "If the feedback was vague/general with nothing concrete to verify, treat it as resolved. "
+    'Return ONLY JSON: {"resolved": true|false, "reason": "<if false, the single thing still wrong>"}.'
+))
+
+
+def _satisfies_feedback(feedback: str, lean: dict) -> dict:
+    """Best-effort check that the new question addresses the complaint. Never blocks on failure."""
+    if not (feedback or "").strip() or not lean:
+        return {"resolved": True}
+    from app.mcq_pipeline.utils.llm import chat, parse_json
+    try:
+        view = json.dumps(lean, ensure_ascii=False)[:1800]
+        data = parse_json(chat(
+            [{"role": "system", "content": get_prompt("review.feedback_satisfied_sys", _FEEDBACK_SATISFIED_SYS)},
+             {"role": "user", "content": f"REVIEWER FEEDBACK:\n{feedback}\n\nNEW QUESTION:\n{view}"}],
+            temperature=0)) or {}
+        return {"resolved": bool(data.get("resolved", True)), "reason": str(data.get("reason") or "")}
+    except Exception:  # noqa: BLE001 — never block regeneration on the self-check
+        return {"resolved": True}
+
+
 def _pick_reserve_lo(result: dict, current_lo: dict) -> dict | None:
     """For a 'change the LO' request with no suggestion: pick a previously-DROPPED
     (reserve) outcome that is NOT already used in this run and is not a near-duplicate
@@ -372,6 +427,9 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         raise ValueError(f"No question found for outcome {outcome!r}.")
     old_q = result["questions"][idx]
     current_qtype = old_q.get("question_type") or lo.get("question_type")
+    # MEMORY: prior rejected attempts on THIS question, fed into every fix so the regen fixes all
+    # past complaints and never reproduces a rejected version (empty list when this is the 1st regen).
+    mem_issues = [m] if (m := _memory_issue(old_q)) else []
 
     # 2) regenerate (grounded on the run's course scope) with feedback injected
     adapter, _pu, _label = build_adapter(course_id, unit_id, None)
@@ -410,14 +468,14 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         ctx = _ground(gen_lo, None)
         gen = generate_lean(gen_lo)
         if gen.get("status") == "generated" and gen.get("lean"):
-            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue("other", feedback)])
+            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue("other", feedback)] + mem_issues)
         alignment_note = (f"Outcome swapped (the original was flagged as misaligned/out-of-scope): "
                           f"'{outcome}' -> '{swap_lo.get('outcome')}'. Please review the new question.")
     elif (not target) and _lean and intent not in ("new_question", "lo_misaligned"):
         # surgical fix of the existing question (content / format / alignment intents)
         gen_lo = {**lo, "question_type": new_qtype}
         ctx = _ground(gen_lo, None)
-        new_lean = fix_lean(gen_lo, ctx, _lean, [_intent_issue(intent or "other", feedback)])
+        new_lean = fix_lean(gen_lo, ctx, _lean, [_intent_issue(intent or "other", feedback)] + mem_issues)
         gen = {"status": "generated", "question_type": current_qtype,
                "difficulty": difficulty_of(lo), "lean": new_lean}
     else:
@@ -426,7 +484,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         ctx = _ground(gen_lo, None)
         gen = generate_lean(gen_lo)
         if gen.get("status") == "generated" and gen.get("lean"):
-            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue(intent or "other", feedback)])
+            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue(intent or "other", feedback)] + mem_issues)
         if intent == "lo_misaligned":
             alignment_note = ("Reviewer flagged the learning outcome as misaligned/out-of-scope, but no "
                               "reserve (dropped) outcome is stored for this run; regenerated against the "
@@ -442,6 +500,24 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     effective_lo = swap_lo or lo
     gen["outcome"] = effective_lo.get("outcome") if swap_lo else outcome
     new_q = review_and_fix_one(effective_lo, gen)
+    # SELF-CHECK: verify the regen actually RESOLVED the reviewer's complaint; one bounded repair if
+    # not (carrying memory), so the human is no longer the convergence loop. Skipped for a request to
+    # author a brand-new question (nothing specific to "resolve").
+    if intent != "new_question":
+        chk = _satisfies_feedback(feedback, new_q.get("lean") or {})
+        if not chk.get("resolved", True):
+            cur_type = new_q.get("question_type") or new_qtype
+            retry_lo = {**effective_lo, "question_type": cur_type}
+            relean = fix_lean(retry_lo, ctx, new_q.get("lean") or {},
+                              [{"severity": "high", "rule": "REVIEWER FEEDBACK (STILL UNRESOLVED)",
+                                "problem": ("The regenerated question still does not resolve the reviewer "
+                                            f"feedback: {feedback}"),
+                                "suggested_fix": chk.get("reason") or feedback}] + mem_issues)
+            retry_gen = {"status": "generated", "question_type": cur_type,
+                         "difficulty": difficulty_of(effective_lo), "lean": relean,
+                         "outcome": gen.get("outcome")}
+            new_q = review_and_fix_one(effective_lo, retry_gen)
+            new_q["self_check_retried"] = True
     if swap_lo is not None:
         new_q["lo_swap"] = {"from_outcome": outcome, "to_outcome": swap_lo.get("outcome"),
                             "from_concept": lo.get("concept"), "to_concept": swap_lo.get("concept")}
