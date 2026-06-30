@@ -364,15 +364,44 @@ def _apply_lo_swap(res: dict, from_outcome: str, reserve_lo: dict) -> None:
                           if r.get("outcome") != to_outcome]
 
 
+_VARIANT_SUFFIX = re.compile(r"::v\d+$")
+
+
+def _base_outcome(ident: str) -> str:
+    """Strip a Classroom-Quiz variant suffix ('base::v1' -> 'base'). Bases are unaffected."""
+    return _VARIANT_SUFFIX.sub("", ident or "")
+
+
 def _find_lo(result: dict, outcome: str) -> dict | None:
-    return next((lo for lo in (result.get("final_los") or []) if lo.get("outcome") == outcome), None)
+    # CQ variants share their base's LO (keyed by the BASE outcome), so strip any ::vN suffix.
+    base = _base_outcome(outcome)
+    return next((lo for lo in (result.get("final_los") or []) if lo.get("outcome") == base), None)
 
 
 def _find_q_index(result: dict, outcome: str) -> int:
-    for i, q in enumerate(result.get("questions") or []):
-        if q.get("outcome") == outcome:
-            return i
-    return -1
+    # Variants share their base's `outcome`, so match the UNIQUE `question_key` first (bases have
+    # question_key == outcome), then fall back to `outcome` for older runs that predate question_key.
+    qs = result.get("questions") or []
+    i = next((i for i, q in enumerate(qs) if (q.get("question_key") or q.get("outcome")) == outcome), -1)
+    if i >= 0:
+        return i
+    return next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+
+
+def _variant_directive(old_q: dict) -> str:
+    """Rebuild the m10 objective-binding directive for a variant being regenerated, so the reused
+    m08 generator stays on the SAME assertion / Bloom tier / angle. Empty when not a variant or no
+    objective is stored (older runs) — then it regenerates as a plain question on the base LO."""
+    obj = old_q.get("objective") or {}
+    if not (obj.get("assertion") or "").strip():
+        return ""
+    try:
+        from app.mcq_pipeline.nodes.m10_generate_variants.prompts import _DIRECTIVE
+        return get_prompt("cq.variants.directive", _DIRECTIVE).format(
+            assertion=obj.get("assertion", ""), bloom=obj.get("bloom_tier", ""),
+            axis=old_q.get("variant_axis", ""), angle_instruction=old_q.get("variant_angle", ""))
+    except Exception:  # noqa: BLE001 — never block regeneration on directive rebuild
+        return ""
 
 
 def _qtype_for(result: dict, outcome: str) -> str:
@@ -430,6 +459,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     # MEMORY: prior rejected attempts on THIS question, fed into every fix so the regen fixes all
     # past complaints and never reproduces a rejected version (empty list when this is the 1st regen).
     mem_issues = [m] if (m := _memory_issue(old_q)) else []
+    # CQ VARIANT support: a variant is identified by its unique `question_key` (base::vN), shares the
+    # base LO + outcome, and must stay bound to its objective/axis. Preserve all of that on regen.
+    is_variant = bool(old_q.get("is_variant"))
+    base_outcome = old_q.get("outcome") or _base_outcome(outcome)
+    variant_key = old_q.get("question_key") or outcome
+    variant_directive = _variant_directive(old_q) if is_variant else ""
 
     # 2) regenerate (grounded on the run's course scope) with feedback injected
     adapter, _pu, _label = build_adapter(course_id, unit_id, None)
@@ -461,7 +496,9 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     alignment_note = None
     # When the OUTCOME itself is rejected and a reserve (dropped) outcome is available,
     # swap that reserve LO into this slot instead of re-asking the misaligned outcome.
-    swap_lo = _pick_reserve_lo(result, lo) if intent == "lo_misaligned" else None
+    # A variant is bound to its base question's objective — never swap its LO (that would break the
+    # variant set); a misaligned-outcome complaint on a variant is handled as a normal regen.
+    swap_lo = _pick_reserve_lo(result, lo) if (intent == "lo_misaligned" and not is_variant) else None
 
     if swap_lo is not None:
         gen_lo = {**swap_lo, "question_type": new_qtype}
@@ -473,14 +510,16 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
                           f"'{outcome}' -> '{swap_lo.get('outcome')}'. Please review the new question.")
     elif (not target) and _lean and intent not in ("new_question", "lo_misaligned"):
         # surgical fix of the existing question (content / format / alignment intents)
-        gen_lo = {**lo, "question_type": new_qtype}
+        gen_lo = {**lo, "question_type": new_qtype,
+                  "description": (lo.get("description") or "") + variant_directive}
         ctx = _ground(gen_lo, None)
         new_lean = fix_lean(gen_lo, ctx, _lean, [_intent_issue(intent or "other", feedback)] + mem_issues)
         gen = {"status": "generated", "question_type": current_qtype,
                "difficulty": difficulty_of(lo), "lean": new_lean}
     else:
         # type change, "make a new one", no prior lean, or LO-misaligned with no reserve -> fresh gen
-        gen_lo = {**lo, "question_type": new_qtype}
+        gen_lo = {**lo, "question_type": new_qtype,
+                  "description": (lo.get("description") or "") + variant_directive}
         ctx = _ground(gen_lo, None)
         gen = generate_lean(gen_lo)
         if gen.get("status") == "generated" and gen.get("lean"):
@@ -498,7 +537,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
 
     # the LO this slot now belongs to (the reserve when swapped) and its outcome key.
     effective_lo = swap_lo or lo
-    gen["outcome"] = effective_lo.get("outcome") if swap_lo else outcome
+    gen["outcome"] = effective_lo.get("outcome") if swap_lo else (base_outcome if is_variant else outcome)
     new_q = review_and_fix_one(effective_lo, gen)
     # SELF-CHECK: verify the regen actually RESOLVED the reviewer's complaint; one bounded repair if
     # not (carrying memory), so the human is no longer the convergence loop. Skipped for a request to
@@ -529,7 +568,16 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     actual_qtype = new_q.get("question_type") or new_qtype
     if actual_qtype != current_qtype:
         new_q["type_change"] = {"from": current_qtype, "to": actual_qtype, "requested": new_qtype}
-        effective_lo["question_type"] = actual_qtype   # keep the run-result LO object in sync
+        if not is_variant:                              # a variant must not rewrite the shared base LO
+            effective_lo["question_type"] = actual_qtype   # keep the run-result LO object in sync
+    # restore the variant's identity: outcome stays the BASE; the unique question_key and the
+    # objective/axis binding are preserved so it remains a coherent member of the variant set.
+    if is_variant:
+        new_q.update({"is_variant": True, "question_key": variant_key, "outcome": base_outcome,
+                      "base_question_key": old_q.get("base_question_key"),
+                      "variant_axis": old_q.get("variant_axis"),
+                      "variant_angle": old_q.get("variant_angle"),
+                      "objective": old_q.get("objective")})
 
     # 3) carry forward revision + feedback history on the question
     prev = {k: v for k, v in old_q.items() if k != "revisions"}
@@ -558,7 +606,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         fresh["questions"] = qs
         if swap_lo is not None:                  # swap the reserve LO into the freshly-locked copy
             _apply_lo_swap(fresh, outcome, swap_lo)
-        if actual_qtype != current_qtype:        # keep the run's LO type in sync, on the fresh copy
+        if actual_qtype != current_qtype and not is_variant:   # never resync the base LO from a variant
             sync_outcome = (swap_lo.get("outcome") if swap_lo else outcome)
             for flo in (fresh.get("final_los") or []):
                 if flo.get("outcome") == sync_outcome:
