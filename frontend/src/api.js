@@ -74,6 +74,20 @@ export const mcqJobWsUrl = (jobId) => {
 export const getCourses = () => request('/courses/')
 export const getCourse = (courseId) => request(`/courses/${courseId}/`)
 
+// --- Course access (owner/admin grant collaborators; grants are immediate) ---
+// Who can work on a course: { owner, collaborators: [...], can_manage }.
+export const getCourseCollaborators = (courseId) =>
+  request(`/courses/${courseId}/collaborators/`)
+// Grant a user (by email) access to generate content for a course.
+export const addCourseCollaborator = (courseId, email) =>
+  request(`/courses/${courseId}/collaborators/`, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+// Revoke a collaborator's access.
+export const removeCourseCollaborator = (courseId, userId) =>
+  request(`/courses/${courseId}/collaborators/${userId}/`, { method: 'DELETE' })
+
 // Per-course MCQ-generation settings. `questionDomain` ('' = general, 'SQL') activates
 // that domain's generation/review rules for every run of this course.
 export const updateCourseSettings = (courseId, questionDomain) =>

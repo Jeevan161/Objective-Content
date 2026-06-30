@@ -337,6 +337,7 @@ def run_mcq_pipeline(
         "lo_count": len(artifact.get("outcomes", los)),
         "question_count": len(generated),
         "needs_human_count": needs_human,
+        "cost": progress.usage_summary(),   # token usage + estimated USD, by model + step
     }
 
 
@@ -552,4 +553,5 @@ def resume_run(*, course_id: str, unit_id: str, thread_id: str, decision,
         "lo_count": len(artifact.get("outcomes", los)),
         "question_count": len(generated),
         "needs_human_count": sum(1 for q in questions if q.get("needs_human")),
+        "cost": progress.usage_summary(),   # NOTE: post-resume segment only (see jobs persistence)
     }

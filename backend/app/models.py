@@ -21,6 +21,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -292,6 +293,11 @@ class McqRun(Base):
     lo_count: Mapped[int] = mapped_column(Integer, default=0)
     question_count: Mapped[int] = mapped_column(Integer, default=0)
     needs_human_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Token usage + ESTIMATED cost (USD, list-price estimate) for this run. The full
+    # per-model / per-step breakdown lives in `result["cost"]`; these are summary columns
+    # for cheap listing/aggregation. total_tokens = input + output.
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     # How many generated questions a human has explicitly approved — drives the load gate.
     approved_count: Mapped[int] = mapped_column(Integer, default=0)
     # 1-based generation version within a (course_id, unit_id) session (v1 = oldest); a
@@ -444,6 +450,31 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[datetime] = updated_at_col()
+
+
+class CourseCollaborator(Base):
+    """Grants a user access to work on (generate content for) a course they don't own.
+    Added by the course owner or an admin; the grant is immediate — there is no approval
+    step. Effective access to a course = its owner (``Course.created_by``) OR a row here
+    OR any admin. Unowned/legacy courses (created_by is None) stay open to everyone."""
+
+    __tablename__ = "course_collaborators"
+    __table_args__ = (
+        UniqueConstraint("course_id", "user_id", name="uq_course_collaborator"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    course_id: Mapped[str] = mapped_column(
+        ForeignKey("courses.course_id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # Who granted the access (owner or admin). Kept for audit; SET NULL if they're removed.
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = created_at_col()
 
 
 class UserLlmKey(Base):

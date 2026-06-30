@@ -322,7 +322,8 @@ def serialize_topic(topic: Topic, *, part_counts: dict | None = None,
 
 
 def serialize_course_list(
-    course: Course, *, ingested_chunk_count: int = 0, content_issue_count: int = 0
+    course: Course, *, ingested_chunk_count: int = 0, content_issue_count: int = 0,
+    collaborator_ids: list | None = None,
 ) -> dict:
     """Summary fields needed to render a (top-level or nested) course card."""
     return {
@@ -343,7 +344,14 @@ def serialize_course_list(
         # Reading materials that ran extraction but came back EMPTY/ERROR.
         "content_issue_count": content_issue_count,
         "created_by": getattr(course, "created_by", None),
+        # Users explicitly granted access (owner can generate regardless of this list).
+        "collaborator_ids": collaborator_ids or [],
     }
+
+
+class CollaboratorRequest(BaseModel):
+    """Add a course collaborator by email (owner/admin only)."""
+    email: str = ""
 
 
 def serialize_course_detail(
@@ -353,10 +361,13 @@ def serialize_course_detail(
     course_counts: dict | None = None,
     issue_counts: dict | None = None,
     stale_part_ids: set | None = None,
+    collaborator_ids: list | None = None,
 ) -> dict:
     course_counts = course_counts or {}
     issue_counts = issue_counts or {}
     return {
+        # Users explicitly granted access (the owner can generate regardless of this list).
+        "collaborator_ids": collaborator_ids or [],
         "course_id": course.course_id,
         "environment": course.environment,
         "course_name": course.course_name,
@@ -428,6 +439,8 @@ def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "",
         "lo_count": run.lo_count,
         "question_count": run.question_count,
         "needs_human_count": run.needs_human_count,
+        "total_tokens": getattr(run, "total_tokens", 0),
+        "estimated_cost_usd": getattr(run, "estimated_cost_usd", 0.0),
         "approved_count": getattr(run, "approved_count", 0),
         "eligible_count": eligible,
         "excluded_count": excluded,

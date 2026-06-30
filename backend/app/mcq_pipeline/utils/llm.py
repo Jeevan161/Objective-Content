@@ -96,11 +96,77 @@ def _resolve_extra_body(extra_body: dict) -> dict:
     return eb
 
 
+def _extract_usage(response) -> tuple[str | None, int, int, int]:
+    """Pull (model_name, input_tokens, output_tokens, cached_tokens) out of a LangChain
+    LLMResult. Prefers the normalized `usage_metadata` on the message (provider-agnostic),
+    falling back to the OpenAI-style `llm_output.token_usage`. Returns zeros if absent."""
+    model = inp = out = cached = None
+    try:
+        gens = getattr(response, "generations", None) or []
+        msg = gens[0][0].message if gens and gens[0] else None
+        um = getattr(msg, "usage_metadata", None) if msg is not None else None
+        if um:
+            inp = int(um.get("input_tokens") or 0)
+            out = int(um.get("output_tokens") or 0)
+            cached = int((um.get("input_token_details") or {}).get("cache_read") or 0)
+        rm = getattr(msg, "response_metadata", None) if msg is not None else None
+        if isinstance(rm, dict):
+            model = rm.get("model_name") or model
+    except Exception:  # noqa: BLE001
+        pass
+    out_meta = getattr(response, "llm_output", None) or {}
+    if isinstance(out_meta, dict):
+        model = model or out_meta.get("model_name")
+        tu = out_meta.get("token_usage") or {}
+        if inp is None and tu:
+            inp = int(tu.get("prompt_tokens") or 0)
+            out = int(tu.get("completion_tokens") or 0)
+            cached = int((tu.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+    return model, int(inp or 0), int(out or 0), int(cached or 0)
+
+
+def _usage_handler():
+    """A LangChain callback that records each call's token usage into the run's usage sink
+    (scope.record_llm_usage), tagged with the active proxy `step`. Attached at model build, so
+    it fires for plain `.invoke()` AND `.with_structured_output(...).invoke()` alike."""
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class _UsageCapture(BaseCallbackHandler):
+        def on_llm_end(self, response, **kwargs) -> None:  # noqa: ANN001
+            try:
+                from app.mcq_pipeline.utils import scope
+                model, inp, out, cached = _extract_usage(response)
+                if inp or out:
+                    scope.record_llm_usage({
+                        "model": model, "input_tokens": inp, "output_tokens": out,
+                        "cached_tokens": cached, "step": (_meta_ctx.get() or {}).get("step", ""),
+                    })
+            except Exception:  # noqa: BLE001 — cost capture must never break a call
+                pass
+
+    return _UsageCapture()
+
+
+_USAGE_HANDLER = None
+
+
+def _usage_callbacks() -> list:
+    """Singleton usage callback (stateless — it delegates to the per-thread scope sink)."""
+    global _USAGE_HANDLER
+    if _USAGE_HANDLER is None:
+        try:
+            _USAGE_HANDLER = _usage_handler()
+        except Exception:  # noqa: BLE001
+            return []
+    return [_USAGE_HANDLER]
+
+
 def _legacy(temperature: float, model: str | None = None):
     """The original hardcoded OpenRouter client — used when no provider is configured."""
     from langchain_openai import ChatOpenAI
     return ChatOpenAI(model=model or AGENT_MODEL, api_key=OPENROUTER_API_KEY,
-                      base_url=OPENROUTER_BASE_URL, temperature=temperature)
+                      base_url=OPENROUTER_BASE_URL, temperature=temperature,
+                      callbacks=_usage_callbacks())
 
 
 def _build_model(cfg: dict, temperature: float, max_tokens: int | None = None):
@@ -108,7 +174,7 @@ def _build_model(cfg: dict, temperature: float, max_tokens: int | None = None):
     if cfg["adapter"] == "anthropic":
         from langchain_anthropic import ChatAnthropic
         kw: dict = {"model": cfg["model"], "temperature": temperature,
-                    "max_tokens": max_tokens or 4096}
+                    "max_tokens": max_tokens or 4096, "callbacks": _usage_callbacks()}
         if cfg["api_key"]:
             kw["api_key"] = cfg["api_key"]
         if cfg["base_url"]:
@@ -119,7 +185,7 @@ def _build_model(cfg: dict, temperature: float, max_tokens: int | None = None):
 
     # openai_compatible: OpenAI / OpenRouter / internal proxy
     from langchain_openai import ChatOpenAI
-    kw = {"model": cfg["model"], "temperature": temperature}
+    kw = {"model": cfg["model"], "temperature": temperature, "callbacks": _usage_callbacks()}
     if cfg["api_key"]:
         kw["api_key"] = cfg["api_key"]
     if cfg["base_url"]:

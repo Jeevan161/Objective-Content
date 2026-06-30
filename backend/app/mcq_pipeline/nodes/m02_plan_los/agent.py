@@ -22,8 +22,8 @@ from app.mcq_pipeline.nodes.m02_plan_los import gate
 from app.mcq_pipeline.nodes.m07_recommend_question_type import recommend_one
 from app.mcq_pipeline.nodes.m08_generate_questions import _course_is_sql
 from app.mcq_pipeline.nodes.m02_plan_los.prompts import (CONSOLIDATE_CRITIC_SYS, CONSOLIDATE_SYS,
-                                                         PLAN_CRITIC_SYS, PLAN_SYS, SESSION_FOCUS_SYS,
-                                                         generate_sys_verb_subbed)
+                                                         PARENT_CANON_SYS, PLAN_CRITIC_SYS, PLAN_SYS,
+                                                         SESSION_FOCUS_SYS, generate_sys_verb_subbed)
 
 
 # ── PHASE 0 · derive the session focus ("motive") ─────────────────────────── #
@@ -134,7 +134,35 @@ def consolidate(protos: list, source_text: str, session_objective: str = "",
         revised = _consolidate_critic(subs, groups)
         if revised:
             groups, fired = revised, True
+    groups = _canonicalize_parents(groups)
     return groups, {"critic_gated": gated, "critic_fired": fired}
+
+
+def _canonicalize_parents(groups: list) -> list:
+    """Collapse synonym/near-duplicate PARENT umbrellas to one canonical label (one LLM pass over
+    just the parent strings). The per-group merge de-dupes sub-concepts but assigns each group its
+    own parent independently, so without this the inventory carries several labels for one umbrella
+    (e.g. 'Role Of The Backend' / 'Backend Role') that surface as duplicate-looking LOs. Best-effort:
+    returns groups unchanged on any failure or when there's nothing to cluster."""
+    parents = sorted({str(g.get("parent_concept", "")).strip()
+                      for g in groups if isinstance(g, dict) and str(g.get("parent_concept", "")).strip()})
+    if len(parents) < 2:
+        return groups
+    try:
+        mapping = parse_json(chat(
+            [{"role": "system", "content": get_prompt("lo.parent_canon_sys", PARENT_CANON_SYS)},
+             {"role": "user", "content": json.dumps(parents, ensure_ascii=False)}], temperature=0))
+    except Exception:  # noqa: BLE001 — never block planning on the canonicalization call
+        return groups
+    if not isinstance(mapping, dict):
+        return groups
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        canon = mapping.get(str(g.get("parent_concept", "")).strip())
+        if isinstance(canon, str) and canon.strip():
+            g["parent_concept"] = canon.strip()
+    return groups
 
 
 # ── PHASE 3 · selection proposal (+ gated critic) ─────────────────────────── #

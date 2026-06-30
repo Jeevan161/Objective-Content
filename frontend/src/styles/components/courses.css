@@ -713,3 +713,62 @@
   }
 }
 
+
+/* --------------------------------------------------------------------------- *
+ * Manage course access modal (owner/admin grant collaborators)
+ * --------------------------------------------------------------------------- */
+.access-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.access-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.access-who {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.access-owner-icon { color: var(--amber); align-self: center; }
+.access-collab-icon { color: var(--text-3); align-self: center; }
+
+.access-name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.access-email {
+  color: var(--text-3);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.access-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+}
+
+.access-add {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.access-add .input { flex: 1; }

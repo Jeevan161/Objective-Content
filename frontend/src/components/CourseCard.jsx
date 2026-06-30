@@ -13,12 +13,16 @@ import {
   AlertTriangle,
   BookOpen,
   CheckCircle2,
+  Users,
 } from 'lucide-react'
 import { getCourse } from '../api'
 import Pipeline from './Pipeline'
 import ReadingMaterialPane from './ReadingMaterialPane'
+import ManageAccessModal from './ManageAccessModal'
 import { coursePipeline } from '../lib/workflow'
 import { EnvBadge, Skeleton, Spinner } from './ui'
+import { useToast } from './Toast'
+import { useAuth } from '../auth/AuthContext'
 
 // Header tag per container kind.
 const KIND_META = {
@@ -89,16 +93,22 @@ function IngestBadge({ part }) {
 
 // One unit container: a header (kind tag + label) and its labelled parts.
 function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
+  const toast = useToast()
   const meta = headerTag(unit)
   // Which reading-material part (if any) is expanded inline to show its markdown.
   const [openPart, setOpenPart] = useState(null)
 
   // Reading materials are the only parts with extractable content. A per-unit
-  // "Sync content" re-extracts just this learning set; it needs a token only
-  // when some reading material has no stored resource id (token-free otherwise).
+  // "Sync content" re-extracts just this learning set, token-free via the
+  // content-loading admin panel.
   const readingParts = unit.parts.filter((p) => p.label === 'Reading Material')
   const canSync = onSyncUnit && readingParts.length > 0
-  const needsToken = readingParts.some((p) => !(p.resource_ids?.length))
+
+  // Copy just the learning_resource id to the clipboard, with a confirmation toast.
+  function copyResourceId(rid) {
+    navigator.clipboard?.writeText(rid)
+    toast.push({ kind: 'success', title: 'Learning Resource ID copied', message: rid })
+  }
 
   return (
     <div className="unit-card" style={{ '--stagger': `${Math.min(index, 10) * 35}ms` }}>
@@ -112,14 +122,8 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
           <button
             type="button"
             className="btn btn-ghost btn-sm unit-sync"
-            data-tip={
-              needsToken
-                ? 'Re-fetch this learning set’s content (a Bearer token will be requested)'
-                : 'Re-fetch this learning set’s latest content via the admin panel'
-            }
-            onClick={() =>
-              onSyncUnit(course, readingParts.map((p) => p.unit_id), needsToken)
-            }
+            data-tip="Re-fetch this learning set’s latest content via the admin panel"
+            onClick={() => onSyncUnit(course, readingParts.map((p) => p.unit_id))}
           >
             <RefreshCw size={12} /> Sync
           </button>
@@ -163,7 +167,7 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
                   key={rid}
                   className="resource-id"
                   data-tip="Learning Resource ID — click to copy"
-                  onClick={() => navigator.clipboard?.writeText(rid)}
+                  onClick={() => copyResourceId(rid)}
                 >
                   <Hash size={10} />
                   {rid}
@@ -269,13 +273,20 @@ function CourseCard({
   nested = false,
   index = 0,
 }) {
+  const { user } = useAuth()
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [accessOpen, setAccessOpen] = useState(false)
   // Course-level broadcast to its topic sections.
   const [allUnitsOpen, setAllUnitsOpen] = useState(true)
   const [unitsSignal, setUnitsSignal] = useState(null)
   const seenVersion = useRef(dataVersion)
+
+  // The owner (first syncer) and admins manage who can work on the course.
+  const isOwner = Boolean(course.created_by && user && String(course.created_by) === String(user.id))
+  const canManageAccess = user?.role === 'admin' || isOwner
+  const sharedCount = course.collaborator_ids?.length || 0
 
   const activeJobs = activeJobsByCourse?.get(course.course_id)
   const syncing = Boolean(activeJobs?.has('SYNC'))
@@ -357,6 +368,14 @@ function CourseCard({
                 <Star size={10} /> latest
               </span>
             )}
+            {sharedCount > 0 && (
+              <span
+                className="badge"
+                data-tip={`Shared with ${sharedCount} collaborator${sharedCount === 1 ? '' : 's'}`}
+              >
+                <Users size={10} /> shared
+              </span>
+            )}
             {course.is_ingested && (
               <span
                 className="badge badge-ingested"
@@ -396,6 +415,20 @@ function CourseCard({
         </div>
 
         <div className="course-card-actions">
+          {canManageAccess && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setAccessOpen(true)}
+              data-tip={
+                isOwner
+                  ? 'Manage who can work on this course'
+                  : 'Admin: grant a user access to this course'
+              }
+            >
+              <Users size={14} /> Access
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-ghost btn-sm"
@@ -414,7 +447,7 @@ function CourseCard({
                 data-tip={
                   extracting
                     ? 'Extraction in progress…'
-                    : 'Extract reading material (Bearer tokens required)'
+                    : 'Extract reading material via the admin panel'
                 }
               >
                 {extracting ? <Spinner size={13} /> : <FileText size={14} />}
@@ -539,6 +572,10 @@ function CourseCard({
           )}
         </div>
       </div>
+
+      {accessOpen && (
+        <ManageAccessModal course={course} onClose={() => setAccessOpen(false)} />
+      )}
     </div>
   )
 }
