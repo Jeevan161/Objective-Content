@@ -27,7 +27,7 @@ class MCQOption(BaseModel):
 class MCQLean(BaseModel):
     question: str = Field(description="the question stem (plain text/markdown)")
     options: List[MCQOption] = Field(description="answer options; mark the correct one(s)")
-    explanation: str = Field(description="why the correct option(s) is right and the others wrong")
+    explanation: str = Field(default="", description="why the correct option(s) is right and the others wrong")
 
 
 class TrueFalseLean(BaseModel):
@@ -37,13 +37,13 @@ class TrueFalseLean(BaseModel):
                                               "leave empty for a purely conceptual statement")
     code_language: str = Field(default="", description="language of `code` when present, "
                                                        "e.g. PYTHON/JAVA/JS/SQL; empty when there is no code")
-    explanation: str = Field(description="why the statement is true / false")
+    explanation: str = Field(default="", description="why the statement is true / false")
 
 
 class TextualLean(BaseModel):
     question: str
     answer: str = Field(description="the exact expected answer string (term/value/command)")
-    explanation: str = Field(description="why this is the expected answer")
+    explanation: str = Field(default="", description="why this is the expected answer")
 
 
 class CodeMCQLean(BaseModel):
@@ -52,7 +52,7 @@ class CodeMCQLean(BaseModel):
     code_language: str = Field(description="language of the snippet, e.g. PYTHON/JAVA/JS/SQL")
     correct_output: str = Field(description="the exact real output of the code")
     wrong_answers: List[str] = Field(description="plausible but wrong outputs (distractors)")
-    explanation: str = Field(description="why the correct output is right and the distractors wrong")
+    explanation: str = Field(default="", description="why the correct output is right and the distractors wrong")
 
 
 class CodeTextualLean(BaseModel):
@@ -60,7 +60,7 @@ class CodeTextualLean(BaseModel):
     code: str
     code_language: str = Field(description="language of the snippet, e.g. PYTHON/JAVA/JS/SQL")
     expected_output: str = Field(description="the exact real output the learner must type")
-    explanation: str = Field(description="why this is the expected output")
+    explanation: str = Field(default="", description="why this is the expected output")
 
 
 class CodeMoreThanOneLean(BaseModel):
@@ -69,7 +69,7 @@ class CodeMoreThanOneLean(BaseModel):
     code_language: str = Field(description="language of the snippet, e.g. PYTHON/JAVA/JS/SQL")
     correct_outputs: List[str] = Field(description="all true statements/outputs about the code")
     wrong_answers: List[str] = Field(description="false statements (distractors)")
-    explanation: str = Field(description="why the correct statements hold and the others do not")
+    explanation: str = Field(default="", description="why the correct statements hold and the others do not")
 
 
 class FibCodingLean(BaseModel):
@@ -81,10 +81,10 @@ class FibCodingLean(BaseModel):
     blank_answer: str = Field(description="the code that correctly fills {{BLANK}}")
     test_input: str = Field(default="", description="stdin for the test case, if any")
     test_output: str = Field(description="expected stdout when the blank is filled correctly")
-    explanation: str = Field(description="why this fills the blank correctly")
+    explanation: str = Field(default="", description="why this fills the blank correctly")
 
 
 class RearrangeLean(BaseModel):
     question: str
     ordered_items: List[str] = Field(description="the items in the CORRECT order (first to last)")
-    explanation: str = Field(description="why this ordering is correct")
+    explanation: str = Field(default="", description="why this ordering is correct")
