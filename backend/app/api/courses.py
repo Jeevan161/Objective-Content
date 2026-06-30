@@ -223,12 +223,11 @@ def extract_content(body: ExtractRequest, session: Session = Depends(get_session
                     user: User = Depends(require_active)) -> dict:
     """Start a background reading-material extraction for a course + prerequisites.
 
-    Tokens are OPTIONAL: with a Bearer token an environment is extracted via the
-    learning API (full content incl. tutorials) and its resource ids are stored;
-    without one, reading materials that already have stored resource ids are
-    extracted token-free via the admin panel (cheat-sheet content). A token is
-    only *required* for an environment that still has reading materials with no
-    stored resource id. Tokens are used for this run only and never stored."""
+    Tokens are OPTIONAL (and never required): by default each course's individual
+    learning_resource ids are discovered token-free from the content-loading admin
+    (GET_UNIT_RESOURCE_DETAILS → CSV) and the content is scraped via the admin
+    panel. A supplied Bearer token still takes precedence for its environment
+    (learning API, tutorial-aware). Tokens are used for this run only, never stored."""
     course_id = (body.course_id or "").strip()
     if not course_id:
         raise HTTPException(status_code=400, detail="course_id is required.")
@@ -247,16 +246,10 @@ def extract_content(body: ExtractRequest, session: Session = Depends(get_session
 
     unit_ids = [u.strip() for u in (body.unit_ids or []) if isinstance(u, str) and u.strip()]
 
-    needed = environments_needing_token(session, course, unit_ids or None)
-    missing = [env for env in needed if env not in tokens]
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"A Bearer token is required for: {', '.join(missing)} — "
-                "these have reading materials with no stored learning resource id yet."
-            ),
-        )
+    # Tokens are no longer required: reading materials without stored resource ids
+    # are discovered token-free from the content-loading admin's CSV
+    # (GET_UNIT_RESOURCE_DETAILS) at extraction time. A supplied token still takes
+    # precedence (learning API, tutorial-aware) for its environment.
 
     job = SyncJob(course_id=course_id, job_type=SyncJob.EXTRACT, created_by=user.id)
     session.add(job)
@@ -1131,16 +1124,20 @@ def mcq_feedback_insights() -> dict:
 
 @router.get("/courses/{course_id}/extract-info/")
 def extract_info(course_id: str, session: Session = Depends(get_session)) -> dict:
-    """Environments a course + its prerequisites span, and which of them still
-    REQUIRE a Bearer token (the rest can extract token-free via the admin panel
-    using stored resource ids)."""
+    """Environments a course + its prerequisites span. Tokens are now OPTIONAL
+    everywhere — reading materials without stored resource ids are discovered
+    token-free from the content-loading admin's CSV (GET_UNIT_RESOURCE_DETAILS) —
+    so ``token_required`` is always empty. ``token_optional`` lists the
+    environments where supplying a token would still enrich extraction (the
+    learning API is tutorial-aware, unlike the admin cheat-sheet path)."""
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found.")
     return {
         "course_id": course_id,
         "environments": required_environments(course),
-        "token_required": environments_needing_token(session, course),
+        "token_required": [],
+        "token_optional": environments_needing_token(session, course),
     }
 
 

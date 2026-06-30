@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Course, SyncJob, Topic, Unit, UnitPart
+from app.services import unit_resource_csv
 from portal.client import PortalClient
 from portal.learning_resource import (
     fetch_admin_content,
@@ -138,16 +139,35 @@ def run_extraction_job(
 
         report("Collecting course + prerequisites…")
         courses = collect_courses_recursive(root)
-        # (part, environment) pairs so each fetch uses the right base + token.
+        # (part, course) pairs so each fetch uses the right environment + base, and
+        # the part can be hydrated from its course's unit-resource CSV.
         # Covers every learning set; reading materials also get their content.
         items = [
-            (p, (c.environment or "PROD").upper())
+            (p, c)
             for c in courses
             for p in learning_set_parts(session, c)
             if not unit_ids or p.unit_id in unit_ids
         ]
         total = len(items)
         report(f"Found {len(courses)} course(s), {total} learning set(s). Extracting…")
+
+        # CSV-default discovery: a course's learning_resource ids are fetched
+        # token-free from the content-loading admin (GET_UNIT_RESOURCE_DETAILS),
+        # so parts that lack stored ids can still be extracted via the admin panel
+        # with no Bearer token. Fetched lazily, once per course.
+        csv_maps: dict[str, dict[str, dict]] = {}
+
+        def csv_resource_id(course: Course, part: UnitPart) -> str | None:
+            cid = course.course_id
+            if cid not in csv_maps:
+                env = (course.environment or "PROD").upper()
+                try:
+                    csv_maps[cid] = unit_resource_csv.fetch_unit_resource_map(
+                        cid, environment=env
+                    )
+                except Exception:  # noqa: BLE001 — fall back to token/stored ids
+                    csv_maps[cid] = {}
+            return (csv_maps[cid].get(part.unit_id) or {}).get("learning_resource_id")
 
         http = requests.Session()
         adapter = HTTPAdapter(pool_connections=_POOL_SIZE, pool_maxsize=_POOL_SIZE)
@@ -172,10 +192,18 @@ def run_extraction_job(
             part.content_extracted_at = _now()
 
         extracted = empty = failed = via_admin = 0
-        for idx, (part, env) in enumerate(items, start=1):
+        for idx, (part, course) in enumerate(items, start=1):
+            env = (course.environment or "PROD").upper()
             token = tokens.get(env)
             is_reading = part.label == READING_MATERIAL_LABEL
             try:
+                # Default path (no token): hydrate the individual learning_resource
+                # id from the course's content-loading CSV so the admin panel can
+                # extract content with no Bearer token.
+                if not token and not part.resource_ids:
+                    lrid = csv_resource_id(course, part)
+                    if lrid:
+                        part.resource_ids = [lrid]
                 if token:
                     # Token present → learning API: full content (tutorial-aware)
                     # for reading materials, and capture resource ids for every set.
@@ -188,16 +216,17 @@ def run_extraction_job(
                     else:
                         part.resource_ids = fetch_resource_ids(http, part.unit_id, token, env)
                 elif is_reading and part.resource_ids:
-                    # No token but we have ids → admin panel (cheat-sheet content).
+                    # No token but we have ids (stored or from CSV) → admin panel.
                     content = fetch_admin_content(admin_client(env), part.resource_ids)
                     set_content(part, content, via="admin")
                     via_admin += 1
                     extracted += bool(content)
                     empty += not content
                 elif is_reading:
-                    # No token and no stored ids → cannot extract this one.
+                    # No token and no resource id (not stored, not in CSV) → skip.
                     raise RuntimeError(
-                        f"No Bearer token for {env} and no stored learning resource id."
+                        f"No learning resource id for this reading material "
+                        f"(not stored and not in the {env} content-loading CSV)."
                     )
                 # else: non-reading learning set without a token — ids only come
                 # from the token API, so there's nothing to do this run.

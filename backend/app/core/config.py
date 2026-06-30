@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     beta_admin_base_url: str | None = None       # env: BETA_ADMIN_BASE_URL
     beta_admin_username: str | None = None
     beta_admin_password: str | None = None
+    # Optional PROD content-loading admin (GET_UNIT_RESOURCE_DETAILS lives here, per
+    # environment). Unset → token-free CSV discovery falls back to the BETA host.
+    prod_admin_base_url: str | None = None        # env: PROD_ADMIN_BASE_URL
+    prod_admin_username: str | None = None
+    prod_admin_password: str | None = None
     beta_s3_bucket: str = "nkb-backend-ccbp-media-static"
     beta_s3_region: str = "ap-south-1"
     beta_s3_upload_folder: str = "ccbp_beta/media/content_loading/uploads/"
