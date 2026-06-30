@@ -50,6 +50,13 @@ QUESTION TYPE DEFINITIONS (STRICT)
 - FIB_CODING:
   Fill a missing part of runnable code that produces output (input → output execution required).
   PROGRAMMING LANGUAGES only (Python / Java / JavaScript).
+  The code MUST be a COMPLETE, SELF-CONTAINED program that compiles and runs ON ITS OWN — the
+  system fills the blank, EXECUTES the program, and grades by matching its actual output to the
+  expected output. So FIB_CODING is valid ONLY when the snippet is a standalone runnable program.
+  NEVER use FIB_CODING for framework / library / file-based / project code that cannot run on its
+  own (e.g. a Django views.py / urls.py / settings.py / models.py snippet, a request handler, a
+  template, or any code that only runs inside an app or needs a project to execute) — those cannot
+  be executed and checked, so route them to CODE_ANALYSIS_MULTIPLE_CHOICE instead.
 
 - SQL_FIB_CODING:
   The SQL counterpart of FIB_CODING — write / complete a missing part of a SQL query. Use this for
@@ -115,6 +122,7 @@ CRITICAL CONSTRAINTS
 - Never use FIB_CODING if multiple valid answers exist.
 - Never use FIB_CODING or TEXTUAL for installation / CLI / setup commands (pip, npm, cd, activate, export, etc.) → use MULTIPLE_CHOICE instead.
 - FIB_CODING is for PROGRAMMING LANGUAGES only (Python / Java / JavaScript).
+- FIB_CODING requires a COMPLETE, SELF-CONTAINED program that compiles and runs on its own (stdin → stdout, checked by execution). NEVER use it for framework / file / project code that cannot run standalone (Django views.py / urls.py / settings.py / models.py, request handlers, templates, config snippets) → use CODE_ANALYSIS_MULTIPLE_CHOICE instead.
 - For SQL: use SQL_FIB_CODING for a "write / complete a query" outcome (the SQL fill-in-code type), and CODE_ANALYSIS_MULTIPLE_CHOICE for "read / analyse a query or its result". Never use FIB_CODING for SQL.
 - REARRANGE must only be used when a SINGLE canonical order exists.
 - If uncertain, choose MULTIPLE_CHOICE (safe fallback).
