@@ -125,6 +125,21 @@ def build_inventory(outcomes: list, groups: list, sec_text: dict) -> tuple[list,
             if len(desc) > len(inv[cid]["description"]):
                 inv[cid]["description"] = desc
 
+    # Canonicalize parent concepts: collapse casing / underscore / whitespace variants of the SAME
+    # umbrella to one label (e.g. "Django As A Backend Framework" and "Django_as_a_backend_framework"
+    # share a slug). The LLM merge de-dupes sub-concepts WITHIN a parent but does not normalize the
+    # parent strings themselves, so without this the inventory carries near-duplicate parents that
+    # surface downstream as "duplicate" LOs under differently-spelled umbrellas.
+    by_pslug: dict = defaultdict(list)
+    for c in inv.values():
+        by_pslug[slugify(c["parent_concept"])].append(c)
+    for entries in by_pslug.values():
+        names = [e["parent_concept"] for e in entries]
+        rep = max(set(names), key=lambda n: (n.count(" "), names.count(n), len(n)))  # most readable, then frequent
+        rep = display_name(canonical_name(rep.replace("_", " ")))                    # clean underscored display
+        for e in entries:
+            e["parent_concept"] = rep
+
     seen = Counter()
     for o in outcomes:
         o.pop("_concept_name", None)
