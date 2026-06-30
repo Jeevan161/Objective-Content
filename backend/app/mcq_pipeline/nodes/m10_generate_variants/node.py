@@ -230,7 +230,10 @@ def _make_variant(spec: dict, lo: dict, objective: dict, base_key: str, idx: int
         axis=spec["axis"], angle_instruction=spec["instruction"])
     lo_v = {**lo, "question_type": spec["type"],
             "description": (lo.get("description") or "") + directive}
-    res = generate_lean(lo_v, fallback_uncovered=True)   # reuse all m08 creation-time guards
+    try:
+        res = generate_lean(lo_v, fallback_uncovered=True)   # reuse all m08 creation-time guards
+    except Exception:  # noqa: BLE001 — a single variant must never abort the batch
+        return None
     if res.get("status") != "generated" or not res.get("lean"):
         return None
     res["outcome"] = lo.get("outcome")
