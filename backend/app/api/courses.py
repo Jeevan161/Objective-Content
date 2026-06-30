@@ -27,6 +27,7 @@ from app.models import (
     ClassroomQuizDeck,
     ClassroomQuizScope,
     Course,
+    CourseCollaborator,
     McqRun,
     McqTrace,
     RagChunk,
@@ -41,6 +42,7 @@ from app.schemas import (
     ApproveRunRequest,
     BuildRagRequest,
     ClassroomQuizIngestRequest,
+    CollaboratorRequest,
     CourseSettingsRequest,
     ExecuteCodeRequest,
     ExtractRequest,
@@ -63,6 +65,7 @@ from app.schemas import (
     serialize_job,
     serialize_mcq_run,
     serialize_mcq_trace,
+    serialize_user,
 )
 from app.services import progress_broker
 from app.services.extraction import (
@@ -218,6 +221,49 @@ def start_sync(body: SyncRequest, session: Session = Depends(get_session),
     return serialize_job(job)
 
 
+# --------------------------------------------------------------------------- #
+# Course access control — who may work on (generate content for) a course.
+# Access = the owner (Course.created_by) OR a collaborator (course_collaborators)
+# OR an admin. Owners and admins manage collaborators, and grants take effect
+# immediately (no approval step). Unowned/legacy courses (created_by is None)
+# stay open to everyone.
+# --------------------------------------------------------------------------- #
+def _user_can_access_course(session: Session, course_id: str, user: User) -> bool:
+    if user.role == User.ROLE_ADMIN:
+        return True
+    course = session.get(Course, course_id)
+    if course is None:
+        return True  # nothing to gate (e.g. a run whose course row no longer exists)
+    owner = getattr(course, "created_by", None)
+    if owner is None or owner == user.id:
+        return True
+    return bool(session.scalar(
+        select(func.count()).select_from(CourseCollaborator).where(
+            CourseCollaborator.course_id == course_id,
+            CourseCollaborator.user_id == user.id,
+        )
+    ))
+
+
+def _require_course_access(session: Session, course_id: str, user: User) -> None:
+    """403 unless the user owns the course, is a collaborator on it, or is an admin."""
+    if not _user_can_access_course(session, course_id, user):
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have access to this course. Ask its owner or an admin to add you.",
+        )
+
+
+def _require_course_manage(course: Course, user: User) -> None:
+    """Only the course owner or an admin may add/remove collaborators."""
+    owner = getattr(course, "created_by", None)
+    if user.role != User.ROLE_ADMIN and (owner is None or owner != user.id):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the course owner or an admin can manage access to it.",
+        )
+
+
 @router.post("/courses/extract/", status_code=status.HTTP_202_ACCEPTED)
 def extract_content(body: ExtractRequest, session: Session = Depends(get_session),
                     user: User = Depends(require_active)) -> dict:
@@ -234,6 +280,7 @@ def extract_content(body: ExtractRequest, session: Session = Depends(get_session
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found.")
+    _require_course_access(session, course_id, user)
 
     raw_tokens = body.tokens or {}
     if not isinstance(raw_tokens, dict):
@@ -267,6 +314,7 @@ def build_rag(body: BuildRagRequest, session: Session = Depends(get_session),
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found.")
+    _require_course_access(session, course_id, user)
     if not course.content_extracted_at:
         raise HTTPException(
             status_code=409, detail="Extract the learning resource content first."
@@ -277,6 +325,91 @@ def build_rag(body: BuildRagRequest, session: Session = Depends(get_session),
     session.commit()
     start_build_rag_job(job.id, body.unit_ids or None)
     return serialize_job(job)
+
+
+# --------------------------------------------------------------------------- #
+# Course collaborators — the owner or an admin grants other users access to work
+# on a course. Grants are immediate (no approval). Two static segments after the
+# course id, so they don't collide with the `/courses/{course_id}/` catch-all.
+# --------------------------------------------------------------------------- #
+@router.get("/courses/{course_id}/collaborators/")
+def list_course_collaborators(course_id: str, session: Session = Depends(get_session),
+                              user: User = Depends(require_active)) -> dict:
+    """Who can work on this course: its owner plus any granted collaborators. Visible to
+    the owner, a collaborator, or an admin."""
+    course = session.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    _require_course_access(session, course_id, user)
+    owner = session.get(User, course.created_by) if course.created_by else None
+    rows = session.scalars(
+        select(CourseCollaborator).where(CourseCollaborator.course_id == course_id)
+    ).all()
+    collaborators = []
+    for r in rows:
+        u = session.get(User, r.user_id)
+        if u is not None:
+            collaborators.append({**serialize_user(u), "granted_at": r.created_at})
+    can_manage = (user.role == User.ROLE_ADMIN
+                  or (course.created_by is not None and course.created_by == user.id))
+    return {
+        "course_id": course_id,
+        "owner": serialize_user(owner) if owner else None,
+        "collaborators": collaborators,
+        "can_manage": can_manage,
+    }
+
+
+@router.post("/courses/{course_id}/collaborators/", status_code=status.HTTP_201_CREATED)
+def add_course_collaborator(course_id: str, body: CollaboratorRequest,
+                            session: Session = Depends(get_session),
+                            user: User = Depends(require_active)) -> dict:
+    """Grant a user (by email) access to work on this course. Allowed for the course owner
+    or an admin; the grant is immediate, with no approval step. Admins can grant on any course."""
+    course = session.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    _require_course_manage(course, user)
+    email = (body.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="A user email is required.")
+    target = session.scalar(select(User).where(func.lower(User.email) == email))
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"No user found with email “{email}”.")
+    if course.created_by is not None and course.created_by == target.id:
+        raise HTTPException(status_code=400, detail="That user already owns this course.")
+    existing = session.scalar(
+        select(CourseCollaborator).where(
+            CourseCollaborator.course_id == course_id,
+            CourseCollaborator.user_id == target.id,
+        )
+    )
+    if existing is None:
+        session.add(CourseCollaborator(
+            course_id=course_id, user_id=target.id, granted_by=user.id))
+        session.commit()
+    return serialize_user(target)
+
+
+@router.delete("/courses/{course_id}/collaborators/{user_id}/",
+               status_code=status.HTTP_204_NO_CONTENT)
+def remove_course_collaborator(course_id: str, user_id: uuid.UUID,
+                               session: Session = Depends(get_session),
+                               user: User = Depends(require_active)) -> None:
+    """Revoke a collaborator's access. Allowed for the course owner or an admin."""
+    course = session.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    _require_course_manage(course, user)
+    row = session.scalar(
+        select(CourseCollaborator).where(
+            CourseCollaborator.course_id == course_id,
+            CourseCollaborator.user_id == user_id,
+        )
+    )
+    if row is not None:
+        session.delete(row)
+        session.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -422,13 +555,9 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
     course = session.get(Course, course_id)
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found.")
-    # Only the user who added (first synced) the course may generate for it. Admins
-    # bypass; unowned (legacy) courses stay open.
-    owner = getattr(course, "created_by", None)
-    if owner is not None and owner != user.id and user.role != User.ROLE_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Only the user who added this course can generate MCQs for it.")
+    # Only the course owner (first syncer), a collaborator they (or an admin) added,
+    # or an admin may generate for it. Unowned (legacy) courses stay open.
+    _require_course_access(session, course_id, user)
 
     # The selected session must have extracted reading-material content somewhere
     # in the unit that owns this part (mirrors the MCQ-page gate).
@@ -914,6 +1043,7 @@ def export_mcq_run_to_beta(run_id: uuid.UUID, approved_only: bool = False,
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_course_access(session, run.course_id, user)
     _require_reviewed(run)          # fast 409 before spawning a job
     _result_for_load(run, approved_only)  # fast 409/400 if approvals aren't met
     job = SyncJob(course_id=run.course_id, job_type=SyncJob.EXPORT, created_by=user.id,
@@ -932,10 +1062,14 @@ def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
     """Full beta-load pipeline for a run (build+upload ZIP, copy/fill the exam-config sheet,
     submit the load task, poll it, unlock), run as a BACKGROUND job tracked in the Activity
     drawer. The run + approval gates are validated up front so failures are instant; the slow
-    pipeline then runs async and its outcome appears on the Loads page."""
+    pipeline then runs async and its outcome appears on the Loads page.
+
+    Content is ALWAYS loaded to BETA — there is no environment parameter and no PROD path
+    anywhere in this pipeline (beta S3 bucket + beta content-loading admin only)."""
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_course_access(session, run.course_id, user)
     _require_reviewed(run)
     parent_topic_id = (body.topic_id or "").strip() or run.topic_id
     if not parent_topic_id:
@@ -1039,6 +1173,7 @@ def regenerate_mcq_question(run_id: uuid.UUID, outcome: str,
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_course_access(session, run.course_id, user)
     if not (body.feedback or "").strip():
         raise HTTPException(status_code=400, detail="Feedback is required to regenerate.")
     job = SyncJob(course_id=run.course_id, job_type=SyncJob.REGEN, created_by=user.id,
@@ -1178,11 +1313,18 @@ def list_courses(session: Session = Depends(get_session)) -> list[dict]:
         ).all()
     )
     issue_counts = _content_issue_counts(session)
+    # One grouped query maps each course to the users granted collaborator access.
+    collabs: dict[str, list] = {}
+    for cid, uid in session.execute(
+        select(CourseCollaborator.course_id, CourseCollaborator.user_id)
+    ).all():
+        collabs.setdefault(cid, []).append(uid)
     return [
         serialize_course_list(
             c,
             ingested_chunk_count=counts.get(c.course_id, 0),
             content_issue_count=issue_counts.get(c.course_id, 0),
+            collaborator_ids=collabs.get(c.course_id, []),
         )
         for c in top_level
     ]
