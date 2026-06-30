@@ -340,6 +340,10 @@ export const adminApproveUser = (id) => request(`/admin/users/${id}/approve`, { 
 export const adminDeactivateUser = (id) => request(`/admin/users/${id}/deactivate`, { method: 'POST' })
 export const adminSetRole = (id, role) =>
   request(`/admin/users/${id}/role`, { method: 'POST', body: JSON.stringify({ role }) })
+export const adminSetName = (id, name) =>
+  request(`/admin/users/${id}/name`, { method: 'POST', body: JSON.stringify({ name }) })
+export const adminResetPassword = (id, password) =>
+  request(`/admin/users/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) })
 export const adminStats = () => request('/admin/stats')
 export const adminLogs = (level = '', limit = 200, offset = 0) =>
   request(`/admin/logs?limit=${limit}&offset=${offset}${level ? `&level=${level}` : ''}`)

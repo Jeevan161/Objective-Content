@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ShieldCheck, UserCheck, UserX, RefreshCw, KeyRound, ThumbsUp, ThumbsDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ShieldCheck, UserCheck, UserX, RefreshCw, KeyRound, Pencil, ThumbsUp, ThumbsDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   adminStats, adminApproveUser, adminDeactivateUser, adminSetRole, adminLogs,
   adminMcqFeedback, adminAppFeedback,
 } from '../api'
+import EditUserModal from './EditUserModal'
 
 const RATING_EMOJI = { 1: '😞', 2: '😕', 3: '😐', 4: '🙂', 5: '😄' }
 import { useAuth } from '../auth/AuthContext'
@@ -22,6 +23,7 @@ export default function AdminDashboard() {
   const [mcqFeedback, setMcqFeedback] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
+  const [editUser, setEditUser] = useState(null)   // user being edited (name / password)
 
   const LOGS_PAGE_SIZE = 10
 
@@ -145,6 +147,9 @@ export default function AdminDashboard() {
                             <option value="manager">manager</option>
                             <option value="admin">admin</option>
                           </select>
+                          <button className="btn btn-soft btn-sm" disabled={busyId === u.id}
+                            title="Edit name or reset password" onClick={() => setEditUser(u)}>
+                            <Pencil size={13} /> Edit</button>
                         </div>
                       </td>
                     </tr>
@@ -254,6 +259,10 @@ export default function AdminDashboard() {
             </div>
           </div>
         </>
+      )}
+
+      {editUser && (
+        <EditUserModal user={editUser} onClose={() => setEditUser(null)} onSaved={load} />
       )}
     </>
   )

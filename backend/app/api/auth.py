@@ -37,6 +37,8 @@ from app.schemas import (
     ApiKeyRequest,
     AppFeedbackRequest,
     LoginRequest,
+    NameRequest,
+    PasswordResetRequest,
     RegisterRequest,
     RoleRequest,
     serialize_user,
@@ -195,6 +197,35 @@ def set_role(user_id: uuid.UUID, body: RoleRequest, admin: User = Depends(requir
         raise HTTPException(status_code=400, detail="You cannot demote your own admin account.")
     target = _get_user_or_404(session, user_id)
     target.role = body.role
+    session.add(target)
+    session.commit()
+    return serialize_user(target)
+
+
+@router.post("/admin/users/{user_id}/reset-password")
+def reset_password(user_id: uuid.UUID, body: PasswordResetRequest,
+                   _: User = Depends(require_admin),
+                   session: Session = Depends(get_session)) -> dict:
+    pw = (body.password or "").strip()
+    if len(pw) < 8:
+        raise HTTPException(status_code=400,
+                            detail="Password must be at least 8 characters.")
+    target = _get_user_or_404(session, user_id)
+    target.password_hash = hash_password(pw)
+    session.add(target)
+    session.commit()
+    return serialize_user(target)
+
+
+@router.post("/admin/users/{user_id}/name")
+def set_name(user_id: uuid.UUID, body: NameRequest,
+             _: User = Depends(require_admin),
+             session: Session = Depends(get_session)) -> dict:
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty.")
+    target = _get_user_or_404(session, user_id)
+    target.name = name
     session.add(target)
     session.commit()
     return serialize_user(target)
