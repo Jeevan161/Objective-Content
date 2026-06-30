@@ -99,10 +99,14 @@ function McqGenerationPage({ courses, onBack, onTrackJob, openTarget }) {
   const sessionHasContent = readingParts.some((p) => p.has_content)
   const paused = job?.status === 'AWAITING_REVIEW' // waiting at a HITL gate
   const running = Boolean(job && !TERMINAL.includes(job.status) && !paused)
-  // Only the user who added (synced) this course may generate for it. Admins bypass;
-  // unowned (legacy) courses stay open. `detail.created_by` is null until loaded.
+  // Who may generate: the course owner (first syncer), a collaborator the owner/admin
+  // granted access, or an admin. Unowned (legacy) courses stay open. `detail` is null
+  // until loaded — don't block while we don't know yet.
+  const isCollaborator = (detail?.collaborator_ids || []).some(
+    (id) => String(id) === String(user?.id),
+  )
   const ownsCourse = !detail || user?.role === 'admin'
-    || !detail.created_by || detail.created_by === user?.id
+    || !detail.created_by || detail.created_by === user?.id || isCollaborator
   const canGenerate = ready && sessionHasContent && ownsCourse && !running && !paused
   // Job is "live" (stream over a socket) while it's neither finished nor paused at a gate.
   const streamable = Boolean(job?.id) && !TERMINAL.includes(job?.status) && !paused
@@ -391,7 +395,8 @@ function McqGenerationPage({ courses, onBack, onTrackJob, openTarget }) {
           </button>
           {!ownsCourse && (
             <p className="mcq-owner-note">
-              <AlertTriangle size={13} /> Only the user who added this course can generate MCQs for it.
+              <AlertTriangle size={13} /> You don’t have access to this course. Ask its owner or an
+              admin to add you.
             </p>
           )}
         </div>
