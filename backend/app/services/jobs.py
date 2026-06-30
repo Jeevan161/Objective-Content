@@ -197,12 +197,15 @@ def _persist_mcq_result(job_id: uuid.UUID, result: dict, course_id: str,
         regen_reason = ((getattr(job, "progress", None) or {}).get("ctx") or {}).get("regen_reason", "")
         if version > 1 and regen_reason:
             result["regen_reason"] = regen_reason
+        _cost = result.get("cost") or {}
         session.add(McqRun(
             job_id=job_id, course_id=course_id, topic_id=topic_id, unit_id=unit_id,
             langsmith_run_url=result.get("langsmith_run_url", ""),
             lo_count=result.get("lo_count", 0),
             question_count=result.get("question_count", 0),
             needs_human_count=result.get("needs_human_count", 0),
+            total_tokens=int(_cost.get("total_tokens") or 0),
+            estimated_cost_usd=float(_cost.get("estimated_cost_usd") or 0.0),
             version=version,
             result=result,
             created_by=getattr(job, "created_by", None),   # attribute the run to its user
@@ -436,6 +439,7 @@ def _persist_cq_result(job_id: uuid.UUID, result: dict, scope_id) -> None:
         job = session.get(SyncJob, job_id)
         scope_row = session.get(ClassroomQuizScope, scope_id)
         deck_id = scope_row.deck_id if scope_row is not None else None
+        _cost = result.get("cost") or {}
         run = McqRun(
             job_id=job_id,
             course_id=str(deck_id) if deck_id else "",   # deck id scopes the run (no portal course)
@@ -443,6 +447,8 @@ def _persist_cq_result(job_id: uuid.UUID, result: dict, scope_id) -> None:
             lo_count=result.get("lo_count", 0),
             question_count=result.get("question_count", 0),
             needs_human_count=result.get("needs_human_count", 0),
+            total_tokens=int(_cost.get("total_tokens") or 0),
+            estimated_cost_usd=float(_cost.get("estimated_cost_usd") or 0.0),
             version=1, result=result,
             reading_material=result.get("reading_material", ""),
             created_by=getattr(job, "created_by", None),
@@ -579,6 +585,10 @@ def _persist_cq_variants_result(job_id: uuid.UUID, result: dict, run_id) -> None
             run.result = result.get("result", run.result)
             run.question_count = result.get("question_count", run.question_count)
             run.needs_human_count = result.get("needs_human_count", run.needs_human_count)
+            # The merged base + variant cost lives in the updated inner result.
+            _cost = (result.get("result") or {}).get("cost") or {}
+            run.total_tokens = int(_cost.get("total_tokens") or run.total_tokens or 0)
+            run.estimated_cost_usd = float(_cost.get("estimated_cost_usd") or run.estimated_cost_usd or 0.0)
         if job is not None:
             job.status = SyncJob.SUCCESS
             job.message = (f"{result.get('variant_count', 0)} variants for "

@@ -118,7 +118,7 @@ def run_classroom_quiz_pipeline(
                     "durable_checkpoint": _checkpoint_durable(), "trace_job_id": thread_id}
 
     return _assemble_result(state, reading_material=reading_material,
-                            session_label=scope_label, thread_id=thread_id)
+                            session_label=scope_label, thread_id=thread_id, progress=progress)
 
 
 def _load_scope_reading_material(scope_id) -> str:
@@ -182,11 +182,11 @@ def resume_classroom_quiz_pipeline(
                 "reading_material": reading_material, "session_label": scope_label,
                 "durable_checkpoint": _checkpoint_durable(), "trace_job_id": thread_id}
     return _assemble_result(state, reading_material=reading_material,
-                            session_label=scope_label, thread_id=thread_id)
+                            session_label=scope_label, thread_id=thread_id, progress=progress)
 
 
 def _assemble_result(state: dict, *, reading_material: str, session_label: str,
-                     thread_id: str) -> dict:
+                     thread_id: str, progress=None) -> dict:
     """Phase-1 completion path: BASE questions only. Variants are NOT generated here — they
     are created in a separate, review-gated phase (`generate_variants_for_run`) once a human
     has reviewed and finalized the base questions in the Review Queue."""
@@ -225,6 +225,7 @@ def _assemble_result(state: dict, *, reading_material: str, session_label: str,
         "base_count": len(generated),
         "variant_count": 0,
         "needs_human_count": sum(1 for q in questions if q.get("needs_human")),
+        "cost": progress.usage_summary() if progress is not None else {},
     }
 
 
@@ -279,6 +280,11 @@ def generate_variants_for_run(*, run_id, progress_sink: Callable[[dict], None] |
     result["variant_count"] = len(variants)
     result["variant_shortfalls"] = shortfalls
     result["phase"] = "variants"
+    # Fold this variant phase's token cost into the run's total (base run cost + variant cost).
+    from app.mcq_pipeline.utils import pricing
+    variant_cost = progress.usage_summary()
+    result["variant_cost"] = variant_cost
+    result["cost"] = pricing.merge_summaries([result.get("cost") or {}, variant_cost])
     generated = [q for q in new_questions if q.get("status") == "generated"]
     return {
         "status": "completed",

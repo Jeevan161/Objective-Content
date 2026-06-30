@@ -105,6 +105,11 @@ function McqRunsPage({ courses }) {
                   <div className="runs-item-stats">
                     <span>{r.lo_count} LOs</span>
                     <span>{r.question_count} Q</span>
+                    {r.estimated_cost_usd > 0 && (
+                      <span title="Estimated token cost for this run (list-price estimate)">
+                        ${r.estimated_cost_usd < 0.01 ? r.estimated_cost_usd.toFixed(5) : r.estimated_cost_usd.toFixed(r.estimated_cost_usd < 1 ? 4 : 2)}
+                      </span>
+                    )}
                     {r.needs_human_count > 0 && (
                       <span className="runs-item-review">{r.needs_human_count} need review</span>
                     )}

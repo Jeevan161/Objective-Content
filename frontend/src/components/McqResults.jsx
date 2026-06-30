@@ -17,6 +17,20 @@ const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer'
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
+// Compact token count (12345 -> "12.3k") and a USD formatter that keeps small estimates readable.
+function fmtTokens(n) {
+  const v = Number(n) || 0
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`
+  return String(v)
+}
+function fmtUsd(n) {
+  const v = Number(n) || 0
+  if (v === 0) return '$0'
+  if (v < 0.01) return `$${v.toFixed(5)}`
+  return `$${v.toFixed(v < 1 ? 4 : 2)}`
+}
+
 // Per-question review status, used by the Q1/Q2… navigator. `regenOutcome` is the outcome
 // whose regeneration job is currently in flight (so the nav can show a live spinner).
 const STATUS_LABEL = {
@@ -836,6 +850,12 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
 
   const [tab, setTab] = useState('questions')
   const [filter, setFilter] = useState('all') // all | review
+  const [showCost, setShowCost] = useState(false)
+  // Estimated token cost for this run (list-price estimate; tokens are exact). The full
+  // per-model / per-step breakdown lives in result.cost; the run row carries the summary.
+  const cost = r.cost || {}
+  const costUsd = cost.estimated_cost_usd ?? run?.estimated_cost_usd ?? 0
+  const costTokens = cost.total_tokens ?? run?.total_tokens ?? 0
 
   const filtered = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
   // Generation page reviews BASE questions only; variants are reviewed in the Review Queue.
@@ -928,6 +948,13 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
         <div className="mcq-tile warn"><div className="mcq-tile-num">{run?.needs_human_count ?? needsReview}</div><div className="mcq-tile-lbl">Need review</div></div>
         {ragCallCount > 0 && (
           <div className="mcq-tile"><div className="mcq-tile-num">{ragCallCount}</div><div className="mcq-tile-lbl">RAG calls</div></div>
+        )}
+        {(costTokens > 0 || costUsd > 0) && (
+          <button type="button" className="mcq-tile as-button" onClick={() => setShowCost(true)}
+                  title="Estimated token cost (list-price estimate; tokens are exact). Click for the per-model / per-step breakdown.">
+            <div className="mcq-tile-num">{fmtUsd(costUsd)}</div>
+            <div className="mcq-tile-lbl">Est. cost · {fmtTokens(costTokens)} tok</div>
+          </button>
         )}
         <div className="mcq-tile-actions">
           {run?.version != null && (
@@ -1261,7 +1288,63 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
           onConfirm={() => { const p = confirm.proceed; setConfirm(null); p() }}
         />
       )}
+      {showCost && <CostModal cost={cost} onClose={() => setShowCost(false)} />}
     </div>
+  )
+}
+
+// Per-run cost breakdown: totals + per-model and per-step token usage and estimated USD.
+function CostModal({ cost, onClose }) {
+  const byModel = cost.by_model || []
+  const byStep = cost.by_step || []
+  const unpriced = cost.unpriced_models || []
+  const Row = ({ label, b }) => (
+    <tr>
+      <td>{label}</td>
+      <td className="num">{fmtTokens(b.input_tokens)}{b.cached_tokens ? ` (${fmtTokens(b.cached_tokens)} cached)` : ''}</td>
+      <td className="num">{fmtTokens(b.output_tokens)}</td>
+      <td className="num">{b.calls ?? '—'}</td>
+      <td className="num">{fmtUsd(b.estimated_cost_usd)}</td>
+    </tr>
+  )
+  return (
+    <Modal title="Run cost (estimated)" size="md" onClose={onClose}>
+      <div className="cost-modal">
+        <div className="cost-headline">
+          <span className="cost-headline-usd">{fmtUsd(cost.estimated_cost_usd)}</span>
+          <span className="cost-headline-sub">
+            {fmtTokens(cost.total_tokens)} tokens · {cost.calls || 0} calls
+          </span>
+        </div>
+        <p className="cost-note">
+          Estimated from published list prices — tokens are measured exactly; the dollar figure is an
+          approximation and may differ from your proxy’s actual billing.
+        </p>
+        {byModel.length > 0 && (
+          <>
+            <h4 className="cost-section">By model</h4>
+            <table className="cost-table">
+              <thead><tr><th>Model</th><th className="num">Input</th><th className="num">Output</th><th className="num">Calls</th><th className="num">Est. cost</th></tr></thead>
+              <tbody>{byModel.map((b) => <Row key={b.model} label={b.model || '(unknown)'} b={b} />)}</tbody>
+            </table>
+          </>
+        )}
+        {byStep.length > 0 && (
+          <>
+            <h4 className="cost-section">By step</h4>
+            <table className="cost-table">
+              <thead><tr><th>Step</th><th className="num">Input</th><th className="num">Output</th><th className="num">Calls</th><th className="num">Est. cost</th></tr></thead>
+              <tbody>{byStep.map((b) => <Row key={b.step} label={b.step || '(unattributed)'} b={b} />)}</tbody>
+            </table>
+          </>
+        )}
+        {unpriced.length > 0 && (
+          <p className="cost-note warn">
+            No price set for: {unpriced.join(', ')} — their tokens are counted but excluded from the dollar estimate.
+          </p>
+        )}
+      </div>
+    </Modal>
   )
 }
 

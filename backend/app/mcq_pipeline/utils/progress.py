@@ -78,6 +78,25 @@ def _stop_llm_recording(token) -> None:
         pass
 
 
+def _start_usage_recording() -> tuple:
+    """Begin per-node token-usage recording. Best-effort: (None, None) if scope is unavailable."""
+    try:
+        from app.mcq_pipeline.utils import scope
+        return scope.start_usage_recording()
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def _stop_usage_recording(token) -> None:
+    if token is None:
+        return
+    try:
+        from app.mcq_pipeline.utils import scope
+        scope.stop_usage_recording(token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -94,7 +113,8 @@ class ProgressReporter:
         # Cooperative cancellation: consulted on every stage transition (nodes call these
         # frequently). When it returns True we raise JobCancelled, which unwinds the graph.
         self._cancel_check = cancel_check
-        self._open: dict[str, tuple] = {}       # node key -> (started_dt, started_perf)
+        self._open: dict[str, tuple] = {}       # node key -> (started_dt, started_perf, calls, token, usage, utoken)
+        self._usage: list = []                  # every LLM call's token usage across this run (for cost)
         # The stage board to render. Defaults to the MCQ pipeline; the Classroom Quiz runner
         # passes CQ_STAGE_DEFS (adds reading_material + generate_variants). Calls to start/done
         # for a key absent from this board are silent no-ops (see `_set`).
@@ -114,6 +134,19 @@ class ProgressReporter:
                 "stages": [dict(self._stages[d["key"]]) for d in self._stage_defs],
                 "updated_at": _now_iso(),
             }
+
+    def usage_summary(self) -> dict:
+        """Aggregate token usage + estimated cost across every node span of this run.
+        Returns an empty-but-valid summary if nothing was captured (e.g. no LLM calls)."""
+        with self._lock:
+            entries = list(self._usage)
+        try:
+            from app.mcq_pipeline.utils import pricing
+            return pricing.summarize(entries)
+        except Exception:  # noqa: BLE001
+            return {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "total_tokens": 0,
+                    "calls": 0, "estimated_cost_usd": 0.0, "by_model": [], "by_step": [],
+                    "unpriced_models": []}
 
     def _flush(self) -> None:
         if self._sink:
@@ -140,16 +173,35 @@ class ProgressReporter:
                 # re-entered by the repair loop / resume re-opens, so each entry is its own span.
                 if new_state == "running" and key not in self._open:
                     calls, token = _start_llm_recording()
-                    self._open[key] = (now, perf_counter(), calls, token)
+                    usage, utoken = _start_usage_recording()
+                    self._open[key] = (now, perf_counter(), calls, token, usage, utoken)
                 elif new_state in ("done", "error"):
-                    started_dt, started_perf, calls, token = self._open.pop(
-                        key, (now, perf_counter(), None, None))
+                    started_dt, started_perf, calls, token, usage, utoken = self._open.pop(
+                        key, (now, perf_counter(), None, None, None, None))
                     _stop_llm_recording(token)
+                    _stop_usage_recording(utoken)
                     snapshot = dict(stage.get("snapshot") or {})
                     if calls:
                         snapshot["llm_calls"] = calls[:_LLM_CALLS_CAP]
                         if len(calls) > _LLM_CALLS_CAP:
                             snapshot["llm_calls_truncated"] = len(calls) - _LLM_CALLS_CAP
+                    if usage:
+                        # Attribute each call to THIS node (the run-level "by step" breakdown is
+                        # keyed off `step`); keep an explicit step (e.g. "regenerate") if one was set.
+                        for u in usage:
+                            if not u.get("step"):
+                                u["step"] = key
+                        self._usage.extend(usage)
+                        try:
+                            from app.mcq_pipeline.utils import pricing
+                            s = pricing.summarize(usage)
+                            snapshot["cost"] = {  # compact per-node cost for the span row
+                                "total_tokens": s["total_tokens"], "input_tokens": s["input_tokens"],
+                                "output_tokens": s["output_tokens"], "cached_tokens": s["cached_tokens"],
+                                "estimated_cost_usd": s["estimated_cost_usd"], "calls": s["calls"],
+                            }
+                        except Exception:  # noqa: BLE001 — cost must never crash the run
+                            pass
                     span = {
                         "node": key, "label": stage.get("label", ""),
                         "status": "error" if new_state == "error" else "ok",
