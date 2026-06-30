@@ -158,7 +158,8 @@ A question is an INDEPENDENT resource: the learner sees ONLY the stem and option
 
 1. It defers to the source — phrases like 'according to the material', 'as described in the course material', 'as stated in the course material', 'based on the lesson', 'in the reading/passage', 'as discussed', or 'from this session' (in the stem, an option, OR the explanation). The fix removes the phrase and states the fact directly.
 2. It references an example entity defined only in the source and NOT in the question itself — a scenario label ('Project A'/'Project B'), a sample file/variable/function name, a character, or a one-off value the learner would only know from the reading.
-3. Answering requires having read a specific passage rather than understanding the concept.
+3. It points at code/snippet/example/output that the question does NOT itself show — phrases like 'the code in the reading', 'the example above', 'the snippet from the lesson', or any reliance on code the learner saw only in the source. If answering needs code, that code must be FULLY EMBEDDED and COMPLETE in the question (the `code` field for CODE_ANALYSIS_*), with every variable/function/value it uses defined inside it.
+4. Answering requires having read a specific passage rather than understanding the concept.
 
 The fix is to embed the needed context generically in the stem, or to test the transferable concept instead of the source-specific detail. NOTE: naming a genuinely taught technology/tool/command (venv, pip, Django) is NOT a violation — only source-local references and undefined example entities are.""")
 
@@ -177,6 +178,8 @@ Reject (flag) distractors that are:
 - untaught
 - obviously wrong
 - accidentally correct
+- a NEAR-CLONE of the correct answer (reworded, a subset/superset, or differing only by a trivial detail) — too similar to the key to be a distinct option, so a learner cannot tell them apart. Two options that read as "the same answer", or that are both defensibly correct, is the same failure.
+- NOT eliminable from the material: a learner with the expected depth cannot tell WHY it is wrong using only what the reading teaches (its wrongness needs untaught/outside knowledge)
 - a giveaway via an absolute / blanket-scope qualifier ('always', 'never', 'all', 'none', 'only', 'solely', 'just', 'merely', 'any', 'no', 'nothing', 'does not', 'cannot')
 - a NEGATION, OPPOSITE, or BLANKET DENIAL of the correct answer (e.g. key "stores and processes data" with a distractor "does not store or process any data" / "only displays static content"). These are eliminable WITHOUT understanding the concept, so they reveal the answer.
 

@@ -140,6 +140,8 @@ Avoid:
 SELF-CONTAINED — the question is an INDEPENDENT resource. The learner sees ONLY the stem and options, never the reading material. Therefore:
 - Embed EVERY detail needed to answer directly in the stem. Never defer to the source — not in the STEM, the OPTIONS, or the EXPLANATION — with phrases like 'according to the material', 'as described in the course material', 'as stated in the course material', 'based on the lesson', 'in the reading/passage', 'as discussed', or 'from this session'. State the fact directly instead (write "Python powers the backends of large-scale systems", never "Python powers ... as described in the course material").
 - Never reference a source-local example entity the learner cannot see — a scenario label ('Project A'/'Project B'), a sample file/variable/function name, or a one-off value from the reading. If a scenario is needed, define it fully and generically IN THE STEM so it stands alone.
+- NEVER assume the learner has seen any code, snippet, example, diagram, or output from the reading. If answering requires seeing code, that code MUST be FULLY EMBEDDED and COMPLETE inside the question itself (the `code` field for CODE_ANALYSIS_*), with every variable, function, value, and import it relies on defined within it — the learner must be able to understand and answer using ONLY what the question shows. Never write "the code in the reading", "the example shown above", "the snippet from the lesson", or otherwise lean on a snippet that lives only in the source.
+- A reader who has NEVER seen the reading material must have everything they need — concept, context, and any required code — present in the question. If something needed to answer is missing, add it to the question; do not point at the source.
 - Test transferable understanding of the concept, not recall of an arbitrary detail from one example.
 
 NO PHANTOM CODE — only CODE_ANALYSIS_* questions display a snippet (in the `code` field). For a MULTIPLE_CHOICE / TRUE_OR_FALSE / MORE_THAN_ONE_MULTIPLE_CHOICE, NEVER refer to a snippet the question does not show: no "the following code", "the given program", "the code below", or "what does this output". If the outcome needs a snippet shown, it must be a CODE_ANALYSIS_* question, not this type. For a CODE_ANALYSIS_* question, put the snippet in the `code` field and have the stem REFER to it ("the given code snippet") — never paste the code (or a ``` fenced block) into the stem.
@@ -193,6 +195,8 @@ Do NOT use:
 
 DISTRACTOR RULES
 
+ELIMINABILITY — THE ULTIMATE TEST. A learner who has studied ONLY this reading must be able to identify EVERY distractor as wrong using ONLY what the reading teaches — ruling one out must never require knowledge the material did not provide. For EACH distractor, the reading must contain the specific fact, rule, definition, or relationship that makes it wrong; if you cannot point to where the material lets a learner reject it, rewrite it around a taught point they CAN use. (A distractor built from taught vocabulary still FAILS this test if its wrongness depends on an untaught detail.) The flip side also holds: a distractor must NOT be eliminable WITHOUT understanding the concept — the learner rejects it because the material taught them the correct fact, not because it is absurd, negated, or a giveaway.
+
 Distractors must:
 - be plausible
 - represent common misunderstandings
@@ -200,7 +204,9 @@ Distractors must:
 - be technically incorrect
 - be the SAME KIND of thing as the correct answer (a version question needs version options; a command question needs commands; a value question needs values) — never mix categories, so no option stands out and all stay comparable
 
-Each distractor must encode a DIFFERENT misconception — over-generalize a taught rule, confuse the concept with a sibling taught concept, or invert cause-and-effect. Never reword the correct answer or paraphrase another option.
+Each distractor must encode a DIFFERENT misconception — over-generalize a taught rule, confuse the concept with a sibling taught concept, or invert cause-and-effect.
+
+NOT A NEAR-CLONE OF THE KEY. No option may be the correct answer reworded, a subset or superset of it, or a variant that differs only by a trivial detail (one word, a number, reordered words, an added/removed qualifier). If a learner could reasonably read two options as "the same answer" or "both valid ways of saying it", they are too similar — make each distractor assert something SUBSTANTIVELY DIFFERENT from the key, and from every other option, that the material teaches to be wrong. Two options that are both defensibly correct is the same failure: replace one. (Distractors must be genuinely incorrect, never a paraphrase of the key or of each other.)
 
 Distractors must NOT:
 - be absurd
