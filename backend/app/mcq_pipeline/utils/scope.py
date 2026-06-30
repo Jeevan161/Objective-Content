@@ -22,6 +22,9 @@ _rag_calls_var: contextvars.ContextVar = contextvars.ContextVar("mcq_rag_calls",
 # Optional per-thread sink that collects every LLM call made through `utils.llm.chat`
 # (prompt messages + response), so each pipeline node's trace span can show its LLM I/O.
 _llm_calls_var: contextvars.ContextVar = contextvars.ContextVar("mcq_llm_calls", default=None)
+# Optional per-thread sink that collects token USAGE for every LLM call (from the usage
+# callback in utils.llm), so each node span — and the whole run — can report token cost.
+_llm_usage_var: contextvars.ContextVar = contextvars.ContextVar("mcq_llm_usage", default=None)
 # The triggering user's personal LLM API key for this run. Bound at job start and
 # re-bound into pmap workers so EVERY LLM call uses that user's key (all other
 # provider settings stay global). None → fall back to the global provider key.
@@ -82,6 +85,27 @@ def stop_llm_recording(token) -> None:
     _llm_calls_var.reset(token)
 
 
+def record_llm_usage(entry: dict) -> None:
+    """Append one call's token usage to the active usage recorder, if recording is in effect for
+    this thread. A no-op otherwise, so the usage callback can always call it safely. `list.append`
+    is atomic under the GIL, so one list is safe to share across pmap workers."""
+    sink = _llm_usage_var.get()
+    if sink is not None:
+        sink.append(entry)
+
+
+def start_usage_recording() -> tuple:
+    """Begin collecting token usage on this thread. Returns (usage_list, token); pass the token to
+    :func:`stop_usage_recording`. Used by the ProgressReporter to scope token cost to one node span."""
+    usage: list = []
+    token = _llm_usage_var.set(usage)
+    return usage, token
+
+
+def stop_usage_recording(token) -> None:
+    _llm_usage_var.reset(token)
+
+
 class recording:
     """Context manager that collects every RAG call made on this thread while
     active. Yields the list the calls accumulate into::
@@ -107,12 +131,14 @@ def with_current_adapter(fn: Callable[[T], R]) -> Callable[[T], R]:
     adapter = _adapter_var.get()
     rag_calls = _rag_calls_var.get()
     llm_calls = _llm_calls_var.get()
+    llm_usage = _llm_usage_var.get()
     user_api_key = _user_api_key_var.get()
 
     def wrapped(x: T) -> R:
         ta = _adapter_var.set(adapter)
         tr = _rag_calls_var.set(rag_calls)
         tl = _llm_calls_var.set(llm_calls)
+        tu = _llm_usage_var.set(llm_usage)
         tk = _user_api_key_var.set(user_api_key)
         try:
             return fn(x)
@@ -120,6 +146,7 @@ def with_current_adapter(fn: Callable[[T], R]) -> Callable[[T], R]:
             _adapter_var.reset(ta)
             _rag_calls_var.reset(tr)
             _llm_calls_var.reset(tl)
+            _llm_usage_var.reset(tu)
             _user_api_key_var.reset(tk)
 
     return wrapped

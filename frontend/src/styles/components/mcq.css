@@ -474,6 +474,26 @@
 .mcq-tile.warn .mcq-tile-num { color: var(--amber); }
 .mcq-tile-lbl { font-size: 11px; color: var(--text-2); margin-top: 2px; }
 .mcq-tile-actions { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+/* Clickable cost tile — looks like a tile, opens the breakdown modal. */
+.mcq-tile.as-button {
+  font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.mcq-tile.as-button:hover { border-color: var(--brand); box-shadow: var(--shadow-md); }
+.mcq-tile.as-button .mcq-tile-num { color: var(--brand); }
+
+/* Cost breakdown modal */
+.cost-modal { display: flex; flex-direction: column; gap: var(--sp-3); }
+.cost-headline { display: flex; align-items: baseline; gap: var(--sp-3); }
+.cost-headline-usd { font-family: var(--font-display); font-size: 28px; font-weight: 700; color: var(--text); }
+.cost-headline-sub { font-size: 13px; color: var(--text-2); }
+.cost-note { font-size: 12px; color: var(--text-3); margin: 0; }
+.cost-note.warn { color: var(--amber); }
+.cost-section { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: var(--sp-2) 0 0; }
+.cost-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cost-table th, .cost-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.cost-table th { text-align: left; color: var(--text-2); font-weight: 600; }
+.cost-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .mcq-mode {
   font-size: 11px; color: var(--text-2); background: var(--bg-active);
   border-radius: var(--r-full); padding: 2px 9px;
