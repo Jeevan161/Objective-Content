@@ -14,29 +14,43 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import Callable
 
+
+class JobCancelled(BaseException):
+    """Raised cooperatively when the user cancels a running MCQ job. Subclasses
+    BaseException (not Exception) on purpose so the pipeline's broad `except Exception`
+    handlers don't swallow it — it propagates up through the graph to the job runner,
+    which finalizes the job as CANCELLED."""
+
 # The pipeline's stages, in order. `parallel_group` marks branches the UI renders
 # side by side; per-LO stages carry done/total.
 STAGE_DEFS = [
     # LO-creation stage — the LO-first pipeline.
     {"key": "parse_structure", "label": "Parse structure"},
-    {"key": "generate_outcomes", "label": "Generate all outcomes"},
-    {"key": "map_concepts", "label": "Map concepts (consistent across outcomes)"},
-    {"key": "build_outcome_graph", "label": "Build outcome graph (weights)"},
-    {"key": "profile_depth", "label": "Profile depth (feasibility)"},
-    {"key": "plan_outcomes", "label": "Plan outcomes (budget + identify apply)"},
+    {"key": "derive_session_focus", "label": "Derive session focus"},
+    {"key": "author_outcomes", "label": "Author candidate outcomes"},
+    {"key": "consolidate_concepts", "label": "Consolidate concepts + taught depth"},
+    {"key": "graph_outcomes", "label": "Build outcome graph (weights)"},
+    {"key": "select_outcomes", "label": "Select outcomes (budget + feasibility)"},
     {"key": "resolve_prerequisites", "label": "Resolve prerequisites (apply)"},
-    {"key": "review_outcomes_quality", "label": "Dedup & judge (R1–R8 rubric)"},
-    {"key": "validate", "label": "Validate (structural + rubric gate)"},
+    {"key": "review_and_validate", "label": "Review & validate (dedup, R1–R8 rubric, structural gate)"},
     {"key": "repair", "label": "Repair (regenerate, if needed)"},
-    {"key": "review_outcomes", "label": "Review outcomes (human gate 2)"},
     {"key": "finalize", "label": "Finalize & freeze"},
     {"key": "lo_to_legacy", "label": "Bridge to questions"},
     {"key": "sequence_outcomes", "label": "Sequence outcomes (deep-dive order)"},
+    {"key": "recommend_question_types", "label": "Recommend question types"},
+    {"key": "review_outcomes", "label": "Review outcomes (human gate)"},
     # Question stage — unchanged.
-    {"key": "recommend_question_types", "label": "Pick question types"},
     {"key": "generate_questions", "label": "Generate questions"},
     {"key": "review_questions", "label": "Review & fix"},
 ]
+
+# Classroom Quiz is TWO phases, each its own job + board:
+#   Phase 1 (base): reading material (m00) + the LO/question pipeline — produces the BASE
+#     questions, which a human then reviews & finalizes in the Review Queue.
+#   Phase 2 (variants): m10 expands each APPROVED base into variants. Runs only after review.
+# Separate boards so neither phase shows the other's stages as perpetually pending.
+CQ_BASE_STAGE_DEFS = [{"key": "reading_material", "label": "Generate reading material"}] + STAGE_DEFS
+CQ_VARIANT_STAGE_DEFS = [{"key": "generate_variants", "label": "Generate variants (per approved base)"}]
 
 
 # Cap LLM calls recorded per node span so a fan-out node (e.g. K-sample voting over many
@@ -71,23 +85,33 @@ def _now_iso() -> str:
 class ProgressReporter:
     def __init__(self, sink: Callable[[dict], None] | None = None,
                  trace_sink: Callable[[dict], None] | None = None,
-                 seed_done: list[str] | None = None):
+                 seed_done: list[str] | None = None,
+                 cancel_check: Callable[[], bool] | None = None,
+                 stage_defs: list[dict] | None = None):
         self._lock = threading.Lock()
         self._sink = sink
         self._trace_sink = trace_sink          # emits one span per node entry (our own trace)
+        # Cooperative cancellation: consulted on every stage transition (nodes call these
+        # frequently). When it returns True we raise JobCancelled, which unwinds the graph.
+        self._cancel_check = cancel_check
         self._open: dict[str, tuple] = {}       # node key -> (started_dt, started_perf)
+        # The stage board to render. Defaults to the MCQ pipeline; the Classroom Quiz runner
+        # passes CQ_STAGE_DEFS (adds reading_material + generate_variants). Calls to start/done
+        # for a key absent from this board are silent no-ops (see `_set`).
+        self._stage_defs = list(stage_defs) if stage_defs is not None else STAGE_DEFS
         # seed_done: stages already completed before this reporter took over (a HITL RESUME builds a
         # fresh reporter; without seeding, every prior stage would reset to 'pending' on the board).
         # Seeded stages open no span (their trace spans were already emitted on the original run).
         _seeded = set(seed_done or ())
         self._stages: dict[str, dict] = {
-            d["key"]: {**d, "state": "done" if d["key"] in _seeded else "pending"} for d in STAGE_DEFS
+            d["key"]: {**d, "state": "done" if d["key"] in _seeded else "pending"}
+            for d in self._stage_defs
         }
 
     def snapshot(self) -> dict:
         with self._lock:
             return {
-                "stages": [dict(self._stages[d["key"]]) for d in STAGE_DEFS],
+                "stages": [dict(self._stages[d["key"]]) for d in self._stage_defs],
                 "updated_at": _now_iso(),
             }
 
@@ -99,6 +123,10 @@ class ProgressReporter:
                 pass
 
     def _set(self, key: str, **fields) -> None:
+        # Cooperative cancel point — checked before any work, outside the swallowing
+        # _flush, so JobCancelled actually propagates out of the running node.
+        if self._cancel_check is not None and self._cancel_check():
+            raise JobCancelled()
         span = None
         with self._lock:
             stage = self._stages.get(key)

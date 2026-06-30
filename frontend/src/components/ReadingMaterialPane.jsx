@@ -11,12 +11,21 @@ function Md({ children }) {
   return <div className="md"><ReactMarkdown>{text}</ReactMarkdown></div>
 }
 
-function ReadingMaterialPane({ courseId, unitId }) {
+function ReadingMaterialPane({ courseId, unitId, content: contentProp = null }) {
   const [content, setContent] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
+    // Content supplied directly (e.g. a Classroom Quiz scope's generated handout) — render it
+    // as-is, no portal fetch. The pane is otherwise course/unit-scoped against the portal.
+    if (contentProp != null) {
+      setContent({ title: 'Reading material', content: contentProp,
+                   content_chars: (contentProp || '').length })
+      setError('')
+      setLoading(false)
+      return
+    }
     if (!courseId || !unitId) {
       setContent(null)
       setError('')
@@ -34,7 +43,7 @@ function ReadingMaterialPane({ courseId, unitId }) {
       .finally(() => {
         setLoading(false)
       })
-  }, [courseId, unitId])
+  }, [courseId, unitId, contentProp])
 
   return (
     <aside className="mcq-split-reading">

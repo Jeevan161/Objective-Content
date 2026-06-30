@@ -188,6 +188,7 @@ def seed_prompts() -> int:
     try:
         import app.mcq_pipeline.graph  # noqa: F401 — import triggers all node register() calls
         import app.mcq_pipeline.review  # noqa: F401 — registers the HITL review.* prompts (not in the graph)
+        import app.mcq_pipeline.cq_runner  # noqa: F401 — registers the Classroom Quiz cq.* prompts (m00/m10)
         from sqlalchemy import select as _select
 
         from app.db.session import SessionLocal

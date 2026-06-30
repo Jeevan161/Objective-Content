@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_active, require_admin
+from app.api.deps import get_current_user, require_active, require_admin, require_elevated
 from app.core.crypto import encrypt
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_session
@@ -187,8 +187,10 @@ def deactivate_user(user_id: uuid.UUID, admin: User = Depends(require_admin),
 @router.post("/admin/users/{user_id}/role")
 def set_role(user_id: uuid.UUID, body: RoleRequest, admin: User = Depends(require_admin),
              session: Session = Depends(get_session)) -> dict:
-    if body.role not in (User.ROLE_USER, User.ROLE_ADMIN):
-        raise HTTPException(status_code=400, detail="role must be 'user' or 'admin'.")
+    if body.role not in User.ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail="role must be one of 'user', 'lead', 'manager' or 'admin'.")
     if user_id == admin.id and body.role != User.ROLE_ADMIN:
         raise HTTPException(status_code=400, detail="You cannot demote your own admin account.")
     target = _get_user_or_404(session, user_id)
@@ -199,7 +201,7 @@ def set_role(user_id: uuid.UUID, body: RoleRequest, admin: User = Depends(requir
 
 
 @router.get("/admin/stats")
-def admin_stats(_: User = Depends(require_admin),
+def admin_stats(_: User = Depends(require_elevated),
                 session: Session = Depends(get_session)) -> dict:
     # Per-user generation + load counts (grouped), merged onto the user list.
     gen_counts = dict(session.execute(
@@ -232,12 +234,13 @@ def admin_stats(_: User = Depends(require_admin),
 
 
 @router.get("/admin/logs")
-def admin_logs(level: str | None = None, limit: int = 200,
-               _: User = Depends(require_admin),
+def admin_logs(level: str | None = None, limit: int = 200, offset: int = 0,
+               _: User = Depends(require_elevated),
                session: Session = Depends(get_session)) -> list[dict]:
-    stmt = select(TaskLog).order_by(TaskLog.created_at.desc()).limit(min(limit, 1000))
+    stmt = select(TaskLog).order_by(TaskLog.created_at.desc())
     if level:
         stmt = stmt.where(TaskLog.level == level.upper())
+    stmt = stmt.offset(max(0, offset)).limit(min(max(1, limit), 1000))
     logs = session.scalars(stmt).all()
     return [{
         "id": t.id, "task_type": t.task_type, "level": t.level, "event": t.event,
@@ -247,7 +250,7 @@ def admin_logs(level: str | None = None, limit: int = 200,
 
 
 @router.get("/admin/feedback")
-def admin_app_feedback(limit: int = 200, _: User = Depends(require_admin),
+def admin_app_feedback(limit: int = 200, _: User = Depends(require_elevated),
                        session: Session = Depends(get_session)) -> list[dict]:
     """All application-level feedback submissions, newest first (with submitter info)."""
     rows = session.scalars(
@@ -266,7 +269,7 @@ def admin_app_feedback(limit: int = 200, _: User = Depends(require_admin),
 
 
 @router.get("/admin/mcq-feedback")
-def admin_mcq_feedback(limit: int = 300, _: User = Depends(require_admin),
+def admin_mcq_feedback(limit: int = 300, _: User = Depends(require_elevated),
                        session: Session = Depends(get_session)) -> list[dict]:
     """All MCQ reviewer feedback actions (accept / regenerate / approve / reject /
     run sign-off), newest first — the durable record of every review decision."""

@@ -10,7 +10,10 @@ import {
   BookOpenCheck,
   Workflow,
   Plug,
+  Presentation,
   ShieldCheck,
+  BarChart3,
+  Upload,
   UserCircle,
   MessageSquarePlus,
   X,
@@ -24,8 +27,10 @@ const NAV = [
   { key: 'courses', label: 'Courses', icon: LayoutGrid },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'generation', label: 'Generation Studio', icon: Sparkles },
+  { key: 'classroom-quiz', label: 'Classroom Quiz', icon: Presentation },
   { key: 'review', label: 'Review Queue', icon: ClipboardCheck },
   { key: 'runs', label: 'Runs', icon: History },
+  { key: 'loads', label: 'Loads', icon: Upload },
   { key: 'pipeline', label: 'MCQ Pipeline', icon: Workflow },
   { key: 'llm-providers', label: 'LLM Connectors', icon: Plug },
 ]
@@ -40,6 +45,7 @@ function Sidebar({
   open = false,
   onClose,
   collapsed = false,
+  overlay = false,
   onToggleCollapse,
   user = null,
   onOpenAccount,
@@ -58,7 +64,7 @@ function Sidebar({
   const tip = (label) => (collapsed ? { 'data-tip': label } : {})
 
   return (
-    <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}>
+    <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''} ${overlay ? 'overlay' : ''}`}>
       <div className="sidebar-brand">
         <div className="brand-mark">
           <BookOpenCheck size={18} />
@@ -102,17 +108,27 @@ function Sidebar({
           )}
         </button>
 
-        {user?.role === 'admin' && (
+        {['admin', 'manager', 'lead'].includes(user?.role) && (
           <>
-            <div className="nav-section-label">Admin</div>
+            <div className="nav-section-label">Oversight</div>
             <button
-              className={`nav-item ${page === 'admin' ? 'active' : ''}`}
-              onClick={() => go('admin')}
-              {...tip('Admin')}
+              className={`nav-item ${page === 'analytics' ? 'active' : ''}`}
+              onClick={() => go('analytics')}
+              {...tip('Analytics')}
             >
-              <ShieldCheck size={16} />
-              <span>Admin</span>
+              <BarChart3 size={16} />
+              <span>Analytics</span>
             </button>
+            {user?.role === 'admin' && (
+              <button
+                className={`nav-item ${page === 'admin' ? 'active' : ''}`}
+                onClick={() => go('admin')}
+                {...tip('Admin')}
+              >
+                <ShieldCheck size={16} />
+                <span>Admin</span>
+              </button>
+            )}
           </>
         )}
       </nav>
@@ -137,15 +153,6 @@ function Sidebar({
         >
           {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-        </button>
-        <button
-          className="nav-item nav-collapse"
-          onClick={onToggleCollapse}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          {...tip(collapsed ? 'Expand sidebar' : 'Collapse')}
-        >
-          {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
-          <span>Collapse</span>
         </button>
       </div>
     </aside>

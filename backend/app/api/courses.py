@@ -13,26 +13,41 @@ they aren't captured as a course id.
 from __future__ import annotations
 
 import asyncio
-import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, get_session
 from app.api.deps import get_current_user, require_active
-from app.models import BetaLoad, Course, McqRun, McqTrace, RagChunk, SyncJob, Topic, Unit, UnitPart, User
-from app.services.task_log import ERROR, log_task
+from app.models import (
+    BetaLoad,
+    ClassroomQuizDeck,
+    ClassroomQuizScope,
+    Course,
+    McqRun,
+    McqTrace,
+    RagChunk,
+    SyncJob,
+    Topic,
+    Unit,
+    UnitPart,
+    User,
+)
 from app.schemas import (
     ALLOWED_QUESTION_DOMAINS,
     ApproveRunRequest,
     BuildRagRequest,
+    ClassroomQuizIngestRequest,
     CourseSettingsRequest,
+    ExecuteCodeRequest,
     ExtractRequest,
     McqGenerateRequest,
     McqReviewRequest,
+    serialize_cq_deck,
+    serialize_cq_scope,
     PrepareSheetRequest,
     QuestionApprovalRequest,
     QuestionExcludeRequest,
@@ -56,10 +71,22 @@ from app.services.extraction import (
     environments_needing_token,
     required_environments,
 )
+from app.services.beta_load import (
+    export_filename as _export_filename,
+    require_reviewed as _require_reviewed,
+    result_for_load as _result_for_load,
+)
 from app.services.jobs import (
+    request_cancel,
     start_build_rag_job,
+    start_export_job,
     start_extraction_job,
+    start_load_job,
+    start_cq_scope_job,
+    start_cq_resume_job,
+    start_cq_variants_job,
     start_mcq_job,
+    start_mcq_regen_job,
     start_mcq_resume_job,
     start_sync_job,
 )
@@ -196,12 +223,11 @@ def extract_content(body: ExtractRequest, session: Session = Depends(get_session
                     user: User = Depends(require_active)) -> dict:
     """Start a background reading-material extraction for a course + prerequisites.
 
-    Tokens are OPTIONAL: with a Bearer token an environment is extracted via the
-    learning API (full content incl. tutorials) and its resource ids are stored;
-    without one, reading materials that already have stored resource ids are
-    extracted token-free via the admin panel (cheat-sheet content). A token is
-    only *required* for an environment that still has reading materials with no
-    stored resource id. Tokens are used for this run only and never stored."""
+    Tokens are OPTIONAL (and never required): by default each course's individual
+    learning_resource ids are discovered token-free from the content-loading admin
+    (GET_UNIT_RESOURCE_DETAILS → CSV) and the content is scraped via the admin
+    panel. A supplied Bearer token still takes precedence for its environment
+    (learning API, tutorial-aware). Tokens are used for this run only, never stored."""
     course_id = (body.course_id or "").strip()
     if not course_id:
         raise HTTPException(status_code=400, detail="course_id is required.")
@@ -220,16 +246,10 @@ def extract_content(body: ExtractRequest, session: Session = Depends(get_session
 
     unit_ids = [u.strip() for u in (body.unit_ids or []) if isinstance(u, str) and u.strip()]
 
-    needed = environments_needing_token(session, course, unit_ids or None)
-    missing = [env for env in needed if env not in tokens]
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"A Bearer token is required for: {', '.join(missing)} — "
-                "these have reading materials with no stored learning resource id yet."
-            ),
-        )
+    # Tokens are no longer required: reading materials without stored resource ids
+    # are discovered token-free from the content-loading admin's CSV
+    # (GET_UNIT_RESOURCE_DETAILS) at extraction time. A supplied token still takes
+    # precedence (learning API, tutorial-aware) for its environment.
 
     job = SyncJob(course_id=course_id, job_type=SyncJob.EXTRACT, created_by=user.id)
     session.add(job)
@@ -318,6 +338,46 @@ def rag_answer(body: RagAnswerRequest, session: Session = Depends(get_session)) 
     return answer(session, course_ids=course_ids, query=body.query, top_k=top_k)
 
 
+@router.post("/courses/mcq/execute/")
+def execute_code(body: ExecuteCodeRequest,
+                 user: User = Depends(require_active)) -> dict:
+    """Run a candidate program (and optionally check stdout against an expected output)
+    using the SAME sandboxed runner that grades FIBs. Powers the reviewer's FIB
+    'Run & Check' and code-analysis 'Run code' buttons. Authenticated; runs grounded
+    LLM-authored code with CPU/file-size rlimits and a wall-clock timeout."""
+    from app.mcq_pipeline.utils import code_exec
+
+    if not (body.code or "").strip():
+        raise HTTPException(status_code=400, detail="code is required.")
+    if not code_exec.language_supported(body.language):
+        return {"supported": False, "ran": False,
+                "stderr": f"language {body.language!r} is not executable here", "language": body.language}
+    if body.expected_output is not None:
+        res = code_exec.verify_output(body.language, body.code, body.stdin or "", body.expected_output)
+        res["expected"] = body.expected_output
+    else:
+        res = code_exec.run_code(body.language, body.code, body.stdin or "")
+    res["language"] = body.language
+    return res
+
+
+@router.get("/courses/jobs/")
+def list_jobs(active: bool = False, limit: int = 50,
+              session: Session = Depends(get_session),
+              user: User = Depends(require_active)) -> list[dict]:
+    """List the caller's recent jobs (admins see everyone's), newest first. With
+    `active=true`, only unsettled jobs (PENDING/RUNNING/AWAITING_REVIEW) — used so every
+    browser tab can show the same in-flight Activity, not just the tab that started a job."""
+    q = select(SyncJob).order_by(SyncJob.updated_at.desc())
+    if user.role != User.ROLE_ADMIN:
+        q = q.where(SyncJob.created_by == user.id)
+    if active:
+        q = q.where(SyncJob.status.in_(
+            [SyncJob.PENDING, SyncJob.RUNNING, SyncJob.AWAITING_REVIEW]))
+    rows = session.scalars(q.limit(max(1, min(limit, 200)))).all()
+    return [serialize_job(r) for r in rows]
+
+
 @router.get("/courses/jobs/{job_id}/")
 def job_status(job_id: uuid.UUID, session: Session = Depends(get_session)) -> dict:
     job = session.get(SyncJob, job_id)
@@ -394,7 +454,26 @@ def generate_mcq(body: McqGenerateRequest, session: Session = Depends(get_sessio
     if prereq_unit_ids is not None:
         prereq_unit_ids = [u.strip() for u in prereq_unit_ids if isinstance(u, str) and u.strip()]
 
-    job = SyncJob(course_id=course_id, job_type=SyncJob.MCQ, created_by=user.id)
+    # Regenerating an existing session (a prior run exists for this course/session) requires
+    # a reason — captured for the analytics' session-level regeneration view. First-time
+    # generation needs none.
+    prior_runs = session.scalar(
+        select(func.count()).select_from(McqRun)
+        .where(McqRun.course_id == course_id, McqRun.unit_id == unit_id)
+    ) or 0
+    reason = (body.reason or "").strip()
+    if prior_runs > 0 and not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="A reason is required to regenerate a session's MCQs.")
+
+    # Stash the run's selection context on the job so the Activity drawer can reopen it
+    # to the exact page/stage later (the job row alone doesn't carry topic/unit).
+    job = SyncJob(
+        course_id=course_id, job_type=SyncJob.MCQ, created_by=user.id,
+        progress={"ctx": {"topic_id": (body.topic_id or "").strip(), "unit_id": unit_id,
+                          "regen_reason": reason}},
+    )
     session.add(job)
     session.commit()
     start_mcq_job(
@@ -427,6 +506,7 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'.")
     decision = {"action": action, "rejected": body.rejected or [],
                 "rejected_ids": body.rejected_ids or [], "note": body.note or "",
+                "lo_feedback": body.lo_feedback or [],
                 "reviewer": _reviewer_name(user)}
     prereq_unit_ids = body.prerequisite_unit_ids
     if prereq_unit_ids is not None:
@@ -441,8 +521,250 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
     return serialize_job(job)
 
 
+@router.post("/courses/mcq/jobs/{job_id}/cancel/", status_code=status.HTTP_202_ACCEPTED)
+def cancel_mcq_job(job_id: uuid.UUID, session: Session = Depends(get_session),
+                   user: User = Depends(require_active)) -> dict:
+    """Cancel a running or HITL-paused MCQ/regeneration job. A RUNNING job is signalled to
+    stop at its next cooperative checkpoint (the worker then marks it CANCELLED); a paused
+    (AWAITING_REVIEW) or queued job is cancelled immediately. Only the job's creator (or an
+    admin) may cancel it. Already-settled jobs are returned unchanged."""
+    job = session.get(SyncJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if (job.created_by is not None and job.created_by != user.id
+            and user.role != User.ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="You can only cancel your own jobs.")
+    if job.status in (SyncJob.SUCCESS, SyncJob.FAILURE, SyncJob.CANCELLED):
+        return serialize_job(job)            # already settled — nothing to do
+    if job.status == SyncJob.AWAITING_REVIEW:
+        # No live worker (it exited when it paused) — finalize directly.
+        job.status = SyncJob.CANCELLED
+        job.message = "Cancelled by user."
+        prog = dict(job.progress or {})
+        prog.pop("awaiting_review", None)
+        prog.pop("review", None)
+        job.progress = prog
+        session.commit()
+        progress_broker.publish(str(job_id))
+        return serialize_job(job)
+    # PENDING / RUNNING: signal the worker; it observes this and finalizes to CANCELLED.
+    signalled = request_cancel(job_id)
+    job.message = "Cancelling…" if signalled else "Cancel requested…"
+    session.commit()
+    progress_broker.publish(str(job_id))
+    return serialize_job(job)
+
+
+# --------------------------------------------------------------------------- #
+# Classroom Quiz — a published Slides deck → per-quiz scopes → reading material →
+# LOs (4–6) → base questions → objective-bound variants (per scope, no RAG).
+# --------------------------------------------------------------------------- #
+def _require_active_key(session: Session, user: User) -> None:
+    from app.services.user_keys import active_provider, user_has_active_key
+    if not user_has_active_key(session, user.id):
+        prov = active_provider(session)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Add your API key for the active connector "
+                   f"'{prov.name if prov else ''}' (Account) before generating.")
+
+
+def _cq_deck_or_404(session: Session, deck_id: uuid.UUID, user: User) -> ClassroomQuizDeck:
+    deck = session.get(ClassroomQuizDeck, deck_id)
+    if deck is None:
+        raise HTTPException(status_code=404, detail="Deck not found.")
+    if (deck.created_by is not None and deck.created_by != user.id
+            and user.role != User.ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="You can only access your own decks.")
+    return deck
+
+
+def _cq_scopes(session: Session, deck_id) -> list[ClassroomQuizScope]:
+    return list(session.scalars(
+        select(ClassroomQuizScope)
+        .where(ClassroomQuizScope.deck_id == deck_id)
+        .order_by(ClassroomQuizScope.scope_no)
+    ).all())
+
+
+def _make_cq_scope_job(session: Session, deck: ClassroomQuizDeck,
+                       scope: ClassroomQuizScope, user: User) -> SyncJob:
+    """Create (add + flush) one background generation job for a scope, with the scope context the
+    runner/resume endpoints read back. Caller commits and then calls start_cq_scope_job."""
+    job = SyncJob(
+        course_id=str(deck.id), job_type=SyncJob.CLASSROOM_QUIZ, created_by=user.id,
+        progress={"ctx": {"deck_id": str(deck.id), "scope_id": str(scope.id),
+                          "scope_no": scope.scope_no}},
+    )
+    session.add(job)
+    session.flush()
+    return job
+
+
+@router.post("/classroom-quiz/ingest/", status_code=status.HTTP_201_CREATED)
+def cq_ingest(body: ClassroomQuizIngestRequest, session: Session = Depends(get_session),
+              user: User = Depends(require_active)) -> dict:
+    """Ingest a published Google Slides deck: fetch it, segment into per-quiz scopes, and
+    persist the deck + scopes. Generation is kicked off separately (per scope)."""
+    from app.services.quiz_scopes import scope_slides
+
+    url = (body.slides_url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="slides_url is required.")
+    try:
+        scopes = scope_slides(url)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    except Exception as err:  # noqa: BLE001 — fetch/parse failure → actionable 400
+        raise HTTPException(status_code=400, detail=f"Could not read the slides deck: {err}")
+    if not scopes:
+        raise HTTPException(status_code=400,
+                            detail="No quiz scopes found (need an 'Agenda for Today's Session' slide).")
+
+    deck = ClassroomQuizDeck(
+        slides_url=url, title=(body.title or "").strip(), status=ClassroomQuizDeck.SCOPED,
+        scope_count=len(scopes), question_domain=(body.question_domain or "").strip().upper(),
+        created_by=user.id,
+    )
+    session.add(deck)
+    session.flush()
+    for sc in scopes:
+        session.add(ClassroomQuizScope(
+            deck_id=deck.id, scope_no=sc.scope_no, kind=sc.kind,
+            slide_start=sc.slide_start, slide_end=sc.slide_end, slide_text=sc.slide_text,
+        ))
+    session.commit()
+    return serialize_cq_deck(deck, _cq_scopes(session, deck.id))
+
+
+@router.get("/classroom-quiz/decks/")
+def cq_list_decks(session: Session = Depends(get_session),
+                  user: User = Depends(require_active)) -> list[dict]:
+    stmt = select(ClassroomQuizDeck).order_by(ClassroomQuizDeck.created_at.desc())
+    if user.role != User.ROLE_ADMIN:
+        stmt = stmt.where(ClassroomQuizDeck.created_by == user.id)
+    return [serialize_cq_deck(d) for d in session.scalars(stmt).all()]
+
+
+@router.get("/classroom-quiz/decks/{deck_id}/")
+def cq_get_deck(deck_id: uuid.UUID, session: Session = Depends(get_session),
+                user: User = Depends(require_active)) -> dict:
+    deck = _cq_deck_or_404(session, deck_id, user)
+    return serialize_cq_deck(deck, _cq_scopes(session, deck.id))
+
+
+@router.post("/classroom-quiz/decks/{deck_id}/generate/", status_code=status.HTTP_202_ACCEPTED)
+def cq_generate(deck_id: uuid.UUID, session: Session = Depends(get_session),
+                user: User = Depends(require_active)) -> dict:
+    """Fan out one background generation job PER SCOPE. Each job runs reading material → LOs and
+    then PAUSES at GATE 1 (LO finalization) — resume it via `/classroom-quiz/jobs/{job_id}/resume/`
+    to produce base questions, which are then reviewed and expanded into variants (Phase 2).
+    Progress streams over the existing `/courses/mcq/jobs/{job_id}/ws` socket."""
+    _require_active_key(session, user)
+    deck = _cq_deck_or_404(session, deck_id, user)
+    scopes = _cq_scopes(session, deck.id)
+    if not scopes:
+        raise HTTPException(status_code=400, detail="This deck has no scopes to generate.")
+
+    started = [(_make_cq_scope_job(session, deck, sc, user), sc.id) for sc in scopes]
+    deck.status = ClassroomQuizDeck.GENERATING
+    session.commit()
+    payload = {"deck_id": str(deck.id), "jobs": [serialize_job(j) for j, _ in started]}
+    for job, scope_id in started:          # start AFTER commit so the worker can read the row
+        start_cq_scope_job(job.id, scope_id)
+    return payload
+
+
+@router.post("/classroom-quiz/scopes/{scope_id}/generate/", status_code=status.HTTP_202_ACCEPTED)
+def cq_generate_scope(scope_id: uuid.UUID, session: Session = Depends(get_session),
+                      user: User = Depends(require_active)) -> dict:
+    """Generate (or regenerate) a SINGLE quiz scope — the same per-scope pipeline as 'generate
+    all', but for one scope, so a user can run quizzes one at a time. Pauses at GATE 1 (LO
+    finalization). Returns the started job."""
+    _require_active_key(session, user)
+    scope = session.get(ClassroomQuizScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="Quiz scope not found.")
+    deck = _cq_deck_or_404(session, scope.deck_id, user)   # ownership/role check
+    if not (scope.slide_text or "").strip():
+        raise HTTPException(status_code=400,
+                            detail="This quiz scope has no slide content to generate from.")
+    job = _make_cq_scope_job(session, deck, scope, user)
+    deck.status = ClassroomQuizDeck.GENERATING
+    session.commit()
+    payload = serialize_job(job)
+    start_cq_scope_job(job.id, scope.id)   # start AFTER commit so the worker can read the row
+    return payload
+
+
+@router.post("/classroom-quiz/jobs/{job_id}/resume/", status_code=status.HTTP_202_ACCEPTED)
+def cq_resume(job_id: uuid.UUID, body: McqReviewRequest,
+              session: Session = Depends(get_session),
+              user: User = Depends(require_active)) -> dict:
+    """GATE 1 (LO finalization): resume a classroom-quiz scope paused at the LO-review gate after
+    a per-LO decision. `action='approve'` accepts the LOs as-is; `action='reject'` regenerates the
+    rejected LOs (via `rejected`/`rejected_ids` + per-LO feedback) and re-pauses. Once the LOs are
+    accepted, the run produces base questions and the existing base-question review + variants
+    finalization (Phase 2) takes over."""
+    job = session.get(SyncJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.status != SyncJob.AWAITING_REVIEW:
+        raise HTTPException(status_code=409, detail="Job is not awaiting review.")
+    sid = ((job.progress or {}).get("ctx") or {}).get("scope_id")
+    if not sid:
+        raise HTTPException(status_code=400, detail="Job is missing its scope context.")
+    try:
+        scope_id = uuid.UUID(str(sid))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Job has an invalid scope id.")
+    action = (body.action or "approve").strip().lower()
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'.")
+    decision = {"action": action, "rejected": body.rejected or [],
+                "rejected_ids": body.rejected_ids or [], "note": body.note or "",
+                "lo_feedback": body.lo_feedback or [], "reviewer": _reviewer_name(user)}
+    job.status = SyncJob.RUNNING
+    job.message = f"Resuming after {action}…"
+    session.commit()
+    start_cq_resume_job(job.id, scope_id, decision)
+    return serialize_job(job)
+
+
+@router.post("/classroom-quiz/runs/{run_id}/variants/", status_code=status.HTTP_202_ACCEPTED)
+def cq_generate_variants(run_id: uuid.UUID, session: Session = Depends(get_session),
+                         user: User = Depends(require_active)) -> dict:
+    """Phase 2 — generate variants for a scope's APPROVED base questions. Gated on the base
+    questions having been reviewed & finalized (at least one approved). Re-runnable: it drops
+    any prior variants and regenerates for the current approved set."""
+    _require_active_key(session, user)
+    run = session.get(McqRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    deck = session.get(ClassroomQuizDeck, run.course_id) if run.course_id else None
+    if deck is None:
+        raise HTTPException(status_code=400, detail="This is not a Classroom Quiz run.")
+    if (deck.created_by is not None and deck.created_by != user.id
+            and user.role != User.ROLE_ADMIN):
+        raise HTTPException(status_code=403, detail="You can only generate for your own decks.")
+    if (run.approved_count or 0) < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Review and approve at least one base question (Review Queue) before generating variants.")
+
+    job = SyncJob(
+        course_id=str(deck.id), job_type=SyncJob.CLASSROOM_QUIZ, created_by=user.id,
+        progress={"ctx": {"deck_id": str(deck.id), "run_id": str(run_id), "phase": "variants"}},
+    )
+    session.add(job)
+    session.commit()
+    start_cq_variants_job(job.id, run_id)
+    return serialize_job(job)
+
+
 # --- live job progress over WebSocket (replaces the frontend poll) -------------- #
-_SETTLED_STATUSES = {SyncJob.SUCCESS, SyncJob.FAILURE, SyncJob.AWAITING_REVIEW}
+_SETTLED_STATUSES = {SyncJob.SUCCESS, SyncJob.FAILURE, SyncJob.CANCELLED,
+                     SyncJob.AWAITING_REVIEW}
 
 
 def _read_serialized_job(job_id: uuid.UUID) -> dict | None:
@@ -492,6 +814,32 @@ async def mcq_job_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
             pass
 
 
+def _unit_names(session: Session, unit_ids: list) -> dict:
+    """Map portal unit_id → its human session/unit name (UnitPart.name). One query."""
+    ids = [u for u in unit_ids if u]
+    if not ids:
+        return {}
+    rows = session.execute(
+        select(UnitPart.unit_id, UnitPart.name).where(UnitPart.unit_id.in_(ids))
+    ).all()
+    return {u: n for u, n in rows if n}
+
+
+def _loaded_run_ids(session: Session, run_ids: list) -> set:
+    """Subset of run_ids that have a SUCCESSFUL portal load (drives the 'Loaded' badge +
+    hiding the load option). One query, empty set when there are no ids."""
+    if not run_ids:
+        return set()
+    rows = session.execute(
+        select(BetaLoad.run_id).where(
+            BetaLoad.run_id.in_(run_ids),
+            BetaLoad.action == "load",
+            BetaLoad.status == "SUCCESS",
+        )
+    ).all()
+    return {r[0] for r in rows}
+
+
 @router.get("/courses/mcq/runs/")
 def list_mcq_runs(
     course_id: str | None = None, unit_id: str | None = None, limit: int = 10,
@@ -505,10 +853,35 @@ def list_mcq_runs(
         stmt = stmt.where(McqRun.created_by == user.id)
     if course_id:
         stmt = stmt.where(McqRun.course_id == course_id)
+    else:
+        # The unscoped listing (Review Queue) shows portal MCQ runs, PLUS Classroom-Quiz runs
+        # that have reached variant review (phase == "variants"). CQ BASE-question review happens
+        # on the generation page, so CQ runs without variants yet stay out of the queue.
+        deck_ids = [str(d) for d in session.scalars(select(ClassroomQuizDeck.id)).all()]
+        if deck_ids:
+            stmt = stmt.where(or_(
+                McqRun.course_id.not_in(deck_ids),
+                McqRun.result["phase"].astext == "variants",
+            ))
     if unit_id:
         stmt = stmt.where(McqRun.unit_id == unit_id)
     runs = session.scalars(stmt).all()
-    return [serialize_mcq_run(r, include_result=False) for r in runs]
+    # Resolve each run's topic NAME (one query) so the run list can show it next to the id.
+    tids = {r.topic_id for r in runs if r.topic_id}
+    nmap: dict = {}
+    if tids:
+        for c, t, n in session.execute(
+            select(Topic.course_id, Topic.topic_id, Topic.topic_name)
+            .where(Topic.course_id.in_({r.course_id for r in runs}), Topic.topic_id.in_(tids))
+        ):
+            nmap[(c, t)] = n
+    loaded_ids = _loaded_run_ids(session, [r.id for r in runs])
+    unames = _unit_names(session, [r.unit_id for r in runs])
+    return [serialize_mcq_run(r, include_result=False,
+                              topic_name=nmap.get((r.course_id, r.topic_id), ""),
+                              unit_name=unames.get(r.unit_id, ""),
+                              loaded=r.id in loaded_ids)
+            for r in runs]
 
 
 @router.get("/courses/mcq/runs/{run_id}/")
@@ -522,191 +895,127 @@ def get_mcq_run(run_id: uuid.UUID, session: Session = Depends(get_session),
     if (run.created_by is not None and run.created_by != user.id
             and user.role != User.ROLE_ADMIN):
         raise HTTPException(status_code=404, detail="MCQ run not found.")
-    return serialize_mcq_run(run)
+    tname = (session.scalar(select(Topic.topic_name).where(
+                 Topic.course_id == run.course_id, Topic.topic_id == run.topic_id))
+             if run.topic_id else "") or ""
+    loaded = bool(_loaded_run_ids(session, [run.id]))
+    uname = _unit_names(session, [run.unit_id]).get(run.unit_id, "")
+    return serialize_mcq_run(run, topic_name=tname, unit_name=uname, loaded=loaded)
 
 
-def _export_filename(run) -> str:
-    label = (run.result or {}).get("session_label") or "questions"
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_") or "questions"
-    return f"{safe}_MCQ_export.zip"
-
-
-def _require_reviewed(run) -> None:
-    """Generate ZIP / Prepare & Load are FROZEN until the run is marked reviewed
-    (which itself requires every question approved or excluded). 409 otherwise."""
-    if (run.review_status or "") != "approved":
-        raise HTTPException(
-            status_code=409,
-            detail="Mark the run reviewed before exporting or loading "
-                   "(approve or exclude every question, then 'Mark run reviewed').")
-
-
-def _result_for_load(run, approved_only: bool) -> dict:
-    """Gate loading on human approval and return the result payload to export.
-
-    `approved_only=False` (the default "Load all") requires EVERY generated question to be
-    approved. `approved_only=True` ("Load approved only") loads just the approved subset and
-    only requires at least one. Raises 409 when the gate isn't met."""
-    result = run.result or {}
-    # Excluded questions stay in the run but are never loaded.
-    eligible = [q for q in (result.get("questions") or [])
-                if q.get("status") == "generated" and not q.get("excluded")]
-    approved = [q for q in eligible if q.get("approval") == "approved"]
-    if approved_only:
-        if not approved:
-            raise HTTPException(status_code=409,
-                detail="No questions are approved yet — approve at least one to load.")
-        return {**result, "questions": approved}
-    if not eligible or len(approved) != len(eligible):
-        raise HTTPException(status_code=409,
-            detail=f"Approve all {len(eligible)} questions before loading, "
-                   f"or use 'Load approved only' ({len(approved)} approved).")
-    return result
-
-
-@router.post("/courses/mcq/runs/{run_id}/export-beta/")
+@router.post("/courses/mcq/runs/{run_id}/export-beta/", status_code=status.HTTP_202_ACCEPTED)
 def export_mcq_run_to_beta(run_id: uuid.UUID, approved_only: bool = False,
                            session: Session = Depends(get_session),
                            user: User = Depends(require_active)) -> dict:
-    """Build the portal-format export ZIP for a run (in memory) and upload it to the
-    BETA content-loading S3 bucket; return the public URL. Nothing is stored on the
-    server — the ZIP is derived on demand from the run's stored questions.
-
-    Gated on human approval: by default every question must be approved; pass
-    `approved_only=true` to export just the approved subset."""
-    from app.mcq_pipeline.portal_export import ExportValidationError, build_zip_bytes
-    from app.services.beta_s3 import upload_bytes
-
+    """Build the portal-format export ZIP for a run and upload it to the BETA content-loading
+    S3 bucket, as a BACKGROUND job tracked in the Activity drawer. The run is validated up front
+    (so approval gates fail fast); the ZIP build + upload then run async and the public URL is
+    surfaced on the resulting Loads row when the job completes."""
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
-    _require_reviewed(run)
-    payload = _result_for_load(run, approved_only)
-    try:
-        data, info = build_zip_bytes(payload)
-    except ExportValidationError as err:
-        raise HTTPException(status_code=400, detail={"message": "Export validation failed",
-                                                     "errors": err.errors}) from err
-    if info["total_questions"] == 0:
-        raise HTTPException(status_code=400, detail="This run has no generated questions to export.")
-    filename = _export_filename(run)
-    try:
-        url = upload_bytes(data, filename)
-    except Exception as err:  # noqa: BLE001 — surface the failing step to the caller
-        log_task(task_type="EXPORT", event="error", level=ERROR, run_id=run_id, user_id=user.id,
-                 message=f"Beta S3 upload failed: {err}")
-        raise HTTPException(status_code=502, detail=f"Beta S3 upload failed: {err}") from err
-    session.add(BetaLoad(run_id=run_id, user_id=user.id, action="export", status="SUCCESS",
-                         s3_url=url, message=filename))
+    _require_reviewed(run)          # fast 409 before spawning a job
+    _result_for_load(run, approved_only)  # fast 409/400 if approvals aren't met
+    job = SyncJob(course_id=run.course_id, job_type=SyncJob.EXPORT, created_by=user.id,
+                  message="Export queued…",
+                  progress={"ctx": {"run_id": str(run_id), "kind": "export"}})
+    session.add(job)
     session.commit()
-    log_task(task_type="EXPORT", event="complete", run_id=run_id, user_id=user.id,
-             message=f"{info['total_questions']} question(s) → {filename}")
-    return {"url": url, "filename": filename, "counts": info["counts"],
-            "total": info["total_questions"], "batch_id": info["batch_id"]}
+    start_export_job(job.id, run_id, approved_only)
+    return serialize_job(job)
 
 
-@router.post("/courses/mcq/runs/{run_id}/prepare-and-load/")
+@router.post("/courses/mcq/runs/{run_id}/prepare-and-load/", status_code=status.HTTP_202_ACCEPTED)
 def prepare_and_load_mcq_run(run_id: uuid.UUID, body: PrepareSheetRequest,
                              session: Session = Depends(get_session),
                              user: User = Depends(require_active)) -> dict:
-    """Full beta-load pipeline for a run: build + upload the questions ZIP, copy the
-    exam-config sheet template and fill its Form tab, submit the SHEET_LOADING task,
-    poll it to completion, and (on success) unlock the resource.
-
-    The parent (Form!B14) is the run's topic_id; the question count and name are
-    derived; the five fields in `body` are the only reviewer-supplied values."""
-    from app.mcq_pipeline.portal_export import ExportValidationError, build_zip_bytes
-    from app.services import beta_s3, beta_sheet
-
+    """Full beta-load pipeline for a run (build+upload ZIP, copy/fill the exam-config sheet,
+    submit the load task, poll it, unlock), run as a BACKGROUND job tracked in the Activity
+    drawer. The run + approval gates are validated up front so failures are instant; the slow
+    pipeline then runs async and its outcome appears on the Loads page."""
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     _require_reviewed(run)
-    if not run.topic_id:
+    parent_topic_id = (body.topic_id or "").strip() or run.topic_id
+    if not parent_topic_id:
         raise HTTPException(status_code=400,
-                            detail="This run has no topic_id, so the exam's parent "
-                                   "resource cannot be set. Re-run with a topic selected.")
+                            detail="No topic_id for the exam's parent resource. Enter a topic "
+                                   "id at load, or re-run with a topic selected.")
+    _result_for_load(run, body.approved_only)  # fast 409/400 if approvals aren't met
 
-    # One id per unit, shared by the exam (Form!B5) AND the questions JSON filename in
-    # the ZIP, so the loader can match the questions file to the exam unit.
-    resource_id = str(uuid.uuid4())
-
-    # Gate on human approval (all approved, or just the approved subset when approved_only).
-    payload = _result_for_load(run, body.approved_only)
-
-    # 1. Build the portal-format questions ZIP (in memory), named <resource_id>.json.
-    try:
-        data, info = build_zip_bytes(payload, batch_id=resource_id)
-    except ExportValidationError as err:
-        raise HTTPException(status_code=400, detail={"message": "Export validation failed",
-                                                     "errors": err.errors}) from err
-    if info["total_questions"] == 0:
-        raise HTTPException(status_code=400, detail="This run has no generated questions to load.")
-
-    # 2. Upload the ZIP to the beta S3 bucket.
-    filename = _export_filename(run)
-    try:
-        s3_url = beta_s3.upload_bytes(data, filename)
-    except Exception as err:  # noqa: BLE001
-        log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
-                 message=f"Beta S3 upload failed: {err}")
-        raise HTTPException(status_code=502, detail=f"Beta S3 upload failed: {err}") from err
-
-    # 3. Copy the template + fill the Form tab.
-    try:
-        sheet = beta_sheet.prepare_sheet(
-            resource_id=resource_id,
-            topic_id=run.topic_id,
-            num_questions=info["total_questions"],
-            child_order=body.child_order,
-            duration_min=body.duration_min,
-            pass_percentage=body.pass_percentage / 100.0,
-            show_answer_scoring_mode=body.show_answer_scoring_mode,
-            should_send_solutions=body.should_send_solutions,
-            share_emails=[(body.reviewer_email or "").strip() or user.email],
-        )
-    except Exception as err:  # noqa: BLE001
-        log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
-                 message=f"Sheet preparation failed: {err}")
-        raise HTTPException(status_code=502, detail=f"Sheet preparation failed: {err}") from err
-
-    # 4. Submit the sheet-loading task.
-    try:
-        request_id = beta_s3.submit_sheet_loading(
-            spreadsheet_id=sheet["spreadsheet_id"],
-            spread_sheet_name=sheet["title"], s3_url=s3_url)
-    except Exception as err:  # noqa: BLE001
-        log_task(task_type="LOAD", event="error", level=ERROR, run_id=run_id, user_id=user.id,
-                 message=f"Sheet-loading submit failed: {err}", detail={"sheet_url": sheet["url"]})
-        raise HTTPException(status_code=502,
-                            detail={"message": f"Sheet-loading submit failed: {err}",
-                                    "sheet_url": sheet["url"]}) from err
-
-    # 5. Poll to completion, then 6. unlock on success.
-    status, message = beta_s3.poll_task(request_id)
-    unlock_id = None
-    if status == "SUCCESS":
-        try:
-            unlock_id = beta_s3.submit_unlock(sheet["resource_id"])
-        except Exception as err:  # noqa: BLE001
-            message = f"Loaded, but unlock failed: {err}"
-
-    # Audit the load action (per-user) + log the outcome.
-    session.add(BetaLoad(run_id=run_id, user_id=user.id, action="load", status=status,
-                         resource_id=sheet["resource_id"], sheet_url=sheet["url"],
-                         s3_url=s3_url, request_id=request_id, message=message))
+    # Carry the reviewer-supplied fields + the loader's email to the background runner.
+    body_dict = body.model_dump()
+    body_dict["loader_email"] = user.email
+    job = SyncJob(course_id=run.course_id, job_type=SyncJob.LOAD, created_by=user.id,
+                  message="Load queued…",
+                  progress={"ctx": {"run_id": str(run_id), "kind": "load"}})
+    session.add(job)
     session.commit()
-    log_task(task_type="LOAD", event="complete", run_id=run_id, user_id=user.id,
-             level=(ERROR if status == "FAILURE" else "INFO"),
-             message=f"status={status} resource={sheet['resource_id']} {message}".strip())
+    start_load_job(job.id, run_id, body_dict)
+    return serialize_job(job)
 
-    return {
-        "status": status, "message": message,
-        "sheet_url": sheet["url"], "spreadsheet_id": sheet["spreadsheet_id"],
-        "resource_id": sheet["resource_id"], "s3_url": s3_url,
-        "request_id": request_id, "unlock_id": unlock_id,
-        "total": info["total_questions"], "filename": filename,
+
+def _serialize_beta_load(row, *, include_content: bool = False) -> dict:
+    """One Loads row. `include_content` adds the full loaded-questions snapshot (detail view)."""
+    from app.services.beta_s3 import task_url
+    content = row.content or {}
+    questions = content.get("questions") or []
+    out = {
+        "id": row.id, "action": row.action, "status": row.status,
+        "unit_name": content.get("session_label") or "",
+        "run_id": row.run_id, "job_id": row.job_id, "course_id": getattr(row, "course_id", None),
+        "resource_id": row.resource_id, "sheet_url": row.sheet_url, "s3_url": row.s3_url,
+        "request_id": row.request_id, "unlock_id": getattr(row, "unlock_id", "") or "",
+        # Beta-admin task pages for the content-loading + unlock-resource tasks.
+        "loading_task_url": task_url(row.request_id),
+        "unlock_task_url": task_url(getattr(row, "unlock_id", "")),
+        "message": row.message,
+        "count": len(questions), "has_content": bool(content), "created_at": row.created_at,
     }
+    if include_content:
+        out["content"] = content
+    return out
+
+
+@router.get("/courses/mcq/loads/")
+def list_beta_loads(limit: int = 100, session: Session = Depends(get_session),
+                    user: User = Depends(require_active)) -> list[dict]:
+    """List portal loads / ZIP exports, newest first. Own rows by default; elevated roles
+    (lead/manager/admin) see everyone's."""
+    stmt = select(BetaLoad).order_by(BetaLoad.created_at.desc()).limit(max(1, min(limit, 500)))
+    if user.role not in User.ELEVATED_ROLES:
+        stmt = stmt.where(BetaLoad.user_id == user.id)
+    rows = session.scalars(stmt).all()
+    # Attach course_id + a user label via the linked run / user (best-effort, cheap maps).
+    run_ids = {r.run_id for r in rows if r.run_id}
+    runs = {r.id: r for r in session.scalars(select(McqRun).where(McqRun.id.in_(run_ids))).all()} if run_ids else {}
+    user_ids = {r.user_id for r in rows if r.user_id}
+    users = {u.id: u for u in session.scalars(select(User).where(User.id.in_(user_ids))).all()} if user_ids else {}
+    out = []
+    for r in rows:
+        d = _serialize_beta_load(r)
+        run = runs.get(r.run_id)
+        d["course_id"] = run.course_id if run else None
+        u = users.get(r.user_id)
+        d["user_name"] = (u.name or u.email) if u else "—"
+        out.append(d)
+    return out
+
+
+@router.get("/courses/mcq/loads/{load_id}/")
+def get_beta_load(load_id: uuid.UUID, session: Session = Depends(get_session),
+                  user: User = Depends(require_active)) -> dict:
+    """One load/export with its full loaded-questions snapshot (for the loaded-content view)."""
+    row = session.get(BetaLoad, load_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Load not found.")
+    if user.role not in User.ELEVATED_ROLES and row.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your load.")
+    d = _serialize_beta_load(row, include_content=True)
+    run = session.get(McqRun, row.run_id) if row.run_id else None
+    d["course_id"] = run.course_id if run else None
+    return d
 
 
 # --- Human-in-the-loop review (Gate B): feedback + regenerate + approve --------- #
@@ -717,28 +1026,27 @@ def _reviewer_name(user: User) -> str:
     return (user.name or "").strip() or user.email
 
 
-@router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/regenerate/")
+@router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/regenerate/",
+             status_code=status.HTTP_202_ACCEPTED)
 def regenerate_mcq_question(run_id: uuid.UUID, outcome: str,
                             body: RegenerateQuestionRequest,
                             session: Session = Depends(get_session),
                             user: User = Depends(require_active)) -> dict:
-    """Regenerate one question for its LO with the reviewer's feedback injected,
-    re-review it, persist (with revision history), and log the feedback. Synchronous
-    (a few LLM calls) — the reviewer is actively waiting on the screen. The reviewer
-    is taken from the authenticated user, not the request body."""
-    if session.get(McqRun, run_id) is None:
+    """Regenerate one question for its LO with the reviewer's feedback injected, re-review it,
+    persist (with revision history) and log the feedback. Runs in the background as a tracked
+    job (REGEN) so it shows up in Activity and the reviewer can keep working; the frontend
+    re-fetches the run when the job completes. The reviewer is the authenticated user."""
+    run = session.get(McqRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     if not (body.feedback or "").strip():
         raise HTTPException(status_code=400, detail="Feedback is required to regenerate.")
-    from app.mcq_pipeline.review import regenerate_question
-    try:
-        question = regenerate_question(run_id, outcome, body.feedback,
-                                       reviewer=_reviewer_name(user), tags=body.tags)
-    except ValueError as err:
-        raise HTTPException(status_code=404, detail=str(err)) from err
-    except Exception as err:  # noqa: BLE001 — surface generation failure
-        raise HTTPException(status_code=502, detail=f"Regeneration failed: {err}") from err
-    return {"question": question}
+    job = SyncJob(course_id=run.course_id, job_type=SyncJob.REGEN, created_by=user.id,
+                  message=f"Regenerating “{outcome}”…")
+    session.add(job)
+    session.commit()
+    start_mcq_regen_job(job.id, run_id, outcome, body.feedback, body.tags, _reviewer_name(user))
+    return serialize_job(job)
 
 
 @router.post("/courses/mcq/runs/{run_id}/questions/{outcome}/feedback/")
@@ -816,16 +1124,20 @@ def mcq_feedback_insights() -> dict:
 
 @router.get("/courses/{course_id}/extract-info/")
 def extract_info(course_id: str, session: Session = Depends(get_session)) -> dict:
-    """Environments a course + its prerequisites span, and which of them still
-    REQUIRE a Bearer token (the rest can extract token-free via the admin panel
-    using stored resource ids)."""
+    """Environments a course + its prerequisites span. Tokens are now OPTIONAL
+    everywhere — reading materials without stored resource ids are discovered
+    token-free from the content-loading admin's CSV (GET_UNIT_RESOURCE_DETAILS) —
+    so ``token_required`` is always empty. ``token_optional`` lists the
+    environments where supplying a token would still enrich extraction (the
+    learning API is tutorial-aware, unlike the admin cheat-sheet path)."""
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found.")
     return {
         "course_id": course_id,
         "environments": required_environments(course),
-        "token_required": environments_needing_token(session, course),
+        "token_required": [],
+        "token_optional": environments_needing_token(session, course),
     }
 
 
@@ -855,9 +1167,10 @@ def get_unit_content(course_id: str, unit_id: str, session: Session = Depends(ge
 # --------------------------------------------------------------------------- #
 @router.get("/courses/")
 def list_courses(session: Session = Depends(get_session)) -> list[dict]:
-    # Only top-level courses — those that are not a prerequisite of another course.
-    courses = session.scalars(select(Course).order_by(Course.course_name)).all()
-    top_level = [c for c in courses if not c.required_by]
+    # Include prerequisite courses too — they must be selectable in the MCQ generation picker
+    # (you can generate learning outcomes for a prerequisite course as well), not only the
+    # top-level courses. (Prerequisite courses still also appear nested under their parents.)
+    top_level = session.scalars(select(Course).order_by(Course.course_name)).all()
     # One grouped query gives the ingested chunk count per course (0 = not ingested).
     counts = dict(
         session.execute(

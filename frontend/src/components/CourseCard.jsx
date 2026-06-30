@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   ChevronRight,
   ChevronsUpDown,
@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { getCourse } from '../api'
 import Pipeline from './Pipeline'
+import ReadingMaterialPane from './ReadingMaterialPane'
 import { coursePipeline } from '../lib/workflow'
 import { EnvBadge, Skeleton, Spinner } from './ui'
 
@@ -89,6 +90,8 @@ function IngestBadge({ part }) {
 // One unit container: a header (kind tag + label) and its labelled parts.
 function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
   const meta = headerTag(unit)
+  // Which reading-material part (if any) is expanded inline to show its markdown.
+  const [openPart, setOpenPart] = useState(null)
 
   // Reading materials are the only parts with extractable content. A per-unit
   // "Sync content" re-extracts just this learning set; it needs a token only
@@ -101,6 +104,9 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
     <div className="unit-card" style={{ '--stagger': `${Math.min(index, 10) * 35}ms` }}>
       <div className="unit-card-head">
         <span className={`unit-tag ${meta.cls}`}>{meta.label}</span>
+        {Number.isFinite(unit.order) && (
+          <span className="batch-order" title="Batch order">#{unit.order}</span>
+        )}
         <span className="unit-title">{unit.label}</span>
         {canSync && (
           <button
@@ -124,9 +130,20 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
           const flagged =
             part.label === 'Reading Material' &&
             (part.content_status === 'EMPTY' || part.content_status === 'ERROR')
+          const key = `${part.unit_id}-${idx}`
+          // Reading material with extracted content can be expanded to read its markdown.
+          const canView =
+            part.label === 'Reading Material' &&
+            part.content_status === 'EXTRACTED' &&
+            Boolean(part.unit_id)
+          const isOpen = openPart === key
           return (
-          <div className={`resource-row ${flagged ? 'flagged' : ''}`} key={`${part.unit_id}-${idx}`}>
+          <Fragment key={key}>
+          <div className={`resource-row ${flagged ? 'flagged' : ''}`}>
             <span className={`res-tag ${partTagClass(part.label)}`}>{part.label}</span>
+            {Number.isFinite(part.order) && (
+              <span className="batch-order" title="Batch order">#{part.order}</span>
+            )}
             {part.error ? (
               <span className="error-text">
                 <AlertTriangle size={12} /> {part.error}
@@ -152,7 +169,30 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
                   {rid}
                 </button>
               ))}
+            {canView && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm res-view"
+                aria-expanded={isOpen}
+                data-tip="Read the extracted reading material"
+                onClick={() => setOpenPart(isOpen ? null : key)}
+              >
+                <BookOpen size={12} /> {isOpen ? 'Hide' : 'View'}
+              </button>
+            )}
           </div>
+          {canView && (
+            <div className={`collapse ${isOpen ? 'open' : ''}`}>
+              <div className="collapse-inner">
+                <div className="part-reading-wrap">
+                  {isOpen && (
+                    <ReadingMaterialPane courseId={course.course_id} unitId={part.unit_id} />
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          </Fragment>
           )
         })}
       </div>
@@ -184,6 +224,9 @@ function TopicSection({ topic, unitsSignal, course, onSyncUnit }) {
         <span className="unit-tag tag-topic">
           <BookOpen size={10} /> Topic
         </span>
+        {Number.isFinite(topic.order) && (
+          <span className="batch-order" title="Batch order">#{topic.order}</span>
+        )}
         <a className="topic-title" href={topic.topic_link} target="_blank" rel="noreferrer">
           {topic.topic_name || topic.topic_id}
           <ExternalLink size={12} />

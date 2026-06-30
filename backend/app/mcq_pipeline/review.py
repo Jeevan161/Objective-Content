@@ -110,7 +110,7 @@ def _llm_type_change(feedback: str, current: str, question_text: str) -> str | N
     """Returns a canonical type, 'REPICK' (change wanted, type unspecified), None (no
     change), or '__ERROR__' (LLM unavailable -> caller falls back to keywords)."""
     from app.mcq_pipeline.utils.llm import chat, parse_json
-    from app.mcq_pipeline.nodes.n13_recommend_question_type import QUESTION_TYPES
+    from app.mcq_pipeline.nodes.m07_recommend_question_type import QUESTION_TYPES
     try:
         usr = (f"CURRENT QUESTION TYPE: {current}\n\nQUESTION:\n{question_text}\n\n"
                f"REVIEWER FEEDBACK:\n{feedback}")
@@ -140,6 +140,21 @@ def _detect_type_change(feedback: str, current: str, question_text: str = "") ->
     if specific:
         return specific
     return "REPICK" if (llm == "REPICK" or kw == "REPICK") else None
+
+
+def _alternative_type(current: str, lo: dict) -> str:
+    """A sensible DIFFERENT type for a 'change the type' regen when the recommender would
+    otherwise re-derive the same one. Keeps code outcomes in the code family; never returns
+    the current type or a disabled (exact-string-match) type."""
+    from app.mcq_pipeline.config import EXCLUDED_QUESTION_TYPES
+    has_code = bool((lo.get("syntax") or "").strip()) or (current or "").startswith("CODE_ANALYSIS")
+    order = (["CODE_ANALYSIS_MULTIPLE_CHOICE", "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE", "MULTIPLE_CHOICE"]
+             if has_code else
+             ["MULTIPLE_CHOICE", "MORE_THAN_ONE_MULTIPLE_CHOICE", "TRUE_OR_FALSE"])
+    for t in order:
+        if t != current and t not in EXCLUDED_QUESTION_TYPES:
+            return t
+    return "MULTIPLE_CHOICE"
 
 
 # --- feedback INTENT classification (routes regeneration to a targeted fix) --- #
@@ -217,9 +232,13 @@ _INTENT_FIX = {
         "The marked correct answer is wrong. Mark the genuinely correct option per the COURSE MATERIAL "
         "and keep EXACTLY one correct; do not change the question's meaning."),
     "multi_valid": ("OPTION RULES",
-        "More than one option is defensibly correct (or two are too similar). Keep EXACTLY one correct "
-        "and rewrite the others so each is clearly, specifically WRONG on the taught concept — no "
-        "second arguable answer."),
+        "More than one option is defensibly correct because the outcome is SET-VALUED (several items "
+        "are genuinely true). Resolve it by ANSWER DETERMINACY, qualifier-first: (1) add a "
+        "DISCRIMINATING QUALIFIER to the stem (a specific facet/scenario/sub-aspect) so EXACTLY ONE "
+        "option is correct and the rest become genuinely wrong for that stem; (2) only if no honest "
+        "qualifier can isolate a single answer, make this a MORE_THAN_ONE_MULTIPLE_CHOICE — keep 4-6 "
+        "options, mark EVERY genuinely-true option correct and at least one genuinely-FALSE option. "
+        "Do NOT down-rank a true item to a distractor just to keep one correct."),
     "not_self_contained": ("SELF-CONTAINMENT",
         "Make the question stand alone: remove any reference to the source/reading/session, and move "
         "EVERY detail the answer depends on INTO the stem. The answer must be fully determined by the "
@@ -316,15 +335,27 @@ def _approved_count(qs: list) -> int:
     return sum(1 for q in _eligible(qs) if q.get("approval") == "approved")
 
 
+def _find_idx(qs: list, ident: str) -> int:
+    """Index of the question identified by `ident`. Variants share their base's `outcome`, so
+    we match the UNIQUE `question_key` first (bases have question_key == outcome), then fall back
+    to `outcome` for older runs that predate question_key."""
+    i = next((i for i, q in enumerate(qs)
+              if (q.get("question_key") or q.get("outcome")) == ident), -1)
+    if i >= 0:
+        return i
+    return next((i for i, q in enumerate(qs) if q.get("outcome") == ident), -1)
+
+
 def regenerate_question(run_id, outcome: str, feedback: str, *,
                         reviewer: str = "", tags: list | None = None) -> dict:
     """Regenerate the question for `outcome`, injecting the human feedback as a
     top-priority instruction; re-review; persist (with a revision + feedback row).
     Returns the new question dict."""
     from app.mcq_pipeline.utils import scope
-    from app.mcq_pipeline.nodes.n14_generate_questions import _ground, difficulty_of, fix_lean, generate_lean
-    from app.mcq_pipeline.nodes.n15_review_questions import review_and_fix_one
-    from app.mcq_pipeline.nodes.n13_recommend_question_type import recommend_one
+    from app.mcq_pipeline.nodes.m08_generate_questions import _ground, difficulty_of, fix_lean, generate_lean
+    from app.mcq_pipeline.nodes.m08_generate_questions.enforce import _is_multi_correct_shape
+    from app.mcq_pipeline.nodes.m09_review_questions import review_and_fix_one
+    from app.mcq_pipeline.nodes.m07_recommend_question_type import recommend_one
     from app.mcq_pipeline.runner import build_adapter
 
     # 1) load what we need, then release the session before the LLM work
@@ -360,7 +391,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
 
     target = _detect_type_change(feedback, current_qtype, question_text)
     if target == "REPICK":
-        target = (recommend_one(lo) or {}).get("question_type")
+        # The reviewer asked to CHANGE the type but named none. recommend_one() re-derives
+        # the SAME type deterministically for this LO, so a bare re-pick would no-op (the
+        # reviewer's "change the type" would silently do nothing). Force a DIFFERENT,
+        # non-excluded type when the re-pick lands back on the rejected current type.
+        repick = (recommend_one(lo) or {}).get("question_type")
+        target = repick if (repick and repick != current_qtype) else _alternative_type(current_qtype, lo)
     intent = None if target else _classify_feedback(feedback, current_qtype, question_text)
 
     new_qtype = target or current_qtype
@@ -395,6 +431,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
             alignment_note = ("Reviewer flagged the learning outcome as misaligned/out-of-scope, but no "
                               "reserve (dropped) outcome is stored for this run; regenerated against the "
                               "same outcome and flagged for your decision.")
+
+    # Honor a set-valued escalation: when qualifier-first still yields a valid multi-correct set
+    # (e.g. the "this is also correct" intent on an irreducibly set-valued outcome), accept it as
+    # MORE_THAN_ONE_MULTIPLE_CHOICE rather than leaving a forced single "correct" among co-true items.
+    if gen.get("question_type") == "MULTIPLE_CHOICE" and _is_multi_correct_shape(gen.get("lean") or {}):
+        gen["question_type"] = "MORE_THAN_ONE_MULTIPLE_CHOICE"
 
     # the LO this slot now belongs to (the reserve when swapped) and its outcome key.
     effective_lo = swap_lo or lo
@@ -432,7 +474,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
             raise ValueError("MCQ run not found.")
         fresh = dict(run.result or {})
         qs = list(fresh.get("questions") or [])
-        fidx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        fidx = _find_idx(qs, outcome)
         if fidx >= 0:
             qs[fidx] = new_q
         else:
@@ -495,9 +537,9 @@ def set_question_approval(run_id, outcome: str, approval: str, *, reviewer: str 
             raise ValueError("MCQ run not found.")
         fresh = dict(run.result or {})
         qs = list(fresh.get("questions") or [])
-        idx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        idx = _find_idx(qs, outcome)
         if idx < 0:
-            raise ValueError(f"No question found for outcome {outcome!r}.")
+            raise ValueError(f"No question found for {outcome!r}.")
         q = dict(qs[idx])
         q["approval"] = None if approval == "pending" else approval
         qs[idx] = q
@@ -528,9 +570,9 @@ def set_question_exclusion(run_id, outcome: str, excluded: bool, *, reviewer: st
             raise ValueError("MCQ run not found.")
         fresh = dict(run.result or {})
         qs = list(fresh.get("questions") or [])
-        idx = next((i for i, q in enumerate(qs) if q.get("outcome") == outcome), -1)
+        idx = _find_idx(qs, outcome)
         if idx < 0:
-            raise ValueError(f"No question found for outcome {outcome!r}.")
+            raise ValueError(f"No question found for {outcome!r}.")
         q = dict(qs[idx])
         q["excluded"] = bool(excluded)
         qs[idx] = q

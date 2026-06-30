@@ -1,21 +1,48 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight,
+  CheckCircle2, AlertTriangle, ListChecks, Activity, ChevronRight, ChevronLeft, Circle,
   FileQuestion, Code2, ToggleLeft, ArrowDownUp, Type, RotateCcw, Check, X, ShieldCheck, Download,
-  FileSpreadsheet, ExternalLink, Ban, Undo2,
+  FileSpreadsheet, ExternalLink, Ban, Undo2, Play,
 } from 'lucide-react'
 import { Spinner } from './ui'
 import { useToast } from './Toast'
 import { useAuth } from '../auth/AuthContext'
 import Modal from './Modal'
 import NodeSnapshot from './NodeSnapshot'
-import { regenerateMcqQuestion, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace, setMcqQuestionApproval, setMcqQuestionExclusion } from '../api'
+import { regenerateMcqQuestion, approveMcqRun, exportMcqRunZip, prepareAndLoadMcqRun, getMcqTrace, setMcqQuestionApproval, setMcqQuestionExclusion, getJob, getMcqRun, executeCode } from '../api'
 import ReactMarkdown from 'react-markdown'
 import ReadingMaterialPane from './ReadingMaterialPane'
 
 const REVIEW_TAGS = ['grounding', 'ambiguous', 'weak distractor', 'wrong answer', 'LO drift', 'too easy', 'too hard']
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+// Per-question review status, used by the Q1/Q2… navigator. `regenOutcome` is the outcome
+// whose regeneration job is currently in flight (so the nav can show a live spinner).
+const STATUS_LABEL = {
+  approved: 'Approved', needs_review: 'Needs review', regenerating: 'Regenerating',
+  regenerated: 'Regenerated', excluded: 'Excluded', failed: 'Failed', pending: 'Pending',
+}
+function qStatus(q, regenOutcome) {
+  if (regenOutcome && (q.question_key || q.outcome) === regenOutcome) return 'regenerating'
+  if (q.excluded) return 'excluded'
+  if (q.status !== 'generated') return 'failed'
+  if (q.approval === 'approved') return 'approved'
+  if ((q.revisions?.length || 0) > 0) return 'regenerated'   // regenerated, awaiting re-approval
+  if (q.needs_human) return 'needs_review'
+  return 'pending'
+}
+function StatusIcon({ status, size = 14 }) {
+  switch (status) {
+    case 'approved': return <CheckCircle2 size={size} />
+    case 'regenerating': return <Spinner size={size} />
+    case 'regenerated': return <RotateCcw size={size} />
+    case 'needs_review': return <AlertTriangle size={size} />
+    case 'excluded': return <Ban size={size} />
+    case 'failed': return <X size={size} />
+    default: return <Circle size={size} />
+  }
+}
 
 // Markdown previewer — the portal renders the question text + explanation as Markdown, so we show
 // the same rendered preview here. Options / code / exact answers stay literal (rendered elsewhere)
@@ -62,6 +89,22 @@ function Field({ label, children }) {
   )
 }
 
+// A Field whose body can be collapsed behind its label (used for the secondary card
+// sections — metadata, grounding, review — which start collapsed to reduce clutter).
+function Collapsible({ label, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <section className={`qc-field qc-collapsible ${open ? 'open' : ''}`}>
+      <button type="button" className="qc-field-label qc-collapsible-head"
+        onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <ChevronRight size={12} className="qc-collapsible-chev" />
+        {label}
+      </button>
+      {open && <div className="qc-collapsible-body">{children}</div>}
+    </section>
+  )
+}
+
 // Compact, human-readable summary of one recorded RAG call.
 function ragArg(c) {
   const a = c.args || {}
@@ -103,6 +146,20 @@ function RagCalls({ calls }) {
       </ul>
     </details>
   )
+}
+
+// Poll a background job until it settles (or times out). Used to follow a regeneration
+// job started by the Review Queue — the question is re-fetched from the run on success.
+const JOB_TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
+async function pollJobDone(jobId, { intervalMs = 1500, timeoutMs = 180000 } = {}) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, intervalMs))
+    let job = null
+    try { job = await getJob(jobId) } catch { /* transient — keep polling */ }
+    if (job && JOB_TERMINAL.includes(job.status)) return job
+  }
+  return null
 }
 
 // Per-question reviewer actions (Review Queue only): Approve (persisted, drives the
@@ -209,6 +266,31 @@ function ConfirmExcludeModal({ excludedCount, proceedingCount, onCancel, onConfi
   )
 }
 
+// Result of running a candidate program: FIB shows a match/no-match verdict against the
+// expected output; code-analysis just shows stdout. Mirrors how the platform grades FIBs.
+function ExecResult({ res, isFib }) {
+  if (res.error) return <p className="qc-exec-err">{res.error}</p>
+  if (res.supported === false)
+    return <p className="qc-exec-err">{res.stderr || 'This language is not executable on the server.'}</p>
+  const out = (res.actual ?? res.stdout) || ''
+  return (
+    <div className="qc-exec-out">
+      {isFib && (
+        <span className={`qc-exec-badge ${res.matched ? 'ok' : 'bad'}`}>
+          {res.matched ? <Check size={12} /> : <X size={12} />}
+          {res.matched ? 'Output matches expected' : 'Output does NOT match expected'}
+        </span>
+      )}
+      {res.timed_out && <p className="qc-exec-err">Execution timed out.</p>}
+      <div className="qc-exec-row"><span className="qc-exec-k">stdout</span><pre className="qc-code">{out || '(no output)'}</pre></div>
+      {isFib && !res.matched && res.expected != null && (
+        <div className="qc-exec-row"><span className="qc-exec-k">expected</span><pre className="qc-code">{res.expected}</pre></div>
+      )}
+      {res.stderr && <div className="qc-exec-row"><span className="qc-exec-k">stderr</span><pre className="qc-code qc-exec-stderr">{res.stderr}</pre></div>}
+    </div>
+  )
+}
+
 function QuestionCard({ q, lo, index, review }) {
   const generated = q.status === 'generated'
   const lean = q.lean || {}
@@ -217,15 +299,63 @@ function QuestionCard({ q, lo, index, review }) {
   const code = lean.code || (lean.code_lines ? lean.code_lines.join('\n') : null)
   const ragCalls = [...(q.rag_calls || []), ...(q.review_rag_calls || [])]
 
+  // Reviewer code execution (FIB 'Run & check', code-analysis 'Run code') via the server's
+  // sandboxed runner — the same execution that grades FIBs.
+  const isFib = q.question_type === 'FIB_CODING'
+  const isCodeAnalysis = (q.question_type || '').startsWith('CODE_ANALYSIS')
+  const canRun = generated && (isFib || (isCodeAnalysis && !!code))
+  const [execBusy, setExecBusy] = useState(false)
+  const [execResult, setExecResult] = useState(null)
+
+  const handleRun = async () => {
+    setExecBusy(true)
+    setExecResult(null)
+    try {
+      if (isFib) {
+        const filled = (lean.code_lines ? lean.code_lines.join('\n') : (lean.code || ''))
+          .replaceAll('{{BLANK}}', lean.blank_answer || '')
+        setExecResult(await executeCode({
+          language: lean.code_language || 'PYTHON',
+          code: filled,
+          stdin: lean.test_input || '',
+          expected_output: lean.test_output || '',
+        }))
+      } else {
+        setExecResult(await executeCode({
+          language: lean.code_language || 'PYTHON',
+          code: lean.code || code || '',
+          stdin: '',
+        }))
+      }
+    } catch (e) {
+      setExecResult({ error: e.message })
+    } finally {
+      setExecBusy(false)
+    }
+  }
+
   // Answer chips that apply to this type.
   const answers = []
   if (typeof lean.is_true === 'boolean') answers.push(['Answer', lean.is_true ? 'True' : 'False'])
   if (lean.answer) answers.push(['Answer', lean.answer, true])
   if (lean.blank_answer) answers.push(['Blank fills with', lean.blank_answer, true])
-  if (lean.correct_output) answers.push(['Output', lean.correct_output, true])
   if (lean.expected_output) answers.push(['Expected output', lean.expected_output, true])
   if (lean.test_output) answers.push(['Test output', lean.test_output, true])
-  ;(lean.correct_outputs || []).forEach((c) => answers.push(['Correct', c]))
+
+  // Code-analysis MCQs carry their CHOICES as correct_output(s) + wrong_answers (not `options`).
+  // Build a unified option list so they render with all choices like a normal MCQ.
+  const hasOptions = Array.isArray(lean.options) && lean.options.length > 0
+  const codeOptions = []
+  if (!hasOptions && Array.isArray(lean.wrong_answers) && lean.wrong_answers.length) {
+    if (lean.correct_output) codeOptions.push({ content: lean.correct_output, is_correct: true })
+    ;(lean.correct_outputs || []).forEach((c) => codeOptions.push({ content: c, is_correct: true }))
+    lean.wrong_answers.forEach((w) => codeOptions.push({ content: w, is_correct: false }))
+  }
+  const optionList = hasOptions ? lean.options : codeOptions
+  if (!codeOptions.length) {          // no synthesized options → show output as an answer chip
+    if (lean.correct_output) answers.push(['Output', lean.correct_output, true])
+    ;(lean.correct_outputs || []).forEach((c) => answers.push(['Correct', c]))
+  }
 
   return (
     <article className={`qc ${q.needs_human ? 'flagged' : ''} ${q.excluded ? 'excluded' : ''}`}>
@@ -249,19 +379,23 @@ function QuestionCard({ q, lo, index, review }) {
         )}
       </header>
 
+      {review && <div className="qc-review-top">{review}</div>}
+
       <div className="qc-tests">
         <span className="qc-tests-k">Tests outcome</span>
         <span className="qc-tests-v">{lo?.description || lo?.outcome || q.outcome}</span>
       </div>
 
-      <div className="qc-meta-tags">
-        {lo?.topic && <span className="qc-tag"><b>Topic</b> {lo.topic}</span>}
-        {lo?.concept && <span className="qc-tag"><b>Concept</b> {lo.concept}</span>}
-        {lo?.sub_concept && lo.sub_concept !== lo.concept && (
-          <span className="qc-tag"><b>Sub-concept</b> {lo.sub_concept}</span>
-        )}
-        <span className="qc-tag"><b>LO</b> <code>{lo?.outcome || q.outcome}</code></span>
-      </div>
+      <Collapsible label="Details">
+        <div className="qc-meta-tags">
+          {lo?.topic && <span className="qc-tag"><b>Topic</b> {lo.topic}</span>}
+          {lo?.concept && <span className="qc-tag"><b>Concept</b> {lo.concept}</span>}
+          {lo?.sub_concept && lo.sub_concept !== lo.concept && (
+            <span className="qc-tag"><b>Sub-concept</b> {lo.sub_concept}</span>
+          )}
+          <span className="qc-tag"><b>LO</b> <code>{lo?.outcome || q.outcome}</code></span>
+        </div>
+      </Collapsible>
 
       {q.fallback && (
         <div className="qc-note">
@@ -284,10 +418,22 @@ function QuestionCard({ q, lo, index, review }) {
             {code && <pre className="qc-code">{code}</pre>}
           </Field>
 
-          {Array.isArray(lean.options) && lean.options.length > 0 && (
+          {canRun && (
+            <Field label={isFib ? 'Run & check output' : 'Run code'}>
+              <div className="qc-exec">
+                <button type="button" className="qc-exec-btn" onClick={handleRun} disabled={execBusy}>
+                  {execBusy ? <Spinner size={12} /> : <Play size={12} />}
+                  {isFib ? 'Fill blank, run & match expected' : 'Run snippet'}
+                </button>
+                {execResult && <ExecResult res={execResult} isFib={isFib} />}
+              </div>
+            </Field>
+          )}
+
+          {optionList.length > 0 && (
             <Field label="Options">
               <ul className="qc-opts">
-                {lean.options.map((o, i) => (
+                {optionList.map((o, i) => (
                   <li key={i} className={`qc-opt ${o.is_correct ? 'correct' : ''}`}>
                     <span className="qc-opt-letter">{LETTERS[i] || '•'}</span>
                     <span className="qc-opt-text"><MdInline>{o.content}</MdInline></span>
@@ -326,7 +472,7 @@ function QuestionCard({ q, lo, index, review }) {
       )}
 
       {(q.attempts > 0 || issues.length > 0 || q.review?.summary) && (
-        <Field label={`Review${q.attempts ? ` · ${q.attempts} fix attempt${q.attempts === 1 ? '' : 's'}` : ''}`}>
+        <Collapsible label={`Review${q.attempts ? ` · ${q.attempts} fix attempt${q.attempts === 1 ? '' : 's'}` : ''}`}>
           {q.review?.summary && <p className="qc-review-summary">{q.review.summary}</p>}
           {issues.map((iss, i) => (
             <div key={i} className="qc-issue">
@@ -337,14 +483,12 @@ function QuestionCard({ q, lo, index, review }) {
               </span>
             </div>
           ))}
-        </Field>
+        </Collapsible>
       )}
 
       {ragCalls.length > 0 && (
-        <Field label="Grounding"><RagCalls calls={ragCalls} /></Field>
+        <Collapsible label="Grounding"><RagCalls calls={ragCalls} /></Collapsible>
       )}
-
-      {review}
     </article>
   )
 }
@@ -497,13 +641,18 @@ function TraceRow({ span: s, max }) {
 // `mode`: 'view' (default) shows generation details read-only — used by the generation
 // page and the Runs list. 'review' (Review Queue) adds per-question Approve/Reject and the
 // approval-gated load controls.
-function McqResults({ run, mode = "view", courseId, unitId }) {
+function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTrackJob,
+                      readingMaterial = null, onMutate = null, reviewScope = null }) {
   const review = mode === 'review'
+  // Variants share their base's `outcome`; `question_key` is the unique id. Use it for every
+  // per-question review action so an action targets the exact base OR variant.
+  const qid = (q) => q?.question_key || q?.outcome
   const toast = useToast()
   const { user } = useAuth()
   const r = run?.result || {}
   const [questions, setQuestions] = useState(r.questions || [])
   const [busyOutcome, setBusyOutcome] = useState(null)
+  const [regenOutcome, setRegenOutcome] = useState(null)   // outcome with a regen job in flight
   const [approved, setApproved] = useState(run?.review_status === 'approved')
   const [confirm, setConfirm] = useState(null) // { proceed, proceedingCount } when excludes exist
   const [zipBusy, setZipBusy] = useState(false)
@@ -512,29 +661,53 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
   const [prepBusy, setPrepBusy] = useState(false)
   const [prepResult, setPrepResult] = useState(null) // { status, message, sheet_url, ... }
   const [prepForm, setPrepForm] = useState({
+    topic_id: run?.topic_id || '',   // parent; defaults to the run's topic, editable at load
     child_order: '', duration_min: 30, pass_percentage: 80,
     show_answer_scoring_mode: 'INCORRECT', should_send_solutions: 'yes',
   })
   // State is seeded from `run` on mount; the parent passes key={run.id} so a
   // different run remounts this component (no setState-in-effect needed).
+  // Once a run has been loaded to the portal, mark it "Loaded" and hide the load option.
+  const [loadedLocal, setLoadedLocal] = useState(false)   // flips on a successful load this session
+  const runLoaded = !!run?.loaded || loadedLocal
 
   async function handleRegenerate(outcome, feedback, tags) {
     setBusyOutcome(outcome)
+    setRegenOutcome(outcome)
     try {
-      const { question } = await regenerateMcqQuestion(run.id, outcome, feedback, tags)
-      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? question : q)))
-      toast.push({ kind: 'success', title: 'Question regenerated', message: `${outcome} updated from your feedback` })
+      // Regeneration now runs as a tracked background job (shows in Activity). Follow it,
+      // then pull the freshly persisted question back into the list.
+      const job = await regenerateMcqQuestion(run.id, outcome, feedback, tags)
+      onTrackJob?.(job)
+      const done = await pollJobDone(job.id)
+      if (done?.status === 'SUCCESS') {
+        const fresh = await getMcqRun(run.id)
+        // Re-sync the WHOLE list from the fresh run: a regeneration can change the LO
+        // (lo_swap) — and thus the question's `outcome` — so matching by the old outcome
+        // would miss it and the card would only update after a manual page refresh.
+        const freshQs = fresh?.result?.questions
+        if (Array.isArray(freshQs)) setQuestions(freshQs)
+        onMutate?.()
+        toast.push({ kind: 'success', title: 'Question regenerated', message: `${outcome} updated from your feedback` })
+      } else {
+        toast.push({
+          kind: 'error', title: 'Regenerate failed',
+          message: done?.error || 'The regeneration job did not complete.',
+        })
+      }
     } catch (e) {
       toast.push({ kind: 'error', title: 'Regenerate failed', message: e.message })
     } finally {
       setBusyOutcome(null)
+      setRegenOutcome(null)
     }
   }
   async function handleSetApproval(outcome, approval) {
     setBusyOutcome(outcome)
     try {
       const res = await setMcqQuestionApproval(run.id, outcome, approval)
-      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, approval: res.approval } : q)))
+      setQuestions((qs) => qs.map((q) => (qid(q) === outcome ? { ...q, approval: res.approval } : q)))
+      onMutate?.()
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not save approval', message: e.message })
     } finally {
@@ -545,7 +718,8 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
     setBusyOutcome(outcome)
     try {
       const res = await setMcqQuestionExclusion(run.id, outcome, excluded)
-      setQuestions((qs) => qs.map((q) => (q.outcome === outcome ? { ...q, excluded: res.excluded } : q)))
+      setQuestions((qs) => qs.map((q) => (qid(q) === outcome ? { ...q, excluded: res.excluded } : q)))
+      onMutate?.()
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not update exclusion', message: e.message })
     } finally {
@@ -564,40 +738,53 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
   async function handleGenerateZip(approvedOnly = false) {
     setZipBusy(true)
     try {
-      const { url, filename, total } = await exportMcqRunZip(run.id, approvedOnly)
-      setZipResult({ url, filename })
-      window.open(url, '_blank', 'noopener,noreferrer')
-      toast.push({ kind: 'success', title: 'ZIP generated', message: `${total} question(s) exported to the portal bucket.` })
+      const job = await exportMcqRunZip(run.id, approvedOnly)
+      onTrackJob?.(job)
+      toast.push({
+        kind: 'info', title: 'Export started',
+        message: 'Building the ZIP — track it in Activity; the download link appears on the Loads page when it finishes.',
+      })
     } catch (e) {
       toast.push({ kind: 'error', title: 'Generate ZIP failed', message: e.message })
     } finally {
       setZipBusy(false)
     }
   }
-  async function handlePrepareLoad(approvedOnly = false) {
+  async function handlePrepareLoad() {
+    if (!(prepForm.topic_id || '').trim()) {
+      toast.push({ kind: 'error', title: 'Topic ID required', message: 'Enter the parent topic ID for the exam.' })
+      return
+    }
     if (prepForm.child_order === '' || Number.isNaN(Number(prepForm.child_order))) {
       toast.push({ kind: 'error', title: 'Child order required', message: 'Enter the position under the topic.' })
       return
     }
     setPrepBusy(true)
-    setPrepResult(null)
     try {
-      const res = await prepareAndLoadMcqRun(run.id, {
+      const job = await prepareAndLoadMcqRun(run.id, {
+        topic_id: (prepForm.topic_id || '').trim(),
         child_order: Number(prepForm.child_order),
         duration_min: Number(prepForm.duration_min),
         pass_percentage: Number(prepForm.pass_percentage),
         show_answer_scoring_mode: prepForm.show_answer_scoring_mode,
         should_send_solutions: prepForm.should_send_solutions,
         reviewer_email: user?.email || '',
-        approved_only: approvedOnly,
+        approved_only: true,   // only approved questions are ever loaded
       })
-      setPrepResult(res)
-      const ok = res.status === 'SUCCESS'
-      toast.push({
-        kind: ok ? 'success' : 'error',
-        title: ok ? 'Loaded to beta' : `Load ${String(res.status || '').toLowerCase()}`,
-        message: ok ? `${res.total} question(s) loaded; resource unlocked.` : (res.message || 'See the prepared sheet.'),
-      })
+      onTrackJob?.(job)
+      toast.push({ kind: 'info', title: 'Load started', message: 'Loading approved questions to the portal…' })
+      // Keep the inline spinner up while the background job runs (it's also in Activity),
+      // then reflect the outcome here so the reviewer gets feedback without leaving the page.
+      const done = await pollJobDone(job.id)
+      if (done?.status === 'SUCCESS') {
+        setLoadedLocal(true)
+        toast.push({ kind: 'success', title: 'Loaded', message: 'Approved questions are live in the portal. See the Loads page for details.' })
+      } else {
+        toast.push({
+          kind: 'error', title: 'Load did not complete',
+          message: done?.error || done?.message || 'Check the Loads page / Activity for what happened.',
+        })
+      }
     } catch (e) {
       toast.push({ kind: 'error', title: 'Prepare & load failed', message: e.message })
     } finally {
@@ -606,7 +793,9 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
   }
 
   const los = r.final_los || []
-  const notes = r.notes || []
+  // Drop the legacy "reviewed N; M still need human review" summary note (now removed at the
+  // source) so runs generated before that fix don't keep showing it.
+  const notes = (r.notes || []).filter((n) => !/still need human review/i.test(String(n)))
   const jobId = run?.job_id
   const artifact = r.artifact || {}
   const status = artifact.status || r.lo_status || ''
@@ -648,7 +837,40 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
   const [tab, setTab] = useState('questions')
   const [filter, setFilter] = useState('all') // all | review
 
-  const shown = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
+  const filtered = filter === 'review' ? questions.filter((q) => q.needs_human) : questions
+  // Generation page reviews BASE questions only; variants are reviewed in the Review Queue.
+  const shown = reviewScope === 'base' ? filtered.filter((q) => !q.is_variant) : filtered
+  // Classroom Quiz: group each base question with its variants (linked by base_question_key)
+  // so the lineage is visible. MCQ runs have no variants, so every base stands alone and the
+  // list is unchanged. Orphan variants (whose base is filtered out) render standalone.
+  const grouped = useMemo(() => {
+    const variantsByBase = {}
+    for (const q of shown) {
+      if (q.is_variant) (variantsByBase[q.base_question_key] ||= []).push(q)
+    }
+    const usedKeys = new Set()
+    const groups = []
+    for (const q of shown) {
+      if (q.is_variant) continue
+      const key = q.question_key || q.outcome
+      usedKeys.add(key)
+      groups.push({ base: q, variants: variantsByBase[key] || [] })
+    }
+    for (const [bk, vs] of Object.entries(variantsByBase)) {
+      if (!usedKeys.has(bk)) vs.forEach((v) => groups.push({ base: v, variants: [] }))
+    }
+    return groups
+  }, [shown])
+  // Review uses a one-card-at-a-time deck with a Q1/Q2… navigator; `current` indexes `shown`.
+  const [current, setCurrent] = useState(0)
+  const navRef = useRef(null)
+  useEffect(() => {                                  // keep the index in range as the list/filter changes
+    if (current > shown.length - 1) setCurrent(Math.max(0, shown.length - 1))
+  }, [shown.length, current])
+  useEffect(() => {                                  // keep the active Q chip in view in the navigator
+    navRef.current?.querySelector('.qc-nav-item.active')?.scrollIntoView({ block: 'nearest' })
+  }, [current])
+  const curQ = shown[Math.min(current, Math.max(0, shown.length - 1))]
 
   // Reading material sits to the RIGHT of the questions, behind a draggable adjustment bar.
   // The session is whatever was passed in (generation page) or, in the Runs/Review views,
@@ -747,10 +969,10 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
         <>
           <div className="mcq-toolbar">
             <div className="mcq-filters">
-              <button className={`mcq-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>
+              <button className={`mcq-chip ${filter === 'all' ? 'active' : ''}`} onClick={() => { setFilter('all'); setCurrent(0) }}>
                 All
               </button>
-              <button className={`mcq-chip ${filter === 'review' ? 'active' : ''}`} onClick={() => setFilter('review')}>
+              <button className={`mcq-chip ${filter === 'review' ? 'active' : ''}`} onClick={() => { setFilter('review'); setCurrent(0) }}>
                 Needs review {needsReview > 0 && <span className="mcq-chip-n">{needsReview}</span>}
               </button>
             </div>
@@ -777,23 +999,33 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
                     <ShieldCheck size={13} /> Mark run reviewed
                   </button>
                 )}
-                <button className="btn btn-soft btn-sm"
-                  onClick={() => guardExcluded(() => handleGenerateZip(false), eligibleQs.length)}
-                  disabled={zipBusy || !canExport}
-                  title={canExport ? '' : 'Mark the run reviewed first'}>
-                  <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
-                </button>
-                {zipResult && (
-                  <a className="mcq-zip-link" href={zipResult.url} target="_blank" rel="noopener noreferrer"
-                    title={zipResult.url}>
-                    <Download size={12} /> <span>{zipResult.filename}</span>
-                  </a>
+                {canLoad && (
+                  <>
+                    <button className="btn btn-soft btn-sm"
+                      onClick={() => guardExcluded(() => handleGenerateZip(false), eligibleQs.length)}
+                      disabled={zipBusy || !canExport}
+                      title={canExport ? '' : 'Mark the run reviewed first'}>
+                      <Download size={13} /> {zipBusy ? 'Generating…' : 'Generate ZIP'}
+                    </button>
+                    {zipResult && (
+                      <a className="mcq-zip-link" href={zipResult.url} target="_blank" rel="noopener noreferrer"
+                        title={zipResult.url}>
+                        <Download size={12} /> <span>{zipResult.filename}</span>
+                      </a>
+                    )}
+                    {runLoaded ? (
+                      <span className="mcq-status-chip ok" title="This run has been loaded to the portal">
+                        <CheckCircle2 size={12} /> Loaded
+                      </span>
+                    ) : (
+                      <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
+                        onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || !canExport}
+                        title={canExport ? '' : 'Mark the run reviewed first'}>
+                        <FileSpreadsheet size={13} /> Prepare &amp; Load
+                      </button>
+                    )}
+                  </>
                 )}
-                <button className={`btn btn-sm ${prepOpen ? 'btn-soft' : 'btn-primary'}`}
-                  onClick={() => setPrepOpen((v) => !v)} disabled={prepBusy || !canExport}
-                  title={canExport ? '' : 'Mark the run reviewed first'}>
-                  <FileSpreadsheet size={13} /> Prepare &amp; Load
-                </button>
               </div>
             )}
             {!review && (
@@ -801,16 +1033,24 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
             )}
           </div>
 
-          {review && prepOpen && (
+          {review && canLoad && prepOpen && !runLoaded && (
             <div className="mcq-prep-panel">
               <div className="mcq-prep-head">
                 <FileSpreadsheet size={14} />
                 <span>Prepare exam-config sheet &amp; load to beta</span>
                 <span className="mcq-prep-sub">
-                  parent = this session's topic · {approvedCount} of {eligibleQs.length} approved
+                  parent = the topic below (editable) · {approvedCount} of {eligibleQs.length} approved
                 </span>
               </div>
               <div className="mcq-prep-fields">
+                <label>Parent topic ID{run?.topic_name ? ` — ${run.topic_name}` : ''}
+                  <input className="input" value={prepForm.topic_id}
+                    onChange={(e) => setPrepForm((f) => ({ ...f, topic_id: e.target.value }))}
+                    placeholder="topic id" />
+                  {(prepForm.topic_id || '') !== (run?.topic_id || '') && (
+                    <span className="mcq-prep-sub">changed from this run's topic ({run?.topic_id || '—'})</span>
+                  )}
+                </label>
                 <label>Child order under parent
                   <input className="input" type="number" min="1" value={prepForm.child_order}
                     onChange={(e) => setPrepForm((f) => ({ ...f, child_order: e.target.value }))}
@@ -842,16 +1082,11 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
               </div>
               <div className="mcq-prep-actions">
                 <button className="btn btn-primary btn-sm"
-                  onClick={() => guardExcluded(() => handlePrepareLoad(false), eligibleQs.length)}
-                  disabled={prepBusy || !allApproved}
-                  title={allApproved ? '' : `Approve all ${eligibleQs.length} remaining questions to enable`}>
+                  onClick={() => guardExcluded(() => handlePrepareLoad(), approvedCount)}
+                  disabled={prepBusy || approvedCount < 1}
+                  title={approvedCount < 1 ? 'Approve at least one question to load' : ''}>
                   {prepBusy ? <Spinner size={13} /> : <FileSpreadsheet size={13} />}
-                  {prepBusy ? 'Loading… (up to ~2 min)' : 'Prepare & load all'}
-                </button>
-                <button className="btn btn-soft btn-sm"
-                  onClick={() => guardExcluded(() => handlePrepareLoad(true), approvedCount)}
-                  disabled={prepBusy || approvedCount < 1}>
-                  <FileSpreadsheet size={13} /> Load approved only ({approvedCount})
+                  {prepBusy ? 'Loading… (up to ~2 min)' : `Load approved (${approvedCount})`}
                 </button>
                 {prepResult && (
                   <span className={`mcq-status-chip ${prepResult.status === 'SUCCESS' ? 'ok' : 'warn'}`}>
@@ -871,21 +1106,90 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
             </div>
           )}
 
-          <div className="qc-list">
-            {shown.map((q) => (
-              <QuestionCard key={q.outcome} q={q} lo={loByOutcome[q.outcome]}
-                index={questions.indexOf(q)}
-                review={review && q.status === 'generated' ? (
-                  <QuestionReview
-                    q={q} busy={busyOutcome === q.outcome}
-                    onApprove={(approval) => handleSetApproval(q.outcome, approval)}
-                    onRegenerate={(fb, tags) => handleRegenerate(q.outcome, fb, tags)}
-                    onExclude={(excluded) => handleSetExclusion(q.outcome, excluded)}
-                  />
-                ) : null} />
-            ))}
-            {shown.length === 0 && <p className="muted">No questions in this filter.</p>}
-          </div>
+          {review && reviewScope !== 'variant' ? (
+            <div className="qc-review-deck">
+              <nav className="qc-nav" aria-label="Questions" ref={navRef}>
+                {shown.map((q, i) => {
+                  const st = qStatus(q, regenOutcome)
+                  return (
+                    <button key={q.outcome} type="button"
+                      className={`qc-nav-item st-${st} ${i === current ? 'active' : ''}`}
+                      onClick={() => setCurrent(i)}
+                      title={`Q${questions.indexOf(q) + 1} — ${STATUS_LABEL[st]}`}>
+                      <span className="qc-nav-ic"><StatusIcon status={st} size={16} /></span>
+                      <span className="qc-nav-n">Q{questions.indexOf(q) + 1}</span>
+                    </button>
+                  )
+                })}
+                {shown.length === 0 && <p className="muted qc-nav-empty">None</p>}
+              </nav>
+              <div className="qc-deck">
+                <div className="qc-deck-bar">
+                  <button className="btn btn-soft btn-sm" disabled={current <= 0}
+                    onClick={() => setCurrent((c) => Math.max(0, c - 1))}>
+                    <ChevronLeft size={14} /> Prev
+                  </button>
+                  <span className="qc-deck-pos">{shown.length ? current + 1 : 0} / {shown.length}</span>
+                  <button className="btn btn-soft btn-sm" disabled={current >= shown.length - 1}
+                    onClick={() => setCurrent((c) => Math.min(shown.length - 1, c + 1))}>
+                    Next <ChevronRight size={14} />
+                  </button>
+                </div>
+                <div className="qc-deck-body">
+                  {curQ ? (
+                    <QuestionCard key={qid(curQ)} q={curQ} lo={loByOutcome[curQ.outcome]}
+                      index={questions.indexOf(curQ)}
+                      review={curQ.status === 'generated' ? (
+                        <QuestionReview
+                          q={curQ} busy={busyOutcome === qid(curQ)}
+                          onApprove={(approval) => handleSetApproval(qid(curQ), approval)}
+                          onRegenerate={(fb, tags) => handleRegenerate(qid(curQ), fb, tags)}
+                          onExclude={(excluded) => handleSetExclusion(qid(curQ), excluded)}
+                        />
+                      ) : null} />
+                  ) : <p className="muted">No questions in this filter.</p>}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="qc-list">
+              {grouped.map(({ base, variants }) => (
+                <div className={`qc-group${variants.length ? ' has-variants' : ''}`}
+                  key={base.question_key || base.outcome}>
+                  <QuestionCard q={base} lo={loByOutcome[base.outcome]}
+                    index={questions.indexOf(base)} review={null} />
+                  {variants.length > 0 && (
+                    <div className="qc-variants">
+                      <div className="qc-variants-head">{variants.length} variant{variants.length === 1 ? '' : 's'}</div>
+                      {variants.map((v, i) => (
+                        <div className="qc-variant" key={v.question_key || `${base.outcome}-v${i}`}>
+                          <div className="qc-variant-tag">
+                            Variant {i + 1}
+                            <span className="qc-variant-meta">
+                              {(v.variant_axis || '').replace(/_/g, ' ')}
+                              {(v.variant_angle || v.question_type)
+                                ? ` · ${(v.variant_angle || v.question_type).replace(/_/g, ' ')}` : ''}
+                            </span>
+                          </div>
+                          <QuestionCard q={v} lo={loByOutcome[v.outcome]}
+                            index={questions.indexOf(v)}
+                            review={(review && reviewScope === 'variant' && v.status === 'generated') ? (
+                              <QuestionReview
+                                q={v} busy={busyOutcome === qid(v)}
+                                onApprove={(approval) => handleSetApproval(qid(v), approval)}
+                                onRegenerate={(fb, tags) => handleRegenerate(qid(v), fb, tags)}
+                                onExclude={(excluded) => handleSetExclusion(qid(v), excluded)}
+                              />
+                            ) : null} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {shown.length === 0 && <p className="muted">No questions in this filter.</p>}
+            </div>
+          )}
         </>
       )}
 
@@ -945,7 +1249,8 @@ function McqResults({ run, mode = "view", courseId, unitId }) {
             onMouseDown={(e) => { e.preventDefault(); setDragging(true) }}
             onKeyDown={onSplitKey}
           />
-          <ReadingMaterialPane courseId={cId} unitId={uId} />
+          <ReadingMaterialPane courseId={cId} unitId={uId}
+            content={readingMaterial ?? run?.result?.reading_material ?? run?.reading_material ?? null} />
         </>
       )}
       {confirm && (

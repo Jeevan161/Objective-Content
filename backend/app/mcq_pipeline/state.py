@@ -29,6 +29,13 @@ class LOState(TypedDict, total=False):
     title: str
     source_text: str
 
+    # ---- derived session focus ("motive") — keeps LOs/questions on-topic --- #
+    # {objective: <one paragraph>, central_concepts: [...], incidental: [...]} derived once from
+    # title + source_text by the derive_session_focus node; session_objective is the flat string
+    # threaded into authoring / consolidation / validation / generation / review prompts.
+    session_focus: dict
+    session_objective: str
+
     # ---- POC forward-only artifacts --------------------------------------- #
     sections: list
     raw_concepts: list                     # POC "_raw_concepts"
@@ -82,11 +89,13 @@ class RunContext:
     rag: Any
     progress: Any
     db_prereq_units: list = field(default_factory=list)
-    generate_questions: bool = True
     review_questions: bool = True
     run_coverage_gate: bool = True         # run the unified LLM Judge (R1–R8) over LOs (V13)
     question_budget: Any = None            # user-supplied budget (default ceiling = QUESTION_BUDGET)
     hitl_enabled: bool = False             # pause at review gates (Gate 1 / 2); off for tests/headless
+    # Classroom Quiz: clamp the final LO set to this ceiling (with floor 4 / hard-floor 3). None =
+    # the standard MCQ budget logic. Read by select_outcomes (m02/m06) only when set.
+    lo_budget: Any = None
 
 
 class _Registry:

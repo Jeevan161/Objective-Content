@@ -59,6 +59,11 @@ export const startSync = (payload) =>
 
 export const getJob = (jobId) => request(`/courses/jobs/${jobId}/`)
 
+// List the caller's jobs (active-only by default) so any browser tab shows the same
+// in-flight Activity, not just the tab that started a job.
+export const listJobs = (activeOnly = true) =>
+  request(`/courses/jobs/?active=${activeOnly ? 1 : 0}`)
+
 // WebSocket URL for live job progress (replaces polling). Same `/api` prefix, so Vite proxies it
 // (ws: true) to the backend in dev; in prod it rides the same host the page was served from.
 export const mcqJobWsUrl = (jobId) => {
@@ -117,7 +122,7 @@ export const generateMcq = (
   unitId,
   review = true,
   prerequisiteUnitIds = null,
-  { questionBudget = null, hitl = false } = {},
+  { questionBudget = null, hitl = false, reason = '' } = {},
 ) =>
   request('/courses/mcq/generate/', {
     method: 'POST',
@@ -129,6 +134,7 @@ export const generateMcq = (
       prerequisite_unit_ids: prerequisiteUnitIds,
       question_budget: questionBudget,
       hitl,
+      reason,
     }),
   })
 
@@ -150,19 +156,63 @@ export const listMcqRuns = (courseId, unitId) =>
 // Full result of a single run.
 export const getMcqRun = (runId) => request(`/courses/mcq/runs/${runId}/`)
 
+// --- Classroom Quiz: a published Slides deck → per-quiz scopes → reading material → LOs → Qs → variants
+export const classroomQuizIngest = (slidesUrl, title = '', questionDomain = '') =>
+  request('/classroom-quiz/ingest/', {
+    method: 'POST',
+    body: JSON.stringify({ slides_url: slidesUrl, title, question_domain: questionDomain }),
+  })
+
+export const classroomQuizListDecks = () => request('/classroom-quiz/decks/')
+
+export const classroomQuizGetDeck = (deckId) => request(`/classroom-quiz/decks/${deckId}/`)
+
+// Phase 1 — fans out one base-question generation job per scope; returns { deck_id, jobs: [...] }.
+export const classroomQuizGenerate = (deckId) =>
+  request(`/classroom-quiz/decks/${deckId}/generate/`, { method: 'POST' })
+
+// Phase 1, one quiz at a time — generate (or regenerate) a single scope; returns its job.
+export const classroomQuizGenerateScope = (scopeId) =>
+  request(`/classroom-quiz/scopes/${scopeId}/generate/`, { method: 'POST' })
+
+// Gate 1 — resume a scope paused at the LO-review gate with a per-LO decision
+// ({ action, rejected, rejected_ids, lo_feedback, note }).
+export const classroomQuizResume = (jobId, decision) =>
+  request(`/classroom-quiz/jobs/${jobId}/resume/`, {
+    method: 'POST',
+    body: JSON.stringify(decision),
+  })
+
+// Phase 2 — generate variants for a scope run's APPROVED base questions (gated on review).
+export const classroomQuizGenerateVariants = (runId) =>
+  request(`/classroom-quiz/runs/${runId}/variants/`, { method: 'POST' })
+
 // Node-by-node execution trace for a run (our own tracing), by the run's job id.
 export const getMcqTrace = (jobId) => request(`/courses/mcq/jobs/${jobId}/trace/`)
 
 // All recent runs (summaries), newest first, across every course — for the Runs page.
 export const listAllMcqRuns = (limit = 50) => request(`/courses/mcq/runs/?limit=${limit}`)
 
+// Cancel a running / HITL-paused MCQ (or regeneration) job; returns the serialized job.
+export const cancelMcqJob = (jobId) =>
+  request(`/courses/mcq/jobs/${jobId}/cancel/`, { method: 'POST' })
+
 // --- Human-in-the-loop review (Gate B) ---
 // The reviewer is taken from the authenticated user server-side — never sent from the client.
-// Regenerate ONE question with reviewer feedback injected; returns the new question.
+// Regenerate ONE question with reviewer feedback injected. Runs as a background REGEN job
+// (so it shows in Activity); returns the serialized job — poll it, then re-fetch the run.
 export const regenerateMcqQuestion = (runId, outcome, feedback, tags = []) =>
   request(`/courses/mcq/runs/${runId}/questions/${encodeURIComponent(outcome)}/regenerate/`, {
     method: 'POST',
     body: JSON.stringify({ feedback, tags }),
+  })
+
+// Run a candidate program (and optionally check stdout against an expected output) via the
+// same sandboxed runner that grades FIBs. Powers the reviewer's FIB 'Run & Check' button.
+export const executeCode = ({ language, code, stdin = '', expected_output = null }) =>
+  request('/courses/mcq/execute/', {
+    method: 'POST',
+    body: JSON.stringify({ language, code, stdin, expected_output }),
   })
 
 // Record a non-regenerating review action (e.g. accept) on a question.
@@ -203,14 +253,17 @@ export const exportMcqRunZip = (runId, approvedOnly = false) =>
     method: 'POST',
   })
 
-// Full beta-load pipeline: build+upload the ZIP, copy+fill the exam-config sheet,
-// submit the load, poll it, and unlock. Can take up to a couple of minutes.
-// Returns { status, message, sheet_url, resource_id, request_id, total, ... }.
+// Full beta-load pipeline (build+upload ZIP, fill exam-config sheet, submit+poll, unlock).
+// Now runs as a BACKGROUND job — returns a SyncJob (job_type LOAD) to track in Activity.
 export const prepareAndLoadMcqRun = (runId, fields) =>
   request(`/courses/mcq/runs/${runId}/prepare-and-load/`, {
     method: 'POST',
     body: JSON.stringify(fields),
   })
+
+// Portal loads + ZIP exports (newest first). Detail includes the loaded-questions snapshot.
+export const listLoads = (limit = 100) => request(`/courses/mcq/loads/?limit=${limit}`)
+export const getLoad = (loadId) => request(`/courses/mcq/loads/${loadId}/`)
 
 // --- MCQ pipeline & prompts (admin) ---
 // The ordered pipeline stages, each with the prompts that drive it.
@@ -274,12 +327,23 @@ export const adminDeactivateUser = (id) => request(`/admin/users/${id}/deactivat
 export const adminSetRole = (id, role) =>
   request(`/admin/users/${id}/role`, { method: 'POST', body: JSON.stringify({ role }) })
 export const adminStats = () => request('/admin/stats')
-export const adminLogs = (level = '', limit = 200) =>
-  request(`/admin/logs?limit=${limit}${level ? `&level=${level}` : ''}`)
+export const adminLogs = (level = '', limit = 200, offset = 0) =>
+  request(`/admin/logs?limit=${limit}&offset=${offset}${level ? `&level=${level}` : ''}`)
 // All application-level feedback submissions (admin).
 export const adminAppFeedback = (limit = 200) => request(`/admin/feedback?limit=${limit}`)
 // All MCQ reviewer feedback actions (admin).
 export const adminMcqFeedback = (limit = 300) => request(`/admin/mcq-feedback?limit=${limit}`)
+
+// Throughput analytics for a date range (admin/manager/lead). All params optional.
+export const adminAnalytics = ({ from, to, bucket = 'day', courseId = '', userId = '' } = {}) => {
+  const p = new URLSearchParams()
+  if (from) p.set('from', from)
+  if (to) p.set('to', to)
+  if (bucket) p.set('bucket', bucket)
+  if (courseId) p.set('course_id', courseId)
+  if (userId) p.set('user_id', userId)
+  return request(`/admin/analytics?${p.toString()}`)
+}
 
 // --- Application feedback (any signed-in user) ---
 // rating: 1–5 (emoji), category, helpful (true/false/null), message.

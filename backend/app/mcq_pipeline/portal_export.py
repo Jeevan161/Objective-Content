@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import uuid
 import zipfile
 
@@ -48,8 +49,27 @@ def _key(lo: dict, q: dict, n: int) -> str:
     return f"{base}__{n}"
 
 
-def _tag(lo: dict, q: dict, n: int) -> str:
-    return lo.get("outcome") or q.get("outcome") or f"question_{n}"
+def _slug(value) -> str:
+    """snake_case a free-text label for a tag: lowercase, non-alphanumerics → single '_'."""
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _tags(lo: dict, q: dict, n: int, course: str = "") -> list[str]:
+    """Per-question tag_names — one prefixed, snake_cased tag per facet:
+    course_ course · t_ topic · c_ concept · sc_ sub_concept · lo_ learning_outcome ·
+    bl_ blooms_level · bc_ blooms_cat · la_ learner_action. Empty facets are skipped."""
+    facets = {
+        "course": course,
+        "t": lo.get("topic"),
+        "c": lo.get("concept"),
+        "sc": lo.get("sub_concept"),
+        "lo": lo.get("outcome") or q.get("outcome"),
+        "bl": lo.get("bloom_level_raw") or lo.get("bloom_level"),
+        "bc": lo.get("bloom_category"),
+        "la": lo.get("learner_action"),
+    }
+    tags = [f"{prefix}_{slug}" for prefix, val in facets.items() if (slug := _slug(val))]
+    return tags or [f"question_{n}"]
 
 
 def _difficulty(q: dict, lo: dict) -> str:
@@ -66,7 +86,7 @@ def _option_ctype(o: dict) -> str:
     return "MARKDOWN" if ct == "MARKDOWN" else "TEXT"
 
 
-def _mcq(q, lean, key, tag, diff, *, qtype):
+def _mcq(q, lean, key, tags, diff, *, qtype):
     return GROUP_DEFAULT, {
         "question_id": _uuid(),
         "question_key": key,
@@ -76,7 +96,7 @@ def _mcq(q, lean, key, tag, diff, *, qtype):
         "question": {
             "content": lean.get("question", ""),
             "content_type": "MARKDOWN",
-            "tag_names": [tag],
+            "tag_names": tags,
             "multimedia": [],
         },
         "options": [
@@ -87,7 +107,7 @@ def _mcq(q, lean, key, tag, diff, *, qtype):
     }
 
 
-def _true_false(q, lean, key, tag, diff):
+def _true_false(q, lean, key, tags, diff):
     # Represented as a True/False MULTIPLE_CHOICE (matches the reference format).
     is_true = bool(lean.get("is_true"))
     stem = lean.get("statement", "")
@@ -100,7 +120,7 @@ def _true_false(q, lean, key, tag, diff):
         "toughness": diff,
         "question_type": "MULTIPLE_CHOICE",
         "question": {"content": content, "content_type": "MARKDOWN",
-                     "tag_names": [tag], "multimedia": []},
+                     "tag_names": tags, "multimedia": []},
         "options": [
             {"content": "True", "content_type": "TEXT", "is_correct": is_true, "multimedia": []},
             {"content": "False", "content_type": "TEXT", "is_correct": not is_true, "multimedia": []},
@@ -108,7 +128,7 @@ def _true_false(q, lean, key, tag, diff):
     }
 
 
-def _textual(q, lean, key, tag, diff):
+def _textual(q, lean, key, tags, diff):
     return GROUP_DEFAULT, {
         "question_type": "TEXTUAL",
         "question_key": key,
@@ -121,7 +141,7 @@ def _textual(q, lean, key, tag, diff):
     }
 
 
-def _code_mcq(q, lean, key, tag, diff, *, qtype, more_than_one):
+def _code_mcq(q, lean, key, tags, diff, *, qtype, more_than_one):
     outputs = lean.get("correct_outputs") if more_than_one else [lean.get("correct_output", "")]
     return GROUP_CODE, {
         "question_key": key,
@@ -131,7 +151,7 @@ def _code_mcq(q, lean, key, tag, diff, *, qtype, more_than_one):
         "question_text": lean.get("question", ""),
         "multimedia": [],
         "content_type": "HTML",
-        "tag_names": [tag],
+        "tag_names": tags,
         "input_output": [{
             "input": "",
             "question_id": _uuid(),
@@ -147,7 +167,7 @@ def _code_mcq(q, lean, key, tag, diff, *, qtype, more_than_one):
     }
 
 
-def _code_textual(q, lean, key, tag, diff):
+def _code_textual(q, lean, key, tags, diff):
     return GROUP_CODE, {
         "question_key": key,
         "question_text": lean.get("question", ""),
@@ -156,7 +176,7 @@ def _code_textual(q, lean, key, tag, diff):
         "toughness": diff,
         "reference": "",
         "question_type": "CODE_ANALYSIS_TEXTUAL",
-        "tag_names": [tag],
+        "tag_names": tags,
         "content_type": "HTML",
         "input_output": [{
             "question_id": _uuid(),
@@ -187,7 +207,7 @@ def _fib_blocks(code_lines, blank_answer, *, masked):
     return blocks
 
 
-def _fib(q, lean, key, tag, diff):
+def _fib(q, lean, key, tags, diff):
     code_lines = lean.get("code_lines", []) or []
     blank = lean.get("blank_answer", "")
     lang = _lang(lean.get("code_language"), fib=True)
@@ -200,7 +220,7 @@ def _fib(q, lean, key, tag, diff):
         "question_id": _uuid(),
         "skills": [],
         "difficulty": diff,
-        "tag_names": [tag],
+        "tag_names": tags,
         "test_case_evaluation_metrics": [
             {"language": lang, "time_limit_to_execute_in_seconds": 20.0}],
         "cpp_python_time_factor": 0,
@@ -230,7 +250,7 @@ def _fib(q, lean, key, tag, diff):
     }
 
 
-def _rearrange(q, lean, key, tag, diff):
+def _rearrange(q, lean, key, tags, diff):
     items = lean.get("ordered_items", []) or []
     n = len(items)
     options = []
@@ -250,30 +270,30 @@ def _rearrange(q, lean, key, tag, diff):
         "question_type": "REARRANGE",
         "explanation_for_answer": {"content": lean.get("explanation", ""), "content_type": "MARKDOWN"},
         "question": {"content": lean.get("question", ""), "content_type": "MARKDOWN",
-                     "tag_names": [tag], "multimedia": []},
+                     "tag_names": tags, "multimedia": []},
         "options": options,
     }
 
 
-def _convert(q: dict, lo: dict, n: int):
+def _convert(q: dict, lo: dict, n: int, course: str = ""):
     qt = q.get("question_type")
     lean = q.get("lean") or {}
-    key, tag, diff = _key(lo, q, n), _tag(lo, q, n), _difficulty(q, lo)
+    key, tags, diff = _key(lo, q, n), _tags(lo, q, n, course), _difficulty(q, lo)
     if qt in ("MULTIPLE_CHOICE", "MORE_THAN_ONE_MULTIPLE_CHOICE"):
-        return _mcq(q, lean, key, tag, diff, qtype=qt)
+        return _mcq(q, lean, key, tags, diff, qtype=qt)
     if qt == "TRUE_OR_FALSE":
-        return _true_false(q, lean, key, tag, diff)
+        return _true_false(q, lean, key, tags, diff)
     if qt == "TEXTUAL":
-        return _textual(q, lean, key, tag, diff)
+        return _textual(q, lean, key, tags, diff)
     if qt in ("CODE_ANALYSIS_MULTIPLE_CHOICE", "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE"):
-        return _code_mcq(q, lean, key, tag, diff, qtype=qt,
+        return _code_mcq(q, lean, key, tags, diff, qtype=qt,
                          more_than_one=qt.endswith("MORE_THAN_ONE_MULTIPLE_CHOICE"))
     if qt == "CODE_ANALYSIS_TEXTUAL":
-        return _code_textual(q, lean, key, tag, diff)
+        return _code_textual(q, lean, key, tags, diff)
     if qt == "FIB_CODING":
-        return _fib(q, lean, key, tag, diff)
+        return _fib(q, lean, key, tags, diff)
     if qt == "REARRANGE":
-        return _rearrange(q, lean, key, tag, diff)
+        return _rearrange(q, lean, key, tags, diff)
     return None, None
 
 
@@ -281,12 +301,13 @@ def build_groups(result: dict) -> dict[str, list]:
     """Group a run's GENERATED questions into the four portal folders."""
     groups: dict[str, list] = {g: [] for g in GROUPS}
     los = {lo.get("outcome"): lo for lo in (result.get("final_los") or [])}
+    course = result.get("course_name") or result.get("course_id") or ""
     n = 0
     for q in (result.get("questions") or []):
         if q.get("status") != "generated" or not q.get("lean") or q.get("excluded"):
             continue
         n += 1
-        group, obj = _convert(q, los.get(q.get("outcome"), {}), n)
+        group, obj = _convert(q, los.get(q.get("outcome"), {}), n, course)
         if obj is not None:
             groups[group].append(obj)
     return groups

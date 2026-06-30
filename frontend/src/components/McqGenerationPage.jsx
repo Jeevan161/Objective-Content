@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { ArrowLeft, ListChecks, BookOpen, Layers, FileText, Sparkles, AlertTriangle } from 'lucide-react'
-import { getCourse, generateMcq, resumeMcq, listMcqRuns, getMcqRun, mcqJobWsUrl } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowLeft, ListChecks, BookOpen, Layers, FileText, Sparkles, AlertTriangle, Ban } from 'lucide-react'
+import { getCourse, generateMcq, resumeMcq, listMcqRuns, getMcqRun, mcqJobWsUrl, cancelMcqJob, getJob } from '../api'
 import { EmptyState, Spinner } from './ui'
 import { useToast } from './Toast'
 import { useAuth } from '../auth/AuthContext'
@@ -8,9 +8,10 @@ import McqProgress from './McqProgress'
 import McqResults from './McqResults'
 import McqReviewGate from './McqReviewGate'
 import McqScopeModal from './McqScopeModal'
+import ReadingMaterialPane from './ReadingMaterialPane'
 import Select from './Select'
 
-const TERMINAL = ['SUCCESS', 'FAILURE']
+const TERMINAL = ['SUCCESS', 'FAILURE', 'CANCELLED']
 
 // A unit counts as a "session" if it's an explicit SESSION container or a
 // standalone learning set — matching how the Courses view tags sessions.
@@ -27,9 +28,13 @@ function sessionUnitId(unit) {
 
 // MCQ generation: pick course → topic → session, then run the LangGraph pipeline
 // (live progress) and render the generated questions + LangSmith trace.
-function McqGenerationPage({ courses, onBack, onTrackJob }) {
+function McqGenerationPage({ courses, onBack, onTrackJob, openTarget }) {
   const toast = useToast()
   const { user } = useAuth()
+  // When restoring a run (from the Activity drawer), the selection-reset effects must NOT
+  // wipe the seeded topic/session/job. This ref carries the target through those effects;
+  // each consumes the part it owns, then clears it.
+  const restoreRef = useRef(null)
   const [courseId, setCourseId] = useState('')
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -38,7 +43,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   const [job, setJob] = useState(null)
   const [run, setRun] = useState(null)
   const [scopeOpen, setScopeOpen] = useState(false)
-  const [hitl, setHitl] = useState(false)
+  const [hitl, setHitl] = useState(false)  // opt-in: pause at the LO review gate
   const [budget, setBudget] = useState('') // '' = default ceiling (20)
   const [runParams, setRunParams] = useState(null) // {prereqUnitIds, questionBudget} of the active run, for resume
   const [resuming, setResuming] = useState(false)
@@ -56,8 +61,13 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
     let cancelled = false
     setLoading(true)
     setDetail(null)
-    setTopicId('')
-    setSessionId('')
+    // Don't clear the downstream picks when we're restoring this exact course (the
+    // sessionId effect still needs the seeded topic/session/job).
+    const restoring = restoreRef.current && restoreRef.current.courseId === courseId
+    if (!restoring) {
+      setTopicId('')
+      setSessionId('')
+    }
     getCourse(courseId)
       .then((d) => {
         if (!cancelled) setDetail(d)
@@ -101,7 +111,13 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
   /* eslint-disable react-hooks/set-state-in-effect -- reset + async fetch on selection change */
   useEffect(() => {
     setRun(null)
-    setJob(null)
+    // Restoring a specific job for this session? Keep `job` and re-fetch it so the live
+    // stage (progress / LO gate) comes back; the WS effect then reattaches to it.
+    const restore = restoreRef.current
+    const restoringJob =
+      restore && restore.sessionId === sessionId && restore.courseId === courseId && restore.jobId
+    if (!restoringJob) setJob(null)
+    restoreRef.current = null            // consume — manual changes from here reset normally
     if (!courseId || !sessionId) return
     let cancelled = false
     listMcqRuns(courseId, sessionId)
@@ -112,10 +128,35 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
         })
       })
       .catch(() => {})
+    if (restoringJob) {
+      getJob(restore.jobId)
+        .then((j) => { if (!cancelled && j) setJob(j) })
+        .catch(() => {})
+    }
     return () => {
       cancelled = true
     }
   }, [courseId, sessionId])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Reopen a specific job from the Activity drawer to its exact course/topic/session + stage.
+  /* eslint-disable react-hooks/set-state-in-effect -- programmatic restore from the Activity drawer */
+  useEffect(() => {
+    const t = openTarget
+    if (!t || !t.courseId) return
+    if (t.courseId === courseId && t.sessionId === sessionId) {
+      // Selections already match — the reset effects won't fire; restore the job directly.
+      if (t.jobId) getJob(t.jobId).then((j) => { if (j) setJob(j) }).catch(() => {})
+      return
+    }
+    restoreRef.current = {
+      courseId: t.courseId, topicId: t.topicId, sessionId: t.sessionId, jobId: t.jobId,
+    }
+    setCourseId(t.courseId)
+    setTopicId(t.topicId || '')
+    setSessionId(t.sessionId || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTarget?.seq])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Live job progress over a WebSocket (replaces ~1s polling). The server pushes the serialized
@@ -162,7 +203,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
     }
   }, [job?.id, streamable, courseId, sessionId])
 
-  async function handleGenerate(prereqUnitIds) {
+  async function handleGenerate(prereqUnitIds, reason = '') {
     setScopeOpen(false)
     setRun(null)
     const qb = budget.trim() === '' ? null : Math.max(1, parseInt(budget, 10) || 0) || null
@@ -171,6 +212,7 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
       const j = await generateMcq(courseId, topicId, sessionId, true, prereqUnitIds, {
         questionBudget: qb,
         hitl,
+        reason,
       })
       setJob(j)
       onTrackJob?.(j) // also surface it in the global Activity drawer
@@ -183,6 +225,20 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
       })
     } catch (e) {
       toast.push({ kind: 'error', title: 'Could not start MCQ generation', message: e.message })
+    }
+  }
+
+  // Cancel the active run (generating, or paused at the LO gate). The backend signals the
+  // worker to stop at its next checkpoint (or finalizes a paused job); the WS pushes the
+  // final CANCELLED state, but reflect the request immediately too.
+  async function handleCancel() {
+    if (!job) return
+    try {
+      const updated = await cancelMcqJob(job.id)
+      setJob(updated)
+      toast.push({ kind: 'info', title: 'Cancelling generation', message: updated.message || '' })
+    } catch (e) {
+      toast.push({ kind: 'error', title: 'Could not cancel', message: e.message })
     }
   }
 
@@ -346,20 +402,48 @@ function McqGenerationPage({ courses, onBack, onTrackJob }) {
           course={detail || { course_id: courseId, course_name: detail?.course_name }}
           prerequisites={detail?.prerequisites || []}
           currentUnitId={sessionId}
+          requireReason={!!run}
           onClose={() => setScopeOpen(false)}
-          onConfirm={(prereqUnitIds) => handleGenerate(prereqUnitIds)}
+          onConfirm={(prereqUnitIds, reason) => handleGenerate(prereqUnitIds, reason)}
         />
       )}
 
-      {running && <McqProgress progress={job.progress} />}
-
-      {paused && (
-        <McqReviewGate review={job.progress?.review} busy={resuming} onDecide={handleDecision} />
+      {(running || paused) && (
+        // Keep the reading material alongside while generation runs and while the
+        // LO review gate is open, so LOs can be judged against the source content.
+        <div className={`mcq-gen-split${sessionId ? '' : ' no-reading'}`}>
+          <div className="mcq-gen-split-main">
+            <div className="mcq-gen-toolbar">
+              <span className="mcq-gen-toolbar-status">
+                {paused ? 'Paused for your review' : 'Generating…'}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={handleCancel}
+                data-tip="Stop this run — it can't be resumed afterwards"
+              >
+                <Ban size={13} /> Cancel
+              </button>
+            </div>
+            {running && <McqProgress progress={job.progress} />}
+            {paused && (
+              <McqReviewGate review={job.progress?.review} busy={resuming} onDecide={handleDecision} />
+            )}
+          </div>
+          {sessionId && <ReadingMaterialPane courseId={courseId} unitId={sessionId} />}
+        </div>
       )}
 
       {job?.status === 'FAILURE' && (
         <div className="mcq-fail">
           <AlertTriangle size={14} /> {job.error || 'Generation failed.'}
+        </div>
+      )}
+
+      {job?.status === 'CANCELLED' && (
+        <div className="mcq-fail mcq-cancelled">
+          <Ban size={14} /> {job.message || 'Generation cancelled.'}
         </div>
       )}
 

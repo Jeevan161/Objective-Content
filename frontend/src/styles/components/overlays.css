@@ -467,6 +467,38 @@
   color: var(--red);
 }
 
+.text-muted {
+  color: var(--text-3);
+}
+
+/* Right-side per-row controls (Cancel / open chevron / dismiss). */
+.job-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+.job-row-open {
+  color: var(--text-3);
+}
+
+/* MCQ jobs can be reopened to their exact page/stage. */
+.job-row-clickable {
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.job-row-clickable:hover {
+  border-color: var(--brand);
+  background: var(--bg-active);
+}
+.job-row-clickable:hover .job-row-open {
+  color: var(--brand);
+}
+
+.job-row.job-cancelled {
+  opacity: 0.8;
+}
+
 /* ---------- toasts ---------- */
 .toast-stack {
   position: fixed;

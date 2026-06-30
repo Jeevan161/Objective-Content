@@ -63,6 +63,47 @@ class McqGenerateRequest(BaseModel):
     # Reading-material portal unit_ids of the PREREQUISITE units to include in RAG
     # grounding. None = include all prerequisites (default); [] = none.
     prerequisite_unit_ids: list[str] | None = None
+    # Why the session is being regenerated. REQUIRED when a prior run already exists for
+    # this (course_id, unit_id); ignored for a first-time generation.
+    reason: str = ""
+
+
+class ClassroomQuizIngestRequest(BaseModel):
+    """Ingest a published Google Slides deck for Classroom Quiz generation. The deck is
+    segmented into per-quiz scopes (Agenda+1 → each 'Quiz Time!' → … → 'Key Takeaways')."""
+    slides_url: str
+    title: str = ""
+    # Optional course domain (e.g. "SQL") — gates code-path question/variant types. Empty = generic.
+    question_domain: str = ""
+
+
+def serialize_cq_scope(scope) -> dict:
+    """A deck scope + its run summary (lo/question/variant counts, coverage)."""
+    return {
+        "id": str(scope.id),
+        "scope_no": scope.scope_no,
+        "kind": scope.kind,
+        "slide_start": scope.slide_start,
+        "slide_end": scope.slide_end,
+        "coverage": scope.coverage,
+        "has_reading_material": bool((scope.reading_material or "").strip()),
+        "run_id": str(scope.run_id) if scope.run_id else None,
+    }
+
+
+def serialize_cq_deck(deck, scopes=None) -> dict:
+    out = {
+        "id": str(deck.id),
+        "slides_url": deck.slides_url,
+        "title": deck.title,
+        "status": deck.status,
+        "scope_count": deck.scope_count,
+        "question_domain": deck.question_domain,
+        "created_at": deck.created_at.isoformat() if deck.created_at else None,
+    }
+    if scopes is not None:
+        out["scopes"] = [serialize_cq_scope(s) for s in scopes]
+    return out
 
 
 class McqReviewRequest(BaseModel):
@@ -73,6 +114,10 @@ class McqReviewRequest(BaseModel):
     rejected: list[dict] | None = None
     rejected_ids: list[str] | None = None         # legacy: ids only (reason falls back to `note`)
     note: str = ""
+    # Per-LO review captured at the gate — ONE entry per reviewed outcome, stored regardless of
+    # approve/reject (for the LO-feedback dataset): [{"id", "verdict": good|needs_work|regenerate,
+    # "comment"}]. Regenerate entries also drive that LO's regeneration (mirrored into `rejected`).
+    lo_feedback: list[dict] | None = None
     course_id: str = ""
     topic_id: str = ""
     unit_id: str = ""
@@ -133,7 +178,10 @@ class QuestionExcludeRequest(BaseModel):
 
 class PrepareSheetRequest(BaseModel):
     """User-facing fields for the exam-config sheet (Form tab). The rest is derived:
-    parent = run.topic_id, number of questions = generated count, name = 'MCQ Practice'."""
+    number of questions = generated count, name = 'MCQ Practice'."""
+    # Parent resource (Form!B14). Defaults to the run's topic_id; the reviewer may override
+    # it at load time (e.g. to attach the exam under a different topic).
+    topic_id: str = ""
     child_order: int
     duration_min: int = 30
     pass_percentage: float = 80.0          # percent (80 → stored as 0.8 in Form!B40)
@@ -201,6 +249,17 @@ class RagAnswerRequest(BaseModel):
     top_k: int = 15
     # When true, the scope is expanded to include each course's prerequisites.
     include_prerequisites: bool = True
+
+
+class ExecuteCodeRequest(BaseModel):
+    """Run a candidate program and (optionally) check its stdout — the same
+    execution that grades a FIB. Used by the reviewer's 'Run & Check' button."""
+    language: str = "PYTHON"
+    code: str
+    stdin: str = ""
+    # When provided, the response reports whether stdout matches it
+    # (trailing-whitespace-insensitive) — i.e. the FIB pass/fail.
+    expected_output: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -346,18 +405,24 @@ def serialize_job(job: SyncJob) -> dict:
     }
 
 
-def serialize_mcq_run(run, *, include_result: bool = True) -> dict:
+def serialize_mcq_run(run, *, include_result: bool = True, topic_name: str = "",
+                      unit_name: str = "", loaded: bool = False) -> dict:
     # Eligible = generated questions a reviewer hasn't excluded; the load gate compares
     # approved_count against this.
     qs = (run.result or {}).get("questions") or []
     eligible = sum(1 for q in qs if q.get("status") == "generated" and not q.get("excluded"))
     excluded = sum(1 for q in qs if q.get("status") == "generated" and q.get("excluded"))
+    # The human-readable session/unit name identifies the set everywhere in the UI (the
+    # course is shown as a secondary badge). Prefer the run's stored session_label.
+    unit_name = unit_name or (run.result or {}).get("session_label") or ""
     out = {
         "id": run.id,
         "job_id": run.job_id,
         "course_id": run.course_id,
         "topic_id": run.topic_id,
+        "topic_name": topic_name,
         "unit_id": run.unit_id,
+        "unit_name": unit_name,
         "version": getattr(run, "version", 1),
         "langsmith_run_url": run.langsmith_run_url,
         "lo_count": run.lo_count,
@@ -367,6 +432,9 @@ def serialize_mcq_run(run, *, include_result: bool = True) -> dict:
         "eligible_count": eligible,
         "excluded_count": excluded,
         "review_status": getattr(run, "review_status", "draft"),
+        # True once this run has been successfully loaded to the portal — the review UI
+        # marks it "Loaded" and hides the load option to prevent re-loading.
+        "loaded": loaded,
         "created_by": getattr(run, "created_by", None),
         "created_at": run.created_at,
     }
