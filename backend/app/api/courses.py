@@ -1377,12 +1377,17 @@ def course_detail(course_id: str, session: Session = Depends(get_session)) -> di
         pid for pid, ext in part_extracted.items()
         if ext is not None and min_chunk_at.get(pid) is not None and ext > min_chunk_at[pid]
     }
+    collaborator_ids = list(session.scalars(
+        select(CourseCollaborator.user_id).where(
+            CourseCollaborator.course_id == course.course_id)
+    ))
     return serialize_course_detail(
         course,
         part_counts=part_counts,
         course_counts=course_counts,
         issue_counts=issue_counts,
         stale_part_ids=stale_part_ids,
+        collaborator_ids=collaborator_ids,
     )
 
 

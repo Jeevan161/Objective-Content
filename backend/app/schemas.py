@@ -361,10 +361,13 @@ def serialize_course_detail(
     course_counts: dict | None = None,
     issue_counts: dict | None = None,
     stale_part_ids: set | None = None,
+    collaborator_ids: list | None = None,
 ) -> dict:
     course_counts = course_counts or {}
     issue_counts = issue_counts or {}
     return {
+        # Users explicitly granted access (the owner can generate regardless of this list).
+        "collaborator_ids": collaborator_ids or [],
         "course_id": course.course_id,
         "environment": course.environment,
         "course_name": course.course_name,
