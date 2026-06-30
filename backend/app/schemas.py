@@ -213,6 +213,14 @@ class RoleRequest(BaseModel):
     role: str   # "user" | "admin"
 
 
+class PasswordResetRequest(BaseModel):
+    password: str
+
+
+class NameRequest(BaseModel):
+    name: str
+
+
 class AppFeedbackRequest(BaseModel):
     """Application-level feedback: an emoji rating (1–5), a category, an optional
     'was this helpful?' vote, and free text."""

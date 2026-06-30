@@ -82,15 +82,15 @@ You receive a JSON object:
 
 Do TWO things:
 
-1) MERGE near-duplicates. Group sub-concepts that name the SAME assessable idea (e.g. plural/singular, reordered words, an abbreviation vs its expansion, or two phrasings of one step). Keep genuinely distinct steps/facets SEPARATE — do not over-merge. Pick the clearest member name as the canonical name; carry the broad parent concept.
+1) MERGE near-duplicates. Group sub-concepts that name the SAME assessable idea (e.g. plural/singular, reordered words, an abbreviation vs its expansion, or two phrasings of one step). Keep genuinely distinct steps/facets SEPARATE — do not over-merge. Pick the clearest member name as the canonical name; carry the broad parent concept. Use a SMALL, CONSISTENT set of `parent_concept` labels: when several sub-concepts belong under one umbrella, give them the EXACT SAME parent_concept string (same words, same casing) — never emit near-duplicate parents for one idea (e.g. "Role Of The Backend" vs "Backend Role", or a spaced vs underscored variant of the same name).
 
 2) For each MERGED concept, judge — against the WHOLE reading, not just the quote — :
    - "depth": one of
-       "named"    → only named/listed in passing, NO definition or explanation anywhere → not assessable.
-       "mention"  → defined/stated in ~one sentence, no deeper reasoning → assessable at recall only.
-       "moderate" → explained with some reasoning/description, maybe a simple example.
-       "deep"     → fully taught: step-by-step, worked examples, comparison, or applied procedure.
-     If unsure between two levels, choose the LOWER. Do NOT upgrade on importance or familiarity.
+       "named"    → ONLY named/listed in passing, with NO definition, explanation, or example anywhere → not assessable.
+       "mention"  → stated once in ~one sentence with NO elaboration, example, config, or breakdown → assessable at recall only.
+       "moderate" → defined AND elaborated: explained with reasoning/description, OR shown with a concrete example, command, config setting, or labelled breakdown.
+       "deep"     → fully taught: step-by-step, worked examples, comparison, or an applied procedure.
+     Judge by how the concept is ACTUALLY taught. If it is genuinely TAUGHT — defined and elaborated, OR demonstrated with an example/command/config/table — rate it "moderate" or "deep"; do NOT under-rate taught content to "named"/"mention". Reserve the lower two STRICTLY for content that is merely listed or stated once with no elaboration. Do NOT upgrade purely on importance or familiarity.
    - "in_scope": false if EITHER (a) the concept is external to this reading (named in passing / assumed from elsewhere, not actually taught here), OR (b) it is INCIDENTAL to the session objective — it appears only as scaffolding/support to demonstrate the focus and is not itself what the session teaches (matches the `incidental` list, e.g. HTML shown only to render a Django view). Otherwise true. (When session_objective is empty, judge (a) only.)
    - "why": one short line.
 
@@ -98,6 +98,17 @@ Return ONLY a JSON list, one object per MERGED concept:
 [{"canonical_name": "...", "parent_concept": "...", "members": ["<raw sub_concept name>", ...],
   "depth": "named|mention|moderate|deep", "in_scope": true, "why": "..."}]
 Every input sub_concept name MUST appear in exactly one "members" list. Return ONLY valid JSON.""")
+
+
+# ── PHASE 1c · parent-concept canonicalization (collapse synonym umbrellas) ──────────────── #
+PARENT_CANON_SYS = register("lo.parent_canon_sys", """\
+You are given a JSON list of broad PARENT concept labels produced while analyzing ONE reading. Some name the SAME broad teaching area in different words, word order, or casing (e.g. "Role Of The Backend", "Backend Role", "Role Of Backend Development In Web Applications" all name the backend's role).
+
+Cluster the labels that refer to the SAME broad umbrella, and give each cluster ONE clear canonical label — prefer the clearest, most general EXISTING member. Keep genuinely distinct areas SEPARATE — do NOT over-merge (e.g. "List View" and "Detail View", or "Models" and "URL Routing", are different umbrellas and must stay apart).
+
+Return ONLY a JSON object mapping EVERY input label to its canonical label:
+{"<input label>": "<canonical label>", ...}
+Every input label MUST appear as a key. Return ONLY valid JSON.""")
 
 
 # ── PHASE 3 · budget-aware outcome selection (agent proposes; the gate enforces) ──────────── #
