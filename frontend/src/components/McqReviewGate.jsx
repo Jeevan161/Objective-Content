@@ -34,12 +34,19 @@ function VerdictPicker({ value, disabled, onChange }) {
   )
 }
 
-function OutcomeRow({ o, rv, verdict, comment, onVerdict, onComment, busy }) {
+function OutcomeRow({ o, rv, verdict, comment, onVerdict, onComment, busy,
+                     removable = false, isRemoved = false, onToggleRemove }) {
   const failed = rv?.covered === false
   const regen = verdict === 'regenerate'
   return (
-    <li className={`mcq-lo-item ${regen ? 'rejecting' : ''}`}>
+    <li className={`mcq-lo-item ${regen ? 'rejecting' : ''} ${isRemoved ? 'removed' : ''}`}>
       <div className="mcq-lo-main">
+        {removable && (
+          <label className="mcq-lo-keep"
+            title={isRemoved ? 'Dropped — tick to keep it' : 'Untick to drop this outcome and free a slot'}>
+            <input type="checkbox" checked={!isRemoved} disabled={busy} onChange={() => onToggleRemove(o.id)} />
+          </label>
+        )}
         <span className={`mcq-lo-bloom b-${o.bloom_level}`}>{o.bloom_level}</span>
         <span className="mcq-lo-desc">{o.title || o.description}</span>
         {failed ? (
@@ -48,34 +55,39 @@ function OutcomeRow({ o, rv, verdict, comment, onVerdict, onComment, busy }) {
           <span className="mcq-badge ok"><CheckCircle2 size={11} /> ok</span>
         )}
       </div>
-      <div className="mcq-lo-meta">
-        <span className="mcq-lo-tag">concept: {(o.concept_id || '').replace(/^C_/, '')}</span>
-        {o.learner_action && <span className="mcq-lo-tag">verb: {o.learner_action}</span>}
-        {o.question_type && (
-          <span className="mcq-lo-tag mcq-lo-qtype" title={o.question_type_rationale || ''}>
-            {o.question_type.replaceAll('_', ' ').toLowerCase()}
-          </span>
-        )}
-        {failed && rv?.fail_reason && (
-          <span className="mcq-lo-tag mcq-review-fail">{rv.fail_reason}</span>
-        )}
-      </div>
-      <VerdictPicker value={verdict} disabled={busy} onChange={(v) => onVerdict(o.id, v)} />
-      <textarea
-        className="input mcq-lo-feedback"
-        rows={2}
-        disabled={busy}
-        value={comment}
-        onChange={(e) => onComment(o.id, e.target.value)}
-        placeholder={regen
-          ? 'Why regenerate? (required) — this feedback drives the rewrite'
-          : 'Optional feedback on this outcome (stored for prompt tuning)'}
-      />
+      {!isRemoved && (
+        <>
+          <div className="mcq-lo-meta">
+            <span className="mcq-lo-tag">concept: {(o.concept_id || '').replace(/^C_/, '')}</span>
+            {o.learner_action && <span className="mcq-lo-tag">verb: {o.learner_action}</span>}
+            {o.question_type && (
+              <span className="mcq-lo-tag mcq-lo-qtype" title={o.question_type_rationale || ''}>
+                {o.question_type.replaceAll('_', ' ').toLowerCase()}
+              </span>
+            )}
+            {failed && rv?.fail_reason && (
+              <span className="mcq-lo-tag mcq-review-fail">{rv.fail_reason}</span>
+            )}
+          </div>
+          <VerdictPicker value={verdict} disabled={busy} onChange={(v) => onVerdict(o.id, v)} />
+          <textarea
+            className="input mcq-lo-feedback"
+            rows={2}
+            disabled={busy}
+            value={comment}
+            onChange={(e) => onComment(o.id, e.target.value)}
+            placeholder={regen
+              ? 'Why regenerate? (required) — this feedback drives the rewrite'
+              : 'Optional feedback on this outcome (stored for prompt tuning)'}
+          />
+        </>
+      )}
     </li>
   )
 }
 
-function OutcomeList({ outcomes, reviews, stateMap, onVerdict, onComment, busy }) {
+function OutcomeList({ outcomes, reviews, stateMap, onVerdict, onComment, busy,
+                      removable = false, removed, onToggleRemove }) {
   return (
     <ul className="mcq-lo-list detailed">
       {outcomes.map((o) => {
@@ -90,6 +102,9 @@ function OutcomeList({ outcomes, reviews, stateMap, onVerdict, onComment, busy }
             onVerdict={onVerdict}
             onComment={onComment}
             busy={busy}
+            removable={removable}
+            isRemoved={removable && !!removed?.has(o.id)}
+            onToggleRemove={onToggleRemove}
           />
         )
       })}
@@ -115,6 +130,14 @@ function McqReviewGate({ review, busy, onDecide }) {
       next.has(id) ? next.delete(id) : next.add(id)
       return next
     })
+  // Classroom-Quiz SWAP: finalized outcomes the reviewer dropped to free ceiling slots.
+  const [removed, setRemoved] = useState(() => new Set())
+  const toggleRemove = (id) =>
+    setRemoved((p) => {
+      const next = new Set(p)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
 
   if (review?.gate !== 'outcomes') return null
 
@@ -127,17 +150,24 @@ function McqReviewGate({ review, busy, onDecide }) {
 
   const toRegen = outcomes.filter((o) => get(o.id).verdict === 'regenerate')
   const missingReason = toRegen.some((o) => !get(o.id).comment.trim())
-  const canSubmit = !busy && !missingReason
 
   const target = review.target || 20
+  // Classroom Quiz: HARD ceiling — adding an overflow LO must SWAP out a finalized one (never grow).
+  // MCQ: adding grows the set past the target (a conscious, costed opt-in).
+  const strict = !!review.strict_budget
+  const ceiling = review.ceiling || target
 
-  // Overflow = distinct concepts that couldn't fit the budget (NOT Bloom-restacks). Display-only;
-  // the reviewer opts in per-LO. `overflow` is an array on new runs (may be empty); undefined on
-  // older runs, where we fall back to the legacy count-based "Add N from reserve".
+  // Overflow = distinct concepts that couldn't fit the budget (NOT Bloom-restacks). The reviewer
+  // ticks any to add; they're folded into Submit (no separate step). `overflow` is an array on new
+  // runs (may be empty); undefined on older runs (legacy count-based fallback).
   const overflow = Array.isArray(review.overflow) ? review.overflow : null
-  const canAddSelected = !busy && addSel.size > 0
+  const keptCount = outcomes.length - (strict ? removed.size : 0)   // finalized kept after drops
+  const addRoom = strict ? Math.max(0, ceiling - keptCount) : Infinity   // strict: add only into freed slots
+  const atAddCap = strict && addSel.size >= addRoom
+  const overflowInvalid = strict && keptCount + addSel.size > ceiling   // never exceed the CQ ceiling
+  const canSubmit = !busy && !missingReason && !overflowInvalid
 
-  // Legacy fallback (only when the new overflow list isn't present).
+  // Legacy fallback (older runs without the overflow list): count-based reserve promote.
   const reserveAvailable = review.reserve_available || 0
   const legacyAddCount = Math.min(Math.max(0, target - outcomes.length), reserveAvailable)
   const canLegacyAdd = !busy && overflow === null && legacyAddCount > 0
@@ -148,18 +178,23 @@ function McqReviewGate({ review, busy, onDecide }) {
       return { id: o.id, verdict, comment: comment.trim() }
     })
     const rejected = toRegen.map((o) => ({ id: o.id, feedback: get(o.id).comment.trim() }))
-    onDecide({ action: rejected.length ? 'reject' : 'approve', rejected, lo_feedback })
-  }
-
-  function addSelected() {
-    onDecide({ action: 'add_more', add_ids: [...addSel] })
+    // Fold the overflow adds (+ strict-mode drops) INTO submit: one step, no separate button — the
+    // backend promotes then continues to generation (no re-pause).
+    onDecide({
+      action: rejected.length ? 'reject' : 'approve',
+      rejected,
+      lo_feedback,
+      add_ids: [...addSel],
+      removed_ids: strict ? [...removed] : [],
+    })
   }
 
   function legacyAddMore() {
     onDecide({ action: 'add_more', count: legacyAddCount })
   }
 
-  const listProps = { reviews, stateMap: state, onVerdict: setVerdict, onComment: setComment, busy }
+  const listProps = { reviews, stateMap: state, onVerdict: setVerdict, onComment: setComment, busy,
+                      removable: strict, removed, onToggleRemove: toggleRemove }
 
   return (
     <div className="mcq-review">
@@ -206,9 +241,11 @@ function McqReviewGate({ review, busy, onDecide }) {
               {overflow.length} distinct concept{overflow.length === 1 ? '' : 's'} didn’t fit the budget
             </span>
             <span className="mcq-overflow-sub">
-              These are taught concepts the {target}-outcome budget couldn’t cover — <b>not</b> Bloom
-              variants of ones already listed. Tick any to add as extra outcomes; adding raises the
-              question count beyond {target} (more questions = more cost). Leave all unticked to keep {target}.
+              These are taught concepts the {ceiling}-outcome budget couldn’t cover — <b>not</b> Bloom
+              variants of ones already listed.{' '}
+              {strict
+                ? <>Classroom Quiz is capped at {ceiling}: to add one, <b>untick a finalized outcome above</b> to free a slot (a swap). They’re applied when you Submit.</>
+                : <>Tick any to add — they’re included when you <b>Submit</b>. Adding raises the question count beyond {ceiling} (more questions = more cost). Leave all unticked to keep {ceiling}.</>}
             </span>
           </div>
           <ul className="mcq-overflow-list">
@@ -216,8 +253,10 @@ function McqReviewGate({ review, busy, onDecide }) {
               const on = addSel.has(r.id)
               return (
                 <li key={r.id} className={`mcq-overflow-item ${on ? 'on' : ''}`}>
-                  <label className="mcq-overflow-check">
-                    <input type="checkbox" checked={on} disabled={busy} onChange={() => toggleAdd(r.id)} />
+                  <label className="mcq-overflow-check"
+                    title={!on && atAddCap ? `Drop a finalized outcome first (cap ${ceiling})` : undefined}>
+                    <input type="checkbox" checked={on} disabled={busy || (!on && atAddCap)}
+                      onChange={() => toggleAdd(r.id)} />
                   </label>
                   <div className="mcq-overflow-main">
                     <div className="mcq-overflow-title-row">
@@ -234,14 +273,16 @@ function McqReviewGate({ review, busy, onDecide }) {
             })}
           </ul>
           <div className="mcq-overflow-foot">
-            <span className={`mcq-badge ${addSel.size ? 'ok' : ''}`}>
-              {outcomes.length} + {addSel.size} = {outcomes.length + addSel.size} outcomes
+            <span className={`mcq-badge ${overflowInvalid ? 'warn' : (addSel.size ? 'ok' : '')}`}>
+              {strict
+                ? `${keptCount} kept + ${addSel.size} added = ${keptCount + addSel.size} / ${ceiling}`
+                : `${outcomes.length} + ${addSel.size} = ${outcomes.length + addSel.size} outcomes`}
             </span>
-            <button type="button" className="btn btn-soft" disabled={!canAddSelected} onClick={addSelected}
-              title={canAddSelected ? 'Add the ticked distinct outcomes, then review the expanded set'
-                : 'Tick one or more concepts above to add them'}>
-              <Plus size={14} /> {`Add ${addSel.size} selected`}
-            </button>
+            {overflowInvalid ? (
+              <span className="mcq-overflow-why">Over the {ceiling} cap — untick a finalized outcome to add this many.</span>
+            ) : addSel.size > 0 ? (
+              <span className="mcq-overflow-why">Applied when you Submit ↓</span>
+            ) : null}
           </div>
         </div>
       )}
@@ -267,6 +308,10 @@ function McqReviewGate({ review, busy, onDecide }) {
         >
           {toRegen.length ? (
             <><RotateCcw size={14} /> {`Submit — regenerate ${toRegen.length} & continue`}</>
+          ) : addSel.size ? (
+            <><ThumbsUp size={14} /> {strict
+              ? `Submit — swap in ${addSel.size} & continue`
+              : `Submit — add ${addSel.size} & generate ${outcomes.length + addSel.size}`}</>
           ) : (
             <><ThumbsUp size={14} /> Submit review & continue</>
           )}
