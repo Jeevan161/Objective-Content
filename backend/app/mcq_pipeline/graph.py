@@ -191,6 +191,13 @@ def review_outcomes(state, config) -> dict:
         return {}
     prog = _prog(config)
     prog.start("review_outcomes", detail="awaiting human review")
+    # Re-entry after an approve-with-adds: we already promoted the chosen overflow outcomes on the
+    # way back here (add_then_continue), so DON'T re-pause — continue straight to generation. This
+    # makes "tick overflow + Submit" a single step (no separate button, no second approval).
+    if (state.get("gate_decision") or {}).get("action") == "add_then_continue":
+        prog.done("review_outcomes", detail="approved with added outcomes")
+        return {"gate_decision": {"gate": "outcomes", "action": "approve", "rejected_ids": []},
+                "notes": ["Gate approve (after add)"]}
     # The gate now runs AFTER sequence_outcomes, so present the outcomes in the
     # basic→advanced order the questions will follow (clearer to review). final_los[*].outcome
     # == outcomes[*].id; any id missing from the sequence falls to the end, order preserved.
@@ -215,6 +222,11 @@ def review_outcomes(state, config) -> dict:
                           "target": target,
                           "overflow": overflow,
                           "overflow_count": len(overflow),
+                          # Classroom Quiz has a HARD ceiling (lo_budget): adding an overflow LO must
+                          # SWAP out a finalized one, never grow the set. MCQ (lo_budget None) may
+                          # grow past the target as a conscious opt-in.
+                          "strict_budget": lo_budget is not None,
+                          "ceiling": target,
                           "reserve_available": len(state.get("backfill_pool") or [])})
     decision = decision if isinstance(decision, dict) else {"action": "approve"}
     action = decision.get("action", "approve")
@@ -237,6 +249,20 @@ def review_outcomes(state, config) -> dict:
         note = decision.get("note", "")
         rejected_items = [{"id": rid, "feedback": note} for rid in decision["rejected_ids"]]
     rejected_ids = [r.get("id") for r in rejected_items if r.get("id")]
+
+    # Fold-into-submit: an approve that ALSO carries overflow adds (add_ids) — and, for the strict
+    # Classroom-Quiz budget, finalized outcomes the reviewer dropped to make room (removed_ids).
+    # Promote/drop, then CONTINUE to generation (route → promote_outcomes → re-enter gate → continue),
+    # so ticking overflow + Submit is one step. Regeneration takes precedence when present.
+    add_ids = [i for i in (decision.get("add_ids") or []) if i]
+    removed_ids = [i for i in (decision.get("removed_ids") or []) if i]
+    if action != "reject" and (add_ids or removed_ids) and not rejected_ids:
+        prog.done("review_outcomes", detail=f"approve + add {len(add_ids)}"
+                  + (f", drop {len(removed_ids)}" if removed_ids else ""))
+        return {"gate_decision": {"gate": "outcomes", "action": "add_then_continue",
+                                  "add_ids": add_ids, "removed_ids": removed_ids},
+                "notes": [f"Gate approve + added {len(add_ids)}"
+                          + (f", removed {len(removed_ids)}" if removed_ids else "")]}
 
     prog.done("review_outcomes",
               detail=f"human {action}" + (f", {len(rejected_ids)} to regenerate" if rejected_ids else ""))
@@ -288,12 +314,22 @@ def promote_outcomes(state, config) -> dict:
     prog.start("promote_outcomes")
     d = state.get("gate_decision") or {}
     add_ids = [i for i in (d.get("add_ids") or []) if i]
+    removed_ids = set(d.get("removed_ids") or [])
     n = max(0, int(d.get("add_count") or 0))
     pool = list(state.get("backfill_pool") or [])
-    current = list(state.get("outcomes") or [])
-    if not pool or (not add_ids and n <= 0):
+    # For a Classroom-Quiz SWAP, first drop the finalized outcomes the reviewer removed to free slots.
+    all_current = list(state.get("outcomes") or [])
+    current = [o for o in all_current if o.get("id") not in removed_ids]
+    dropped_n = len(all_current) - len(current)
+    if not add_ids and n <= 0:                 # pure removal (or nothing) — persist the drop, if any
+        if dropped_n:
+            prog.done("promote_outcomes", detail=f"dropped {dropped_n} outcome(s)")
+            return {"outcomes": current, "notes": [f"Dropped {dropped_n} outcome(s) at the gate"]}
         prog.done("promote_outcomes", detail="nothing to promote")
         return {}
+    if not pool:
+        prog.done("promote_outcomes", detail="no reserve to promote")
+        return {"outcomes": current} if dropped_n else {}
     have_ids = {o.get("id") for o in current}
     have_pairs = {(o.get("concept_id"), o.get("bloom_level")) for o in current}
     take = []
@@ -327,24 +363,72 @@ def promote_outcomes(state, config) -> dict:
             have_pairs.add(pair)
             if len(take) >= n:
                 break
+    # Strict Classroom-Quiz ceiling: after any swap, never exceed lo_budget (grow only into freed slots).
+    ceiling = getattr(run_ctx(config), "lo_budget", None)
+    if ceiling is not None:
+        take = take[:max(0, int(ceiling) - len(current))]
     if not take:
+        if dropped_n:
+            prog.done("promote_outcomes", detail=f"dropped {dropped_n} outcome(s)")
+            return {"outcomes": current, "notes": [f"Dropped {dropped_n} outcome(s) at the gate"]}
         prog.done("promote_outcomes", detail="no distinct reserve outcomes left")
         return {}
     take_ids = {t.get("id") for t in take}
-    prog.done("promote_outcomes", detail=f"promoted {len(take)} reserve outcome(s)")
+    prog.done("promote_outcomes", detail=f"promoted {len(take)} reserve outcome(s)"
+              + (f", dropped {dropped_n}" if dropped_n else ""))
     return {"outcomes": current + take,
             "backfill_pool": [o for o in pool if o.get("id") not in take_ids],
             "last_regenerated_ids": list(take_ids),   # highlight the newly-added ones at the gate
             "notes": [f"Promoted {len(take)} reserve outcome(s) at the gate"]}
 
 
+def fill_coverage(state, config) -> dict:
+    """Before the gate: if selection landed BELOW the requested budget (an outcome dropped in the
+    validate/repair loop, or the budget wasn't fully spent on distinct concepts), backfill from the
+    reserve with DISTINCT uncovered concepts up to the budget — so the reviewer sees the full budget
+    covered by distinct concepts instead of a short set with Bloom-restacks while distinct concepts
+    sit unused. No LLM (the reserve was already authored); runs once, BEFORE finalize, so the added
+    outcomes flow through typing + the gate normally."""
+    ctx = run_ctx(config)
+    lo_budget = getattr(ctx, "lo_budget", None)
+    target = int(lo_budget) if lo_budget is not None else int(getattr(ctx, "question_budget", None) or 20)
+    current = list(state.get("outcomes") or [])
+    need = target - len(current)
+    if need <= 0:
+        return {}
+    overflow = _distinct_overflow(state)                     # distinct uncovered, richest-first
+    if not overflow:
+        return {}
+    by_id = {o.get("id"): o for o in (state.get("backfill_pool") or [])}
+    have_pairs = {(o.get("concept_id"), o.get("bloom_level")) for o in current}
+    take = []
+    for row in overflow:
+        if len(take) >= need:
+            break
+        o = by_id.get(row["id"])
+        if o is None:
+            continue
+        pair = (o.get("concept_id"), o.get("bloom_level"))
+        if pair in have_pairs:
+            continue
+        take.append(o)
+        have_pairs.add(pair)
+    if not take:
+        return {}
+    take_ids = {t.get("id") for t in take}
+    return {"outcomes": current + take,
+            "backfill_pool": [o for o in (state.get("backfill_pool") or []) if o.get("id") not in take_ids],
+            "notes": [f"Auto-filled {len(take)} distinct outcome(s) toward budget {target}"]}
+
+
 def route_after_outcomes(state) -> str:
     """approve / inert → continue to questions ; per-LO reject → repair (regenerate the rejected
-    LOs) ; add_more → promote reserve outcomes, then re-sequence and re-pause at the gate."""
+    LOs) ; add_more → promote reserve, re-sequence, re-pause at the gate ; add_then_continue →
+    promote (+swap) then CONTINUE to generation (the re-entered gate detects it and doesn't pause)."""
     d = state.get("gate_decision") or {}
     if d.get("gate") == "outcomes":
-        if d.get("action") == "add_more":
-            return "add_more"
+        if d.get("action") in ("add_more", "add_then_continue"):
+            return "add_more"          # both go to promote_outcomes; re-entry behaviour differs by action
         if d.get("action") == "reject" and d.get("rejected_ids"):
             return "repair"
     return "continue"
@@ -409,6 +493,7 @@ def build_lo_graph(*, checkpointer=None):
     g.add_node("repair", repair)
     g.add_node("review_outcomes", review_outcomes)        # HITL Gate 2 (inert unless hitl_enabled)
     g.add_node("promote_outcomes", promote_outcomes)       # gate "add more" → promote reserve LOs
+    g.add_node("fill_coverage", fill_coverage)             # auto-fill budget with distinct concepts
     g.add_node("finalize", finalize)
     g.add_node("lo_to_legacy", lo_to_legacy)
     g.add_node("sequence_outcomes", sequence_outcomes)
@@ -426,8 +511,9 @@ def build_lo_graph(*, checkpointer=None):
     g.add_edge("select_outcomes", "resolve_prerequisites")  # Gate 1 (division review) removed
     g.add_edge("resolve_prerequisites", "review_and_validate")
     g.add_conditional_edges("review_and_validate", route_after_validate,
-                            {"repair": "repair", "finalize": "finalize"})
+                            {"repair": "repair", "finalize": "fill_coverage"})
     g.add_edge("repair", "resolve_prerequisites")
+    g.add_edge("fill_coverage", "finalize")   # top up to budget with distinct concepts, then freeze
     g.add_edge("finalize", "lo_to_legacy")
     g.add_edge("lo_to_legacy", "sequence_outcomes")
     # Recommend question types BEFORE the gate so each LO shows its type while being reviewed;

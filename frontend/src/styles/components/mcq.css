@@ -1124,6 +1124,12 @@
 .mcq-overflow-why { color: var(--text-3); font-style: italic; }
 .mcq-overflow-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); flex-wrap: wrap; }
 
+/* CQ swap: a keep/drop toggle on finalized outcomes; a dropped row dims to just its header. */
+.mcq-lo-keep { display: inline-flex; align-items: center; padding-right: 2px; }
+.mcq-lo-keep input[type='checkbox'] { accent-color: var(--brand); cursor: pointer; width: 15px; height: 15px; }
+.mcq-lo-item.removed { opacity: 0.55; }
+.mcq-lo-item.removed .mcq-lo-desc { text-decoration: line-through; }
+
 /* Two-column review after a regeneration round: left = regenerated, right = kept. */
 .mcq-review-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
 .mcq-review-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
