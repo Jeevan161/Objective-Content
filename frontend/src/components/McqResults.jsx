@@ -968,6 +968,9 @@ function McqResults({ run, mode = "view", canLoad = true, courseId, unitId, onTr
           {run?.version != null && (
             <span className="mcq-status-chip" title="Generation version for this session">v{run.version}</span>
           )}
+          {run?.created_by_name && (
+            <span className="mcq-status-chip" title="Prepared by">by {run.created_by_name}</span>
+          )}
           {status && (
             <span className={`mcq-status-chip ${status === 'FROZEN' ? 'ok' : 'warn'}`}>
               {status === 'FROZEN' ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />} {status}
