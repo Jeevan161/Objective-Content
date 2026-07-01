@@ -636,6 +636,7 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
     decision = {"action": action, "rejected": body.rejected or [],
                 "rejected_ids": body.rejected_ids or [], "note": body.note or "",
                 "lo_feedback": body.lo_feedback or [], "count": max(0, int(body.count or 0)),
+                "add_ids": [i for i in (body.add_ids or []) if isinstance(i, str) and i.strip()],
                 "reviewer": _reviewer_name(user)}
     prereq_unit_ids = body.prerequisite_unit_ids
     if prereq_unit_ids is not None:

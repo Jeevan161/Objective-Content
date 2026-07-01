@@ -112,6 +112,9 @@ class McqReviewRequest(BaseModel):
     action: str = "approve"                       # "approve" | "reject" | "add_more"
     # action='add_more': how many already-authored reserve LOs to promote toward the target count.
     count: int = 0
+    # action='add_more': the SPECIFIC overflow outcome ids the reviewer chose to add (distinct
+    # uncovered concepts surfaced at the gate). Takes precedence over `count` when present.
+    add_ids: list[str] | None = None
     # Per-LO reject + reason: [{"id", "feedback"}]. Each reason drives that LO's regeneration.
     rejected: list[dict] | None = None
     rejected_ids: list[str] | None = None         # legacy: ids only (reason falls back to `note`)
