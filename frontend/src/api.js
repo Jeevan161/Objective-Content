@@ -280,8 +280,9 @@ export const listLoads = (limit = 100) => request(`/courses/mcq/loads/?limit=${l
 export const getLoad = (loadId) => request(`/courses/mcq/loads/${loadId}/`)
 
 // --- MCQ pipeline & prompts (admin) ---
-// The ordered pipeline stages, each with the prompts that drive it.
-export const getMcqPipeline = () => request('/mcq/pipeline/')
+// The ordered pipeline stages for a family ('mcq' | 'cq'), each with the prompts that drive it.
+export const getMcqPipeline = (family = 'mcq') =>
+  request(`/mcq/pipeline/?family=${encodeURIComponent(family)}`)
 
 // Save a new active version of a prompt (the pipeline picks it up immediately).
 export const updateMcqPrompt = (key, content, description) =>

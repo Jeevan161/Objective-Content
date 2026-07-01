@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, ChevronRight, Layers, Ban } from 'lucide-react'
+import { Presentation, Sparkles, Play, RefreshCw, FileText, AlertTriangle, Layers, Ban, ArrowLeft, X, ClipboardCheck } from 'lucide-react'
 import {
   classroomQuizIngest,
   classroomQuizListDecks,
@@ -71,16 +71,6 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
   }, [scope.run_id])
 
   useEffect(() => { loadRun() }, [loadRun])
-
-  // While base questions are still awaiting approval (no variants yet), open the review
-  // section by default so the gate is visible on the generation page.
-  useEffect(() => {
-    const qs = run?.result?.questions || []
-    const pending = qs.some((q) => !q.is_variant && q.status === 'generated'
-      && !q.excluded && q.approval !== 'approved')
-    if (run && !qs.some((q) => q.is_variant) && pending) setOpen(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run?.id])
 
   // Phase-1 (base generation) progress stream.
   useEffect(() => {
@@ -267,26 +257,12 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
           )}
 
           {showBaseReview ? (
-            <>
-              <button className="cq-link" onClick={() => setOpen((o) => !o)}>
-                <ChevronRight size={14} className={`cq-chev ${open ? 'open' : ''}`} />
-                {open ? 'Hide' : 'Review'} base questions
-              </button>
-              {open && (loadingRun
-                ? <div className="cq-run-loading"><Spinner /></div>
-                : run && (
-                  <McqResults
-                    run={run}
-                    mode="review"
-                    reviewScope="base"
-                    canLoad={false}
-                    courseId={run.course_id}
-                    unitId={run.unit_id}
-                    onMutate={refreshRun}
-                    readingMaterial={run.result?.reading_material || run.reading_material || ''}
-                  />
-                ))}
-            </>
+            <button className="cq-btn cq-btn-sm cq-review-open" onClick={() => setOpen(true)}>
+              <ClipboardCheck size={15} /> Review base questions
+              {pendingBases.length > 0 && (
+                <span className="cq-review-pending">{pendingBases.length} to review</span>
+              )}
+            </button>
           ) : (
             <span className="cq-scope-hint">
               {hasVariants
@@ -296,11 +272,72 @@ function ScopeCard({ scope, job, onJobUpdate, onSettled }) {
           )}
         </div>
       )}
+
+      {open && (
+        <CqReviewSheet
+          scope={scope}
+          run={run}
+          counts={counts}
+          coverage={scope.coverage}
+          loadingRun={loadingRun}
+          onClose={() => setOpen(false)}
+          onMutate={refreshRun}
+        />
+      )}
     </div>
   )
 }
 
-export default function ClassroomQuizPage() {
+// Full-width, focused workspace for reviewing a scope's BASE questions. Rendered as an overlay
+// (not a page swap) so sibling scopes keep streaming their generation progress underneath. Gives
+// McqResults the room its questions|reading split-pane layout needs — the cramped scope-card
+// column couldn't. Esc / backdrop / the close button all dismiss it.
+function CqReviewSheet({ scope, run, counts, coverage, loadingRun, onClose, onMutate }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'   // lock the page scroll behind the sheet
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev }
+  }, [onClose])
+
+  return (
+    <div className="cq-review-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="cq-review-sheet" role="dialog" aria-modal="true"
+        aria-label={`Review base questions — Quiz ${scope.scope_no}`}>
+        <div className="cq-review-sheet-head">
+          <div className="cq-review-sheet-title">
+            <span className="cq-scope-no">Quiz {scope.scope_no}</span>
+            <span className="cq-review-sheet-sub">Review &amp; approve base questions</span>
+            {counts && <span className="cq-scope-counts">{counts}</span>}
+            {coverage && <CoverageBadge coverage={coverage} />}
+          </div>
+          <button className="cq-icon-btn cq-review-close" onClick={onClose} aria-label="Close review">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="cq-review-sheet-body">
+          {loadingRun || !run ? (
+            <div className="cq-run-loading"><Spinner /></div>
+          ) : (
+            <McqResults
+              run={run}
+              mode="review"
+              reviewScope="base"
+              canLoad={false}
+              courseId={run.course_id}
+              unitId={run.unit_id}
+              onMutate={onMutate}
+              readingMaterial={run.result?.reading_material || run.reading_material || ''}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function ClassroomQuizPage({ onBack }) {
   const toast = useToast()
   const [decks, setDecks] = useState([])
   const [loading, setLoading] = useState(true)
@@ -375,6 +412,12 @@ export default function ClassroomQuizPage() {
   return (
     <div className="cq-page">
       <header className="cq-header">
+        {onBack && (
+          <button type="button" className="cq-btn cq-btn-ghost cq-btn-sm cq-back" onClick={onBack}
+            data-tip="Back to Generation Studio">
+            <ArrowLeft size={14} /> Studio
+          </button>
+        )}
         <div className="cq-header-icon"><Presentation size={20} /></div>
         <div>
           <h1>Classroom Quiz</h1>

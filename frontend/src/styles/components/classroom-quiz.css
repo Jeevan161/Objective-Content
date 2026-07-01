@@ -233,7 +233,84 @@
 }
 .qc-variant-meta { color: var(--text-3); font-weight: 500; }
 
+/* Back-to-studio button pins to the far left of the header. */
+.cq-back { margin-right: var(--sp-1); }
+
+/* "Review base questions" trigger + its pending-count pill. */
+.cq-review-open { gap: var(--sp-2); }
+.cq-review-pending {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* --- Base-question review sheet (full-width focused overlay) --- */
+.cq-review-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(3px);
+  animation: cq-review-fade var(--t-fast) ease;
+}
+@keyframes cq-review-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.cq-review-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(1280px, 100%);
+  height: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.cq-review-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+.cq-review-sheet-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.cq-review-sheet-sub { color: var(--text-2); font-size: var(--fs-sm); font-weight: 500; }
+
+.cq-review-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4);
+  overflow: hidden;   /* McqResults' split-pane scrolls internally */
+}
+/* Let the split fill the sheet exactly instead of its default viewport-based cap. */
+.cq-review-sheet-body .mcq-results-split:not(.no-reading) {
+  max-height: 100%;
+  height: 100%;
+}
+
 @media (max-width: 860px) {
   .cq-body { grid-template-columns: 1fr; }
   .cq-decklist { position: static; flex-direction: row; flex-wrap: wrap; }
+  .cq-review-overlay { padding: 0; }
+  .cq-review-sheet { border-radius: 0; border: none; }
 }

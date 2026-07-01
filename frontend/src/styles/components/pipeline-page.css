@@ -16,6 +16,39 @@
   color: var(--text);
 }
 
+/* --- Family tabs (MCQ Pipeline / Classroom Quiz Pipeline) --- */
+.pipeline-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: 4px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.pipeline-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-md);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.pipeline-tab:hover { color: var(--text); }
+.pipeline-tab.active {
+  background: var(--bg-raised);
+  color: var(--brand);
+  box-shadow: var(--shadow-sm);
+}
+
 .pipeline-layout {
   display: grid;
   grid-template-columns: 320px 1fr;
