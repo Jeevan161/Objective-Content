@@ -111,12 +111,15 @@ def build_inventory(outcomes: list, groups: list, sec_text: dict) -> tuple[list,
                      "evidence": {"quote": (quote or ev_quote), "section": topic_id},
                      "depth_category": dc, "depth_why": why,
                      "taught_depth": dc, "explained": dc in ("moderate", "deep")}
-            if not in_scope:
+            # Loosen the scope filter: drop ONLY truly not-assessable content — depth "named"
+            # (listed with no definition/explanation anywhere). Content explained at
+            # mention/moderate/deep is KEPT in-scope even when the session-focus judged it
+            # "incidental", because a hard incidental drop was deleting genuinely-taught sections
+            # (e.g. requirements.txt, HTTP, status codes) before selection ever saw them. Weight-
+            # ranked breadth-first selection then deprioritizes shallow/peripheral concepts instead.
+            if dc == "named":
                 entry["in_scope"] = False
-                entry["out_of_scope_reason"] = "named in passing; not taught in course scope (external)"
-            elif DROP_NAMED_ONLY and dc == "named":
-                entry["in_scope"] = False
-                entry["out_of_scope_reason"] = "named in passing; no definition or explanation in the reading"
+                entry["out_of_scope_reason"] = "named-only; no definition or explanation in the reading"
             inv[cid] = entry
         else:
             for q in (ev_quote, quote):
@@ -202,17 +205,16 @@ def _quantize_budget(requested: int, capacity: int, n_concepts: int,
 
 def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | None = None,
             risky_ids: frozenset = frozenset()) -> list:
-    """Coverage-first selection toward `budget`. (a) one outcome per BROAD concept at its top
-    non-scenario tier (heaviest concept first; prereq-safe broken ties); (a2) reserve up to
-    SCENARIO_TARGET scenario outcomes (prereq-safe first); (b) fill remaining slots PREREQ-SAFE
-    first, then the agent's PREFERRED order (phase-3 proposal), then by weight — deduping
-    `(concept_id, Bloom)` pairs. `risky_ids` = apply/scenario candidates whose DAG prereq closure
-    has an out-of-scope (non-assumed) concept — they MAY fail coverage in resolve_prerequisites, so
-    we prefer safe ones for the extra slots to avoid the select→downgrade churn (coverage stays
-    tier-optimal; this only steers the extras)."""
-    by_parent: dict = defaultdict(list)
+    """BREADTH-FIRST coverage toward `budget`. (a) one outcome per DISTINCT concept (concept_id) at
+    its top non-scenario tier, heaviest concept first — so EVERY distinct in-scope concept is covered
+    before any Bloom-restack, up to the budget (this is the fix for surfacing ~20 distinct concepts
+    instead of restacking ~15). (a2) reserve up to SCENARIO_TARGET scenario outcomes; (b) fill any
+    leftover budget (only when there are fewer distinct concepts than the budget) PREREQ-SAFE first,
+    then the agent's PREFERRED order, then by weight — deduping `(concept_id, Bloom)` pairs.
+    `parent_of` is retained for signature compatibility (coverage is now per concept, not per parent)."""
+    by_concept: dict = defaultdict(list)
     for o in candidates:
-        by_parent[parent_of.get(o["concept_id"], o["concept_id"])].append(o)
+        by_concept[o["concept_id"]].append(o)
     selected, picked_ids, picked_pairs = [], set(), set()
 
     def take(o):
@@ -220,13 +222,34 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
         picked_ids.add(o["id"])
         picked_pairs.add((o["concept_id"], o["bloom_level"]))
 
-    def _group_weight(item):
-        return max((o.get("weight", 0) for o in item[1]), default=0)
-    for parent, group in sorted(by_parent.items(), key=_group_weight, reverse=True):
+    def _concept_weight(group):
+        return max((o.get("weight", 0) for o in group), default=0)
+
+    def _best(group):
         non_scenario = [o for o in group if o["bloom_level"] != "scenario"] or group
         # tier-optimal for the guaranteed slot; among the same tier, prefer a prereq-safe outcome.
-        take(max(non_scenario, key=lambda o: (_RANK[o["bloom_level"]],
-                                              o["id"] not in risky_ids, o.get("weight", 0))))
+        return max(non_scenario, key=lambda o: (_RANK[o["bloom_level"]],
+                                                o["id"] not in risky_ids, o.get("weight", 0)))
+
+    # (a0) BROAD-CONCEPT COVERAGE FLOOR: guarantee at least one outcome per distinct BROAD concept
+    # (taught area), heaviest area first. This stops a rich area's many sub-concepts from starving a
+    # whole other area of its single slot — the "in-scope but never selected" area miss.
+    by_parent: dict = defaultdict(list)
+    for o in candidates:
+        by_parent[parent_of.get(o["concept_id"], o["concept_id"])].append(o)
+    for parent, group in sorted(by_parent.items(), key=lambda it: _concept_weight(it[1]), reverse=True):
+        if len(selected) >= budget:
+            break
+        take(_best(group))
+
+    # (a1) BREADTH: then one outcome per remaining distinct concept (heaviest first) — so within the
+    # covered areas every distinct sub-concept is surfaced before any Bloom-restack, up to the budget.
+    for cid, group in sorted(by_concept.items(), key=lambda it: _concept_weight(it[1]), reverse=True):
+        if len(selected) >= budget:
+            break
+        if any(o["concept_id"] == cid for o in selected):
+            continue
+        take(_best(group))
 
     # (a2) scenario targeting: a clamped candidate at "scenario" tier IS feasible (deep+procedural),
     # else _clamp_to_feasible would have downgraded it. Reserve up to SCENARIO_TARGET (prereq-safe
