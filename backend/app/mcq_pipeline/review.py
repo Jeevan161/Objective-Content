@@ -601,6 +601,11 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
                          "outcome": gen.get("outcome")}
             new_q = review_and_fix_one(effective_lo, retry_gen)
             new_q["self_check_retried"] = True
+    # Reconcile TYPE with the final answer SHAPE. The pre-review escalation ran on `gen`; a
+    # fix/self-check that ended up marking >1 option correct must become MORE_THAN_ONE_MULTIPLE_CHOICE
+    # — a MULTIPLE_CHOICE left with multiple correct options breaks the portal load (single-answer).
+    if new_q.get("question_type") == "MULTIPLE_CHOICE" and _is_multi_correct_shape(new_q.get("lean") or {}):
+        new_q["question_type"] = "MORE_THAN_ONE_MULTIPLE_CHOICE"
     if swap_lo is not None:
         new_q["lo_swap"] = {"from_outcome": outcome, "to_outcome": swap_lo.get("outcome"),
                             "from_concept": lo.get("concept"), "to_concept": swap_lo.get("concept")}
