@@ -101,6 +101,9 @@ function McqRunsPage({ courses }) {
                   </div>
                   <div className="runs-item-sub">
                     <span className="course-badge" title="Course">{nameOf[r.course_id] || r.course_id}</span>
+                    {r.created_by_name && (
+                      <span className="course-badge" title="Prepared by">by {r.created_by_name}</span>
+                    )}
                   </div>
                   <div className="runs-item-stats">
                     <span>{r.lo_count} LOs</span>

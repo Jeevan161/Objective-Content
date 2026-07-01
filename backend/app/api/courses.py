@@ -969,6 +969,16 @@ def _loaded_run_ids(session: Session, run_ids: list) -> set:
     return {r[0] for r in rows}
 
 
+def _creator_names(session: Session, user_ids: list) -> dict:
+    """Map each creator user_id -> display name (name or email) for the 'created by' tag.
+    One query; ignores None ids and missing users."""
+    ids = {u for u in user_ids if u}
+    if not ids:
+        return {}
+    return {u.id: ((u.name or "").strip() or u.email)
+            for u in session.scalars(select(User).where(User.id.in_(ids))).all()}
+
+
 @router.get("/courses/mcq/runs/")
 def list_mcq_runs(
     course_id: str | None = None, unit_id: str | None = None, limit: int = 10,
@@ -976,11 +986,25 @@ def list_mcq_runs(
     user: User = Depends(require_active),
 ) -> list[dict]:
     """Recent MCQ runs (summaries, no full result), newest first; optionally scoped
-    to a course/session. Scoped to the current user's own runs (admins see all)."""
+    to a course/session. Scoped to the courses the user can ACCESS (owner, collaborator,
+    or admin) — NOT to who created the run, so every collaborator sees the course's practices."""
     stmt = select(McqRun).order_by(McqRun.created_at.desc()).limit(max(1, min(limit, 50)))
     if user.role != User.ROLE_ADMIN:
-        stmt = stmt.where(McqRun.created_by == user.id)
+        all_c = set(session.scalars(select(Course.course_id)).all())
+        if all_c:   # gate by course access; runs whose course row is gone are treated as open
+            owned = set(session.scalars(
+                select(Course.course_id).where(Course.created_by == user.id)).all())
+            collab = set(session.scalars(
+                select(CourseCollaborator.course_id).where(CourseCollaborator.user_id == user.id)).all())
+            open_c = set(session.scalars(
+                select(Course.course_id).where(Course.created_by.is_(None))).all())
+            accessible = owned | collab | open_c
+            stmt = stmt.where(or_(
+                McqRun.course_id.in_(accessible or {"__none__"}),
+                McqRun.course_id.not_in(all_c),
+            ))
     if course_id:
+        _require_course_access(session, course_id, user)
         stmt = stmt.where(McqRun.course_id == course_id)
     else:
         # The unscoped listing (Review Queue) shows portal MCQ runs, PLUS Classroom-Quiz runs
@@ -1006,10 +1030,12 @@ def list_mcq_runs(
             nmap[(c, t)] = n
     loaded_ids = _loaded_run_ids(session, [r.id for r in runs])
     unames = _unit_names(session, [r.unit_id for r in runs])
+    cnames = _creator_names(session, [r.created_by for r in runs])
     return [serialize_mcq_run(r, include_result=False,
                               topic_name=nmap.get((r.course_id, r.topic_id), ""),
                               unit_name=unames.get(r.unit_id, ""),
-                              loaded=r.id in loaded_ids)
+                              loaded=r.id in loaded_ids,
+                              created_by_name=cnames.get(r.created_by, ""))
             for r in runs]
 
 
@@ -1019,17 +1045,18 @@ def get_mcq_run(run_id: uuid.UUID, session: Session = Depends(get_session),
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
-    # A user may only open their own runs (admins see all). 404 (not 403) so a run's
-    # existence isn't leaked across users.
-    if (run.created_by is not None and run.created_by != user.id
-            and user.role != User.ROLE_ADMIN):
+    # A run belongs to the COURSE, not its creator: anyone with access to the course (owner,
+    # collaborator, or admin) may open it — regardless of who prepared the practice. 404 (not
+    # 403) so a run's existence isn't leaked to users without access to its course.
+    if not _user_can_access_course(session, run.course_id, user):
         raise HTTPException(status_code=404, detail="MCQ run not found.")
     tname = (session.scalar(select(Topic.topic_name).where(
                  Topic.course_id == run.course_id, Topic.topic_id == run.topic_id))
              if run.topic_id else "") or ""
     loaded = bool(_loaded_run_ids(session, [run.id]))
     uname = _unit_names(session, [run.unit_id]).get(run.unit_id, "")
-    return serialize_mcq_run(run, topic_name=tname, unit_name=uname, loaded=loaded)
+    return serialize_mcq_run(run, topic_name=tname, unit_name=uname, loaded=loaded,
+                             created_by_name=_creator_names(session, [run.created_by]).get(run.created_by, ""))
 
 
 @router.post("/courses/mcq/runs/{run_id}/export-beta/", status_code=status.HTTP_202_ACCEPTED)
@@ -1189,8 +1216,10 @@ def submit_mcq_feedback(run_id: uuid.UUID, outcome: str,
                         body: QuestionFeedbackRequest,
                         session: Session = Depends(get_session),
                         user: User = Depends(require_active)) -> dict:
-    if session.get(McqRun, run_id) is None:
+    run = session.get(McqRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_course_access(session, run.course_id, user)
     from app.mcq_pipeline.review import record_feedback
     return record_feedback(run_id, outcome, action=body.action, tags=body.tags,
                            comment=body.comment, reviewer=_reviewer_name(user))
@@ -1203,8 +1232,10 @@ def set_mcq_question_approval(run_id: uuid.UUID, outcome: str,
                              user: User = Depends(require_active)) -> dict:
     """Set a human approval decision (approved / rejected / pending) on one question.
     Drives the per-question count that gates loading."""
-    if session.get(McqRun, run_id) is None:
+    run = session.get(McqRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_course_access(session, run.course_id, user)
     from app.mcq_pipeline.review import set_question_approval
     try:
         return set_question_approval(run_id, outcome, body.approval, reviewer=_reviewer_name(user))
@@ -1219,8 +1250,10 @@ def set_mcq_question_exclusion(run_id: uuid.UUID, outcome: str,
                               user: User = Depends(require_active)) -> dict:
     """Exclude a question from export/load (or include it again). It stays in the run,
     shaded out, but drops from the approval tally and is never loaded."""
-    if session.get(McqRun, run_id) is None:
+    run = session.get(McqRun, run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_course_access(session, run.course_id, user)
     from app.mcq_pipeline.review import set_question_exclusion
     try:
         return set_question_exclusion(run_id, outcome, body.excluded,
@@ -1236,6 +1269,7 @@ def approve_mcq_run(run_id: uuid.UUID, body: ApproveRunRequest,
     run = session.get(McqRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="MCQ run not found.")
+    _require_course_access(session, run.course_id, user)
     # A run may be marked reviewed only when EVERY generated question is resolved —
     # approved or excluded (no pending). This gates Generate ZIP / Prepare & Load.
     generated = [q for q in (run.result or {}).get("questions") or [] if q.get("status") == "generated"]
