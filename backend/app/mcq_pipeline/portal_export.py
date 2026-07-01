@@ -280,6 +280,13 @@ def _convert(q: dict, lo: dict, n: int, course: str = ""):
     lean = q.get("lean") or {}
     key, tags, diff = _key(lo, q, n), _tags(lo, q, n, course), _difficulty(q, lo)
     if qt in ("MULTIPLE_CHOICE", "MORE_THAN_ONE_MULTIPLE_CHOICE"):
+        # Defensive: a MULTIPLE_CHOICE whose options ended up with >1 correct (e.g. a regeneration
+        # that marked extra options correct without flipping the type) is really multi-select —
+        # export it as MORE_THAN_ONE_MULTIPLE_CHOICE so the portal accepts it instead of choking on
+        # a single-answer question with multiple keys.
+        n_correct = sum(1 for o in (lean.get("options") or []) if isinstance(o, dict) and o.get("is_correct"))
+        if qt == "MULTIPLE_CHOICE" and n_correct > 1:
+            qt = "MORE_THAN_ONE_MULTIPLE_CHOICE"
         return _mcq(q, lean, key, tags, diff, qtype=qt)
     if qt == "TRUE_OR_FALSE":
         return _true_false(q, lean, key, tags, diff)
