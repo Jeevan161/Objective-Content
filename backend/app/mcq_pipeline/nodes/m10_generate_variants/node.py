@@ -44,29 +44,37 @@ _THEORY_ANGLES = {
         ("example", "MULTIPLE_CHOICE", "ask which option is a correct EXAMPLE/instance of it"),
         ("non_example", "MULTIPLE_CHOICE", "ask which option is NOT an example of it (odd-one-out)"),
         ("true_false_claim", "TRUE_OR_FALSE", "state the assertion as one claim to judge true/false"),
+        ("complete_statement", "MULTIPLE_CHOICE", "phrase the assertion as a sentence with the key term missing and ask which option COMPLETES it correctly"),
+        ("find_false", "MULTIPLE_CHOICE", "give four statements about it and ask which one is FALSE (only the assertion's contrary is false)"),
     ],
     "understand": [
         ("compare", "MULTIPLE_CHOICE", "ask how it DIFFERS from a closely related concept"),
         ("purpose", "MULTIPLE_CHOICE", "ask WHY it is used / what problem it solves"),
         ("misconception", "TRUE_OR_FALSE", "state a common MISCONCEPTION about it as a claim to judge"),
         ("classify", "MULTIPLE_CHOICE", "ask the learner to CLASSIFY which case it applies to"),
+        ("justify", "MULTIPLE_CHOICE", "state the assertion's conclusion and ask which option gives the correct REASON it holds"),
     ],
     "apply": [
         ("best_fit", "MULTIPLE_CHOICE", "give a short SCENARIO and ask which option correctly applies it"),
         ("predict", "MULTIPLE_CHOICE", "ask the learner to PREDICT the result of applying it"),
         ("choose_approach", "MULTIPLE_CHOICE", "ask which APPROACH correctly uses it for a stated goal"),
+        ("boundary", "MULTIPLE_CHOICE", "give a BOUNDARY/edge case and ask what correctly holds there"),
     ],
     "scenario": [
         ("diagnose", "MULTIPLE_CHOICE", "give a situation and ask the learner to DIAGNOSE using it"),
         ("recommend", "MULTIPLE_CHOICE", "ask which RECOMMENDATION correctly applies it in a novel situation"),
+        ("transfer", "MULTIPLE_CHOICE", "map the assertion onto a PARALLEL, unfamiliar situation and ask what correctly follows"),
     ],
 }
 _TIER_ORDER = ("remember", "understand", "apply", "scenario")
 
 # Format-axis catalog (TEXTUAL / CODE_ANALYSIS_TEXTUAL already excluded — exact-string-match types).
+# REARRANGE is procedural-only (gated in _eligible_format_types) — ordering a non-sequence assertion
+# would change what's tested, so it's offered only when the objective is judged procedural.
 _FORMAT_CATALOG = [
     "MULTIPLE_CHOICE", "TRUE_OR_FALSE", "MORE_THAN_ONE_MULTIPLE_CHOICE",
     "CODE_ANALYSIS_MULTIPLE_CHOICE", "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE", "FIB_CODING",
+    "REARRANGE",
 ]
 _CODE_TYPES = {"CODE_ANALYSIS_MULTIPLE_CHOICE", "CODE_ANALYSIS_MORE_THAN_ONE_MULTIPLE_CHOICE", "FIB_CODING"}
 
@@ -74,12 +82,16 @@ _CODE_TYPES = {"CODE_ANALYSIS_MULTIPLE_CHOICE", "CODE_ANALYSIS_MORE_THAN_ONE_MUL
 # --- small structured schemas for the two judgment calls -------------------- #
 class _Objective(BaseModel):
     assertion: str = Field(description="the single proposition/skill the correct answer proves")
+    discriminator: str = Field(default="", description="the fault line a wrong answer must cross")
     bloom_tier: str = Field(description="remember | understand | apply | scenario")
+    procedural: bool = Field(default=False, description="true only if the assertion is about step ORDER")
 
 
 class _Fidelity(BaseModel):
     same_objective: bool = Field(description="true only if the variant proves the SAME assertion")
-    reason: str = Field(default="", description="one short sentence")
+    answer_valid: bool = Field(default=True, description="true only if the marked answer is correct + well-posed")
+    distinct: bool = Field(default=True, description="true only if meaningfully different from accepted pool stems")
+    reason: str = Field(default="", description="one short sentence naming which check failed")
 
 
 def _judge_model():
@@ -104,7 +116,8 @@ def _angles_up_to(tier: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def _eligible_format_types(base_type: str, *, has_code: bool, is_sql: bool) -> list[str]:
+def _eligible_format_types(base_type: str, *, has_code: bool, is_sql: bool,
+                           is_procedural: bool) -> list[str]:
     out = []
     for t in _FORMAT_CATALOG:
         if t in EXCLUDED_QUESTION_TYPES or t == base_type:
@@ -113,12 +126,14 @@ def _eligible_format_types(base_type: str, *, has_code: bool, is_sql: bool) -> l
             continue
         if t == "FIB_CODING" and is_sql:           # SQL apply uses code-analysis, not FIB_CODING
             continue
+        if t == "REARRANGE" and not is_procedural:  # ordering only faithful for a sequence assertion
+            continue
         out.append(t)
     return out
 
 
 def _plan_specs(base_type: str, tier: str, *, has_code: bool, is_sql: bool,
-                max_n: int) -> list[dict]:
+                is_procedural: bool, max_n: int) -> list[dict]:
     """Diversity-first variant specs: interleave distinct theory angles and distinct format
     recasts so each cell is a different (angle × type) before any repeats. Capped with a small
     buffer over max_n to absorb dedup/fidelity drops."""
@@ -133,7 +148,8 @@ def _plan_specs(base_type: str, tier: str, *, has_code: bool, is_sql: bool,
 
     fmt = [{"axis": "format", "type": t, "angle": f"recast_as_{t.lower()}",
             "instruction": f"recast the SAME assertion as a {t} question"}
-           for t in _eligible_format_types(base_type, has_code=has_code, is_sql=is_sql)]
+           for t in _eligible_format_types(base_type, has_code=has_code, is_sql=is_sql,
+                                           is_procedural=is_procedural)]
 
     specs, i, j = [], 0, 0
     while (i < len(theory) or j < len(fmt)) and len(specs) < max_n + 3:
@@ -201,33 +217,41 @@ def derive_objective(base: dict) -> dict:
         ])
         assertion = (obj.assertion or "").strip()
         if assertion:
-            return {"assertion": assertion, "bloom_tier": _norm_tier(obj.bloom_tier)}
+            return {"assertion": assertion, "discriminator": (obj.discriminator or "").strip(),
+                    "bloom_tier": _norm_tier(obj.bloom_tier), "procedural": bool(obj.procedural)}
     except Exception:  # noqa: BLE001 — degrade to the stem rather than break variant generation
         pass
-    return {"assertion": _stem_of(base) or base.get("outcome", ""), "bloom_tier": "understand"}
+    return {"assertion": _stem_of(base) or base.get("outcome", ""), "discriminator": "",
+            "bloom_tier": "understand", "procedural": False}
 
 
-def _fidelity_ok(objective: dict, variant: dict) -> bool:
+def _fidelity_ok(objective: dict, variant: dict, accepted_stems: list[str] | None = None) -> bool:
+    """Gate a candidate into the random-pick pool: it must prove the SAME assertion, be correctly
+    keyed/well-posed, AND be distinct from the stems already accepted. Degrades to accept only on an
+    infra failure (never silently drop a good variant), but a decisive `false` on any check rejects."""
     lean = variant.get("lean") or {}
     qtype = variant.get("question_type", "")
-    payload = (f"ASSERTION (the invariant): {objective.get('assertion', '')}\n\n"
-               f"VARIANT TYPE: {qtype}\nVARIANT STEM: {_stem_of(variant)}\n"
-               f"VARIANT CORRECT ANSWER: {_correct_of(lean, qtype)}\n"
-               f"VARIANT EXPLANATION: {lean.get('explanation', '')}")
+    pool = "\n".join(f"- {s}" for s in (accepted_stems or [])) or "(none yet — this is the first)"
+    payload = (f"ASSERTION (the invariant): {objective.get('assertion', '')}\n"
+               f"DISCRIMINATOR (the fault line): {objective.get('discriminator', '') or '(unspecified)'}\n\n"
+               f"ALREADY-ACCEPTED POOL STEMS:\n{pool}\n\n"
+               f"CANDIDATE VARIANT TYPE: {qtype}\nCANDIDATE STEM: {_stem_of(variant)}\n"
+               f"CANDIDATE CORRECT ANSWER: {_correct_of(lean, qtype)}\n"
+               f"CANDIDATE EXPLANATION: {lean.get('explanation', '')}")
     try:
         verdict: _Fidelity = _judge_model().with_structured_output(_Fidelity).invoke([
             {"role": "system", "content": get_prompt("cq.variants.fidelity", _FIDELITY_SYS)},
             {"role": "user", "content": payload},
         ])
-        return bool(verdict.same_objective)
+        return bool(verdict.same_objective and verdict.answer_valid and verdict.distinct)
     except Exception:  # noqa: BLE001 — an infra failure shouldn't silently discard a good variant
         return True
 
 
 def _make_variant(spec: dict, lo: dict, objective: dict, base_key: str, idx: int) -> dict | None:
     directive = get_prompt("cq.variants.directive", _DIRECTIVE).format(
-        assertion=objective.get("assertion", ""), bloom=objective.get("bloom_tier", ""),
-        axis=spec["axis"], angle_instruction=spec["instruction"])
+        assertion=objective.get("assertion", ""), discriminator=objective.get("discriminator", "") or "(none stated)",
+        bloom=objective.get("bloom_tier", ""), axis=spec["axis"], angle_instruction=spec["instruction"])
     lo_v = {**lo, "question_type": spec["type"],
             "description": (lo.get("description") or "") + directive}
     try:
@@ -279,9 +303,11 @@ def generate_variants_for_questions(
         base["objective"] = objective
         tier = _norm_tier(objective.get("bloom_tier") or lo.get("bloom_category"))
         specs = _plan_specs(base.get("question_type", ""), tier,
-                            has_code=has_code, is_sql=is_sql, max_n=max_n)
+                            has_code=has_code, is_sql=is_sql,
+                            is_procedural=bool(objective.get("procedural")), max_n=max_n)
         accepted: list[dict] = []
-        seen = [_stem_of(base)]
+        base_stem = _stem_of(base)
+        seen = [base_stem]                             # deterministic dedup: stems already in the pool
         for spec in specs:
             if len(accepted) >= max_n:
                 break
@@ -291,7 +317,8 @@ def generate_variants_for_questions(
             vstem = _stem_of(v)
             if _too_similar(vstem, seen):
                 continue
-            if not _fidelity_ok(objective, v):
+            # LLM pool-gate: same objective + valid answer + distinct from the base and accepted siblings.
+            if not _fidelity_ok(objective, v, accepted_stems=[base_stem] + [_stem_of(a) for a in accepted]):
                 continue
             seen.append(vstem)
             accepted.append(v)

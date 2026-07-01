@@ -16,31 +16,41 @@ from app.mcq_pipeline.prompts.store import register
 _OBJECTIVE_SYS = register("cq.variants.objective", """You analyze a single assessment question and extract the ONE thing its correct answer proves — its assessment objective.
 
 Return:
-- assertion: a single precise sentence stating exactly what a learner demonstrates by answering correctly (the proposition or skill under test). NOT the topic — the specific claim/decision. E.g. "a Python list is mutable while a tuple is not", not "Python data types".
+- assertion: a single precise sentence stating exactly what a learner demonstrates by answering correctly (the proposition or skill under test). NOT the topic — the specific claim/decision. E.g. "a Python list is mutable while a tuple is not", not "Python data types". State it ANSWER-AGNOSTICALLY — describe the proposition, do NOT leak which of the base's options was the key.
+- discriminator: the criterion that separates a correct answer from a wrong one for this assertion — the single distinction a good distractor must violate. E.g. "confuses mutability with ordering" or "picks a value type that is actually immutable". This is what keeps every variant's distractors on the SAME fault line.
 - bloom_tier: one of remember | understand | apply | scenario — the cognitive level the question operates at.
+- procedural: true only if the assertion is fundamentally about the ORDER of steps in a process (a sequence/workflow), false otherwise. This decides whether an ordering-style variant is faithful.
 
 The assertion is the INVARIANT every variant must preserve. Be specific and self-contained (no "this code", "the above") so it can stand alone.""")
 
 # Injected into a variant's LO `description` so the reused m08 agent stays on-objective.
-# Formatted with: assertion, bloom, axis, angle_instruction.
+# Formatted with: assertion, discriminator, bloom, axis, angle_instruction.
 _DIRECTIVE = register("cq.variants.directive", """
 
 === VARIANT DIRECTIVE (CLASSROOM QUIZ — read carefully) ===
-You are writing a VARIANT of an existing base question. It MUST assess the SAME objective:
+You are writing a VARIANT of an existing base question. Every variant is one entry in a POOL from
+which the learner is shown exactly ONE at random — so it must be interchangeable in what it tests,
+yet visibly different in what it shows.
   ASSERTION (what the correct answer must prove): {assertion}
+  DISCRIMINATOR (the fault line a wrong answer must cross): {discriminator}
 Rules:
+- SAME outcome: the correct answer must hinge on EXACTLY the assertion above, and each distractor
+  must be wrong by crossing the DISCRIMINATOR — not a tangential or adjacent fact.
 - Keep the Bloom level identical ({bloom}). Do NOT drift to a different fact, sub-concept, or skill.
-- The correct answer must hinge on EXACTLY the assertion above — not a tangential or adjacent fact.
 - Change ONLY the {axis}: {angle_instruction}
-- Stay grounded strictly in the course material provided; invent nothing the session did not teach.
-- Make it genuinely different in surface form from a plain restatement — a learner who has the base question memorised must still have to reason about the assertion.""")
+- DIFFERENT surface: do NOT reuse the base question's wording, option set, or example entities
+  verbatim. Vary the surface — names, values, ordering, the concrete scenario — so a learner who
+  memorised the base (or a sibling variant) must still reason about the assertion to answer.
+- Stay grounded strictly in the course material provided; invent nothing the session did not teach.""")
 
-_FIDELITY_SYS = register("cq.variants.fidelity", """You are an objective-fidelity judge for classroom-quiz question variants.
+_FIDELITY_SYS = register("cq.variants.fidelity", """You are the gatekeeper for a classroom-quiz variant POOL. The learner is shown exactly ONE variant from the pool at random, so a variant may enter the pool ONLY if it (a) tests the same thing, (b) is answerable and correctly keyed, and (c) is not a near-duplicate of one already in the pool.
 
-You are given a base question's ASSERTION (the proposition its correct answer proves) and a candidate VARIANT question (stem, correct answer, explanation). Decide whether answering the variant correctly proves the SAME assertion at the SAME cognitive level.
+You are given the base question's ASSERTION (the proposition its correct answer proves), any ALREADY-ACCEPTED variant stems in the pool, and a candidate VARIANT (stem, correct answer, explanation). Judge THREE things:
 
 Return:
-- same_objective: true ONLY if the variant's correct answer turns on the SAME assertion (same proposition/skill), not a different fact, a tangential detail, or a different Bloom intent.
-- reason: one short sentence.
+- same_objective: true ONLY if answering the variant correctly proves the SAME assertion at the SAME cognitive level — not a different fact, a tangential detail, or a different Bloom intent.
+- answer_valid: true ONLY if the marked correct answer is actually correct and well-posed — the stem is answerable from the material, the key is right, and for single-select types exactly one option is correct (no second defensible answer). A wrong-keyed or ambiguous item must NOT enter the pool.
+- distinct: true ONLY if this variant is meaningfully DIFFERENT from every already-accepted stem listed — a different angle, scenario, surface, or format. A trivial rewording of an existing pool entry is NOT distinct.
+- reason: one short sentence naming which check (if any) failed.
 
-Be strict: a well-formed question about a DIFFERENT (even adjacent) point is NOT a faithful variant — return false. When unsure, return false.""")
+A variant enters the pool only when ALL THREE are true. Be strict: a well-formed question about a DIFFERENT (even adjacent) point, a mis-keyed question, or a near-duplicate all fail. When unsure on any check, return false for it.""")
