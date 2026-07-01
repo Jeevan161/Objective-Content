@@ -10,7 +10,6 @@ import {
   BookOpenCheck,
   Workflow,
   Plug,
-  Presentation,
   ShieldCheck,
   BarChart3,
   Upload,
@@ -23,17 +22,21 @@ import {
 
 // Pages that exist today vs. stages of the workflow that are coming soon.
 // Keeping them visible (but disabled) shows users where the product is going.
+// Classroom Quiz now lives INSIDE the Generation Studio (as a tool card), matching MCQ —
+// so it's reached via 'generation', not a standalone nav item.
 const NAV = [
   { key: 'courses', label: 'Courses', icon: LayoutGrid },
   { key: 'chat', label: 'Chat', icon: MessagesSquare },
   { key: 'generation', label: 'Generation Studio', icon: Sparkles },
-  { key: 'classroom-quiz', label: 'Classroom Quiz', icon: Presentation },
   { key: 'review', label: 'Review Queue', icon: ClipboardCheck },
   { key: 'runs', label: 'Runs', icon: History },
   { key: 'loads', label: 'Loads', icon: Upload },
-  { key: 'pipeline', label: 'MCQ Pipeline', icon: Workflow },
+  { key: 'pipeline', label: 'Pipeline', icon: Workflow },
   { key: 'llm-providers', label: 'LLM Connectors', icon: Plug },
 ]
+
+// Sub-pages that live under the Generation Studio hub — the 'generation' nav stays lit for them.
+const STUDIO_PAGES = new Set(['mcq', 'classroom-quiz'])
 
 function Sidebar({
   page,
@@ -87,7 +90,7 @@ function Sidebar({
         {NAV.map(({ key, label, icon: Icon, soon }) => (
           <button
             key={key}
-            className={`nav-item ${page === key || (key === 'generation' && page === 'mcq') ? 'active' : ''}`}
+            className={`nav-item ${page === key || (key === 'generation' && STUDIO_PAGES.has(page)) ? 'active' : ''}`}
             disabled={soon}
             title={soon ? 'Coming soon' : undefined}
             onClick={() => go(key)}

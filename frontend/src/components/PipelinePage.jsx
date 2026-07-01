@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Workflow, RotateCcw, Save, Pencil, X, ChevronRight, CheckCircle2, Info,
   FileSearch, Brain, Wrench, GitMerge, ListChecks, Sparkles, ShieldCheck,
-  Search, Copy, Check, SlidersHorizontal,
+  Search, Copy, Check, SlidersHorizontal, FileText, Layers, Presentation,
 } from 'lucide-react'
 import { getMcqPipeline, updateMcqPrompt, resetMcqPrompt } from '../api'
 import { useToast } from './Toast'
@@ -11,6 +11,9 @@ import { EmptyState, Skeleton, Spinner } from './ui'
 // Icon + accent + one-line blurb per stage, so the map reads at a glance and the
 // panel can introduce the selected stage in plain language.
 const STAGE_META = {
+  // Classroom-Quiz-only wrapper stages.
+  reading_material: { icon: FileText, accent: 'var(--cyan)', blurb: 'Turn the quiz’s slide span into standalone reading material — the source the pipeline runs on.' },
+  generate_variants: { icon: Layers, accent: 'var(--violet)', blurb: 'Expand each approved base question into a pool of objective-bound variants (one shown at random).' },
   // LO-creation stage (deterministic 10-node pipeline).
   parse_structure: { icon: FileSearch, accent: 'var(--text-3)', blurb: 'Split the reading material into topics from its own headings.' },
   extract_concepts: { icon: Brain, accent: 'var(--violet)', blurb: 'Extract the teachable concepts, stabilized by self-consistency voting.' },
@@ -29,6 +32,13 @@ const STAGE_META = {
   review_questions: { icon: ShieldCheck, accent: 'var(--cyan)', blurb: 'Validate each question and fix it until it passes.' },
 }
 const metaFor = (key) => STAGE_META[key] || { icon: Workflow, accent: 'var(--violet)', blurb: '' }
+
+// The two pipeline families. Both edit the same shared prompt store; the Classroom Quiz view adds
+// its two wrapper stages (reading material + variants) around the reused MCQ stages.
+const FAMILIES = [
+  { key: 'mcq', label: 'MCQ Pipeline', icon: ListChecks },
+  { key: 'cq', label: 'Classroom Quiz Pipeline', icon: Presentation },
+]
 
 const LINES = (s) => (s ? s.split('\n').length : 0)
 
@@ -165,26 +175,30 @@ function PromptCard({ prompt, onSave, onReset }) {
 // bracketed to mirror the concurrent branches in the backend.
 function PipelinePage() {
   const toast = useToast()
+  const [family, setFamily] = useState('mcq') // 'mcq' | 'cq'
   const [data, setData] = useState(null) // null = loading
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState(null)
   const [filter, setFilter] = useState('')
   const [editedOnly, setEditedOnly] = useState(false)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fam) => {
+    setError(null)
+    setData(null) // show the skeleton while (re)loading a family
     try {
-      const res = await getMcqPipeline()
+      const res = await getMcqPipeline(fam)
       setData(res)
-      setSelected((cur) => cur || res.stages.find((s) => s.prompts.length)?.key || res.stages[0]?.key)
+      // Reset the selected stage to the family's first stage that has editable prompts.
+      setSelected(res.stages.find((s) => s.prompts.length)?.key || res.stages[0]?.key || null)
     } catch (e) {
       setError(e.message)
     }
   }, [])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch on mount
-    load()
-  }, [load])
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch on mount / family switch
+    load(family)
+  }, [load, family])
 
   const replacePrompt = useCallback((updated) => {
     setData((d) => {
@@ -268,7 +282,7 @@ function PipelinePage() {
     <div className="pipeline-page">
       <header className="topbar">
         <div>
-          <h1>MCQ Pipeline</h1>
+          <h1>Pipeline</h1>
           <p className="topbar-sub">
             The stages the generator runs, and the editable prompts that drive each one.
             Saving a prompt applies it to the next run immediately.
@@ -284,6 +298,21 @@ function PipelinePage() {
           </div>
         )}
       </header>
+
+      <div className="pipeline-tabs" role="tablist" aria-label="Pipeline family">
+        {FAMILIES.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={family === key}
+            className={`pipeline-tab ${family === key ? 'active' : ''}`}
+            onClick={() => setFamily(key)}
+          >
+            <Icon size={15} />
+            {label}
+          </button>
+        ))}
+      </div>
 
       {error && <EmptyState icon={Workflow} title="Could not load the pipeline" hint={error} />}
 

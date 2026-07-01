@@ -1,7 +1,7 @@
-import { ListChecks, Code2, Layers, ChevronRight } from 'lucide-react'
+import { ListChecks, Code2, Layers, ChevronRight, Presentation } from 'lucide-react'
 
-// Tools surfaced in the Generation Studio. Only MCQ Generation is wired up
-// today; the rest are placeholders that show where the studio is heading.
+// Tools surfaced in the Generation Studio. MCQ Generation and Classroom Quiz are wired
+// up; the rest are placeholders that show where the studio is heading.
 const TOOLS = [
   {
     key: 'mcq',
@@ -10,6 +10,14 @@ const TOOLS = [
     accent: 'var(--violet)',
     title: 'MCQ Generation',
     desc: 'Generate MCQ practice from a topic and session.',
+  },
+  {
+    key: 'classroom-quiz',
+    page: 'classroom-quiz',
+    icon: Presentation,
+    accent: 'var(--cyan)',
+    title: 'Classroom Quiz',
+    desc: 'Turn a slides deck into per-quiz reading, base questions & variants.',
   },
   {
     key: 'coding',

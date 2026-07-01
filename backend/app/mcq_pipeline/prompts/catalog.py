@@ -11,7 +11,14 @@ span three different stages) need an explicit mapping.
 
 from __future__ import annotations
 
-from app.mcq_pipeline.utils.progress import STAGE_DEFS
+from app.mcq_pipeline.utils.progress import (
+    STAGE_DEFS, CQ_BASE_STAGE_DEFS, CQ_VARIANT_STAGE_DEFS,
+)
+
+# The Classroom Quiz pipeline REUSES the full MCQ LO+question pipeline, wrapped by two
+# CQ-only stages: reading_material (m00) up front, generate_variants (m10) at the end.
+CQ_STAGE_DEFS = CQ_BASE_STAGE_DEFS + CQ_VARIANT_STAGE_DEFS
+_STAGE_DEFS_BY_FAMILY = {"mcq": STAGE_DEFS, "cq": CQ_STAGE_DEFS}
 
 # `lo.*` keys don't share a stage-derivable prefix — map them explicitly to the
 # deterministic 10-node LO pipeline's agent stages.
@@ -56,11 +63,25 @@ _STAGE_NOTES = {
     "lo_to_legacy": _DETERMINISTIC_NOTE,
     "review_questions": "Also re-applies the generation guideline blocks (gen.*) to "
                         "validate each question against the same rules it was written by.",
+    # Classroom-Quiz-only stages.
+    "reading_material": ("LLM (cq.reading_material) turns the quiz's slide span into standalone "
+                         "reading material — the source text the LO/question pipeline then runs on."),
+    "generate_variants": ("For each APPROVED base question, an LLM derives its assessment objective "
+                          "(cq.variants.objective), steers the m08 generator to the same objective via "
+                          "a new angle/format (cq.variants.directive), and a fidelity judge "
+                          "(cq.variants.fidelity) admits only faithful, valid, distinct variants into "
+                          "the random-pick pool."),
 }
 
 
-def stage_for_key(key: str) -> str | None:
-    """The pipeline stage a prompt key drives, or None if it maps to no stage."""
+def stage_for_key(key: str, family: str = "mcq") -> str | None:
+    """The pipeline stage a prompt key drives within `family` ('mcq' | 'cq'), or None if it maps
+    to no stage in that family. The two CQ-only wrapper stages exist only in the 'cq' family."""
+    if family == "cq":
+        if key == "cq.reading_material":
+            return "reading_material"
+        if key.startswith("cq.variants."):
+            return "generate_variants"
     if key in _LO_STAGE:
         return _LO_STAGE[key]
     # Read-only reference docs for the deterministic stages: `lo.rules.<stage_key>`
@@ -76,15 +97,17 @@ def stage_for_key(key: str) -> str | None:
     return None
 
 
-def build_catalog(keys: list[str]) -> tuple[list[dict], list[str]]:
-    """Group `keys` under the ordered pipeline stages, preserving the given order
-    within each stage. Returns (stages, unassigned) where each stage carries its
-    label / parallel_group / note / prompt_keys, and `unassigned` lists any keys
-    that map to no stage (so nothing is ever silently hidden)."""
-    by_stage: dict[str, list[str]] = {d["key"]: [] for d in STAGE_DEFS}
+def build_catalog(keys: list[str], family: str = "mcq") -> tuple[list[dict], list[str]]:
+    """Group `keys` under the ordered pipeline stages for `family` ('mcq' | 'cq'), preserving the
+    given order within each stage. Returns (stages, unassigned) where each stage carries its
+    label / parallel_group / note / prompt_keys, and `unassigned` lists any keys that map to no
+    stage in this family (so nothing is ever silently hidden — e.g. cq.* keys are unassigned in
+    the mcq family, and mcq-only keys never appear as CQ stages)."""
+    stage_defs = _STAGE_DEFS_BY_FAMILY.get(family, STAGE_DEFS)
+    by_stage: dict[str, list[str]] = {d["key"]: [] for d in stage_defs}
     unassigned: list[str] = []
     for key in keys:
-        stage = stage_for_key(key)
+        stage = stage_for_key(key, family)
         if stage in by_stage:
             by_stage[stage].append(key)
         else:
@@ -98,6 +121,6 @@ def build_catalog(keys: list[str]) -> tuple[list[dict], list[str]]:
             "note": _STAGE_NOTES.get(d["key"], ""),
             "prompt_keys": by_stage[d["key"]],
         }
-        for d in STAGE_DEFS
+        for d in stage_defs
     ]
     return stages, unassigned

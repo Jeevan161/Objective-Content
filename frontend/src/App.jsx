@@ -366,7 +366,7 @@ function Workspace() {
         <main className="main">
         {page === 'chat' && <ChatPage courses={courses} />}
         {page === 'generation' && <GenerationStudio onNavigate={setPage} />}
-        {page === 'classroom-quiz' && <ClassroomQuizPage />}
+        {page === 'classroom-quiz' && <ClassroomQuizPage onBack={() => setPage('generation')} />}
         {page === 'pipeline' && <PipelinePage />}
         {page === 'llm-providers' && <LLMProvidersPage />}
         {/* Kept mounted (just hidden) so navigating away and back restores the exact

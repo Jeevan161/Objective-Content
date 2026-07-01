@@ -18,7 +18,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-import app.mcq_pipeline.graph  # noqa: F401 — import triggers all prompt register() calls
+import app.mcq_pipeline.graph  # noqa: F401 — import triggers all MCQ prompt register() calls
+# The Classroom Quiz prompts (cq.reading_material, cq.variants.*) are registered in m00/m10, which
+# the MCQ graph never imports (CQ runs at the runner level). Import them here too so they register
+# and show up under the Classroom Quiz pipeline family.
+import app.mcq_pipeline.nodes.m00_generate_reading_material  # noqa: F401
+import app.mcq_pipeline.nodes.m10_generate_variants  # noqa: F401
 from app.mcq_pipeline.prompts import catalog as prompt_catalog, store as prompt_store
 
 router = APIRouter(prefix="/api/mcq")
@@ -30,20 +35,25 @@ class PromptUpdate(BaseModel):
 
 
 @router.get("/pipeline/")
-def get_pipeline() -> dict:
-    """The pipeline stages in order, each with the full prompt objects that drive
-    it. `unassigned` holds any prompt that maps to no stage (never hidden)."""
+def get_pipeline(family: str = "mcq") -> dict:
+    """The pipeline stages in order for `family` ('mcq' | 'cq'), each with the full prompt objects
+    that drive it. `unassigned` holds any prompt that maps to no stage in this family (never
+    hidden). The Classroom Quiz family reuses the MCQ stages, wrapped by reading_material (m00)
+    and generate_variants (m10)."""
+    family = family if family in ("mcq", "cq") else "mcq"
     prompts = {p["key"]: p for p in prompt_store.list_prompts()}
-    stages, unassigned = prompt_catalog.build_catalog(list(prompts.keys()))
+    stages, unassigned = prompt_catalog.build_catalog(list(prompts.keys()), family=family)
     enriched = [
         {**stage, "prompts": [prompts[k] for k in stage["prompt_keys"] if k in prompts]}
         for stage in stages
     ]
-    overridden = sum(1 for p in prompts.values() if p["overridden"])
+    shown = [p for stage in enriched for p in stage["prompts"]]
+    overridden = sum(1 for p in shown if p["overridden"])
     return {
+        "family": family,
         "stages": enriched,
         "unassigned": [prompts[k] for k in unassigned if k in prompts],
-        "counts": {"stages": len(enriched), "prompts": len(prompts), "overridden": overridden},
+        "counts": {"stages": len(enriched), "prompts": len(shown), "overridden": overridden},
     }
 
 
