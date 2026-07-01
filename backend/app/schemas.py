@@ -109,7 +109,9 @@ def serialize_cq_deck(deck, scopes=None) -> dict:
 class McqReviewRequest(BaseModel):
     """A human decision at a HITL gate, plus the run context needed to resume the paused
     pipeline (rebuilds the run-scoped RAG adapter; the job_id is the checkpoint thread_id)."""
-    action: str = "approve"                       # "approve" | "reject"
+    action: str = "approve"                       # "approve" | "reject" | "add_more"
+    # action='add_more': how many already-authored reserve LOs to promote toward the target count.
+    count: int = 0
     # Per-LO reject + reason: [{"id", "feedback"}]. Each reason drives that LO's regeneration.
     rejected: list[dict] | None = None
     rejected_ids: list[str] | None = None         # legacy: ids only (reason falls back to `note`)

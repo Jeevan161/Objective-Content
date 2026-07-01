@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle2, AlertTriangle, RotateCcw, ThumbsUp } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, RotateCcw, ThumbsUp, Plus } from 'lucide-react'
 
 // The human-in-the-loop review gate (the LO-division Gate 1 was removed). It renders the paused
 // pipeline's authored outcomes. The reviewer rates EACH outcome — Good / Needs work / Regenerate —
@@ -120,6 +120,14 @@ function McqReviewGate({ review, busy, onDecide }) {
   const missingReason = toRegen.some((o) => !get(o.id).comment.trim())
   const canSubmit = !busy && !missingReason
 
+  // "Add more outcomes": offered only when the set is below the target AND the run still has
+  // already-authored (reserve) outcomes to promote — no new generation happens.
+  const target = review.target || 20
+  const reserveAvailable = review.reserve_available || 0
+  const shortfall = Math.max(0, target - outcomes.length)
+  const addCount = Math.min(shortfall, reserveAvailable)
+  const canAddMore = !busy && addCount > 0
+
   function submit() {
     const lo_feedback = outcomes.map((o) => {
       const { verdict, comment } = get(o.id)
@@ -127,6 +135,10 @@ function McqReviewGate({ review, busy, onDecide }) {
     })
     const rejected = toRegen.map((o) => ({ id: o.id, feedback: get(o.id).comment.trim() }))
     onDecide({ action: rejected.length ? 'reject' : 'approve', rejected, lo_feedback })
+  }
+
+  function addMore() {
+    onDecide({ action: 'add_more', count: addCount })
   }
 
   const listProps = { reviews, stateMap: state, onVerdict: setVerdict, onComment: setComment, busy }
@@ -142,7 +154,13 @@ function McqReviewGate({ review, busy, onDecide }) {
             required) are rewritten with your feedback; otherwise the run continues.
           </p>
         </div>
-        <span className="mcq-badge warn">awaiting review</span>
+        <div className="mcq-gate-meta">
+          <span className={`mcq-badge ${outcomes.length < target ? 'warn' : 'ok'}`}
+            title={outcomes.length < target ? `Below the target of ${target}` : `At/above the target of ${target}`}>
+            {outcomes.length} of {target} outcomes
+          </span>
+          <span className="mcq-badge warn">awaiting review</span>
+        </div>
       </div>
 
       {hasRegen ? (
@@ -164,6 +182,17 @@ function McqReviewGate({ review, busy, onDecide }) {
       )}
 
       <div className="mcq-review-actions">
+        {canAddMore && (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={busy}
+            onClick={addMore}
+            title={`Promote ${addCount} more already-authored outcome${addCount > 1 ? 's' : ''} toward the target of ${target}`}
+          >
+            <Plus size={14} /> {`Add ${addCount} more outcome${addCount > 1 ? 's' : ''}`}
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-primary"

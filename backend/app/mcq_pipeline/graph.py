@@ -164,12 +164,25 @@ def review_outcomes(state, config) -> dict:
     if seq_ids:
         rank = {oid: i for i, oid in enumerate(seq_ids)}
         outcomes = sorted(outcomes, key=lambda o: rank.get(o.get("id"), len(rank)))
+    # Target outcome count (for the gate's "N of target" indicator + the add-more affordance).
+    lo_budget = getattr(ctx, "lo_budget", None)
+    target = int(lo_budget) if lo_budget is not None else int(getattr(ctx, "question_budget", None) or 20)
     from langgraph.types import interrupt
     decision = interrupt({"gate": "outcomes", "outcomes": outcomes,
                           "reviews": state.get("lo_reviews", {}),
-                          "regenerated_ids": list(state.get("last_regenerated_ids") or [])})
+                          "regenerated_ids": list(state.get("last_regenerated_ids") or []),
+                          "target": target,
+                          "reserve_available": len(state.get("backfill_pool") or [])})
     decision = decision if isinstance(decision, dict) else {"action": "approve"}
     action = decision.get("action", "approve")
+
+    # "Add more outcomes": promote already-authored (reserve) LOs toward the target, then re-pause at
+    # this gate so the reviewer sees the expanded set. No new generation — handled in promote_outcomes.
+    if action == "add_more":
+        n = max(0, int(decision.get("count") or 0))
+        prog.done("review_outcomes", detail=f"add {n} more outcome(s) from reserve")
+        return {"gate_decision": {"gate": "outcomes", "action": "add_more", "add_count": n},
+                "notes": [f"Gate add_more ({n})"]}
 
     # Per-LO feedback: rejected = [{"id", "feedback"}]. Accept the legacy {rejected_ids, note} too.
     rejected_items = list(decision.get("rejected") or [])
@@ -216,12 +229,53 @@ def route_after_validate(state) -> str:
     return "repair"
 
 
-def route_after_outcomes(state) -> str:
-    """approve / inert → continue to questions ; per-LO reject → repair (regenerate the
-    rejected LOs, which re-runs finalize → sequence → gate)."""
+def promote_outcomes(state, config) -> dict:
+    """Promote up to `add_count` highest-weight UNSELECTED candidates (backfill_pool) into the
+    outcome set on a reviewer's "add more outcomes" request at the gate. NO LLM — these were
+    already authored; they flow through finalize → sequence → typing → the gate again for review.
+    Dedups on id and (concept, Bloom) so a promotion never duplicates a shown outcome."""
+    prog = _prog(config)
+    prog.start("promote_outcomes")
     d = state.get("gate_decision") or {}
-    if d.get("gate") == "outcomes" and d.get("action") == "reject" and d.get("rejected_ids"):
-        return "repair"
+    n = max(0, int(d.get("add_count") or 0))
+    pool = list(state.get("backfill_pool") or [])
+    current = list(state.get("outcomes") or [])
+    if n <= 0 or not pool:
+        prog.done("promote_outcomes", detail="nothing to promote")
+        return {}
+    have_ids = {o.get("id") for o in current}
+    have_pairs = {(o.get("concept_id"), o.get("bloom_level")) for o in current}
+    take = []
+    for o in sorted(pool, key=lambda x: -(x.get("weight") or 0)):
+        if o.get("id") in have_ids:
+            continue
+        pair = (o.get("concept_id"), o.get("bloom_level"))
+        if pair in have_pairs:
+            continue
+        take.append(o)
+        have_pairs.add(pair)
+        if len(take) >= n:
+            break
+    if not take:
+        prog.done("promote_outcomes", detail="no distinct reserve outcomes left")
+        return {}
+    take_ids = {t.get("id") for t in take}
+    prog.done("promote_outcomes", detail=f"promoted {len(take)} reserve outcome(s)")
+    return {"outcomes": current + take,
+            "backfill_pool": [o for o in pool if o.get("id") not in take_ids],
+            "last_regenerated_ids": list(take_ids),   # highlight the newly-added ones at the gate
+            "notes": [f"Promoted {len(take)} reserve outcome(s) at the gate"]}
+
+
+def route_after_outcomes(state) -> str:
+    """approve / inert → continue to questions ; per-LO reject → repair (regenerate the rejected
+    LOs) ; add_more → promote reserve outcomes, then re-sequence and re-pause at the gate."""
+    d = state.get("gate_decision") or {}
+    if d.get("gate") == "outcomes":
+        if d.get("action") == "add_more":
+            return "add_more"
+        if d.get("action") == "reject" and d.get("rejected_ids"):
+            return "repair"
     return "continue"
 
 
@@ -283,6 +337,7 @@ def build_lo_graph(*, checkpointer=None):
     g.add_node("review_and_validate", review_and_validate)
     g.add_node("repair", repair)
     g.add_node("review_outcomes", review_outcomes)        # HITL Gate 2 (inert unless hitl_enabled)
+    g.add_node("promote_outcomes", promote_outcomes)       # gate "add more" → promote reserve LOs
     g.add_node("finalize", finalize)
     g.add_node("lo_to_legacy", lo_to_legacy)
     g.add_node("sequence_outcomes", sequence_outcomes)
@@ -309,7 +364,10 @@ def build_lo_graph(*, checkpointer=None):
     g.add_edge("sequence_outcomes", "recommend_question_types")
     g.add_edge("recommend_question_types", "review_outcomes")
     g.add_conditional_edges("review_outcomes", route_after_outcomes,
-                            {"repair": "repair", "continue": "generate_questions"})
+                            {"repair": "repair", "continue": "generate_questions",
+                             "add_more": "promote_outcomes"})
+    # Promote reserve LOs, then re-run finalize → sequence → typing → the gate (re-pause for review).
+    g.add_edge("promote_outcomes", "finalize")
     g.add_edge("generate_questions", "review_questions")
     g.add_edge("review_questions", END)
     return g.compile(checkpointer=checkpointer)

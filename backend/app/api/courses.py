@@ -631,11 +631,11 @@ def resume_mcq(job_id: uuid.UUID, body: McqReviewRequest,
     if not course_id or not unit_id:
         raise HTTPException(status_code=400, detail="course_id and unit_id are required to resume.")
     action = (body.action or "approve").strip().lower()
-    if action not in ("approve", "reject"):
-        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'.")
+    if action not in ("approve", "reject", "add_more"):
+        raise HTTPException(status_code=400, detail="action must be 'approve', 'reject', or 'add_more'.")
     decision = {"action": action, "rejected": body.rejected or [],
                 "rejected_ids": body.rejected_ids or [], "note": body.note or "",
-                "lo_feedback": body.lo_feedback or [],
+                "lo_feedback": body.lo_feedback or [], "count": max(0, int(body.count or 0)),
                 "reviewer": _reviewer_name(user)}
     prereq_unit_ids = body.prerequisite_unit_ids
     if prereq_unit_ids is not None:
