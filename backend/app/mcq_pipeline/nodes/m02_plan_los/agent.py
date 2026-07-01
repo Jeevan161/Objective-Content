@@ -87,17 +87,37 @@ def _consolidate_call(subs: list, source_text: str, session_objective: str = "",
     return data if isinstance(data, list) else []
 
 
+import re as _re
+
+# Two identifier-ish tokens are "distinct" if they differ before any '(' and aren't singular/plural
+# of each other — used to catch a group that fused a parallel FAMILY (CharField/DecimalField/URLField).
+def _distinct_idents(members: list) -> int:
+    seen = set()
+    for m in members or []:
+        toks = _re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(m).lower())
+        # camelCase/underscore identifiers that look like a typed API member (e.g. charfield, urlfield)
+        key = next((t for t in toks if _re.search(r"(field|input|widget|method|form|response)$", t)), None)
+        if key:
+            seen.add(key.rstrip("s"))
+    return len(seen)
+
+
 def _consolidation_suspicious(groups: list, n_subs: int) -> bool:
-    """Gate the critic: fire only when the merge looks off — collapsed too hard (far fewer groups
-    than sub-concepts), a group fusing many members, or a missing/invalid depth."""
+    """Gate the critic: fire when the merge looks like OVER-MERGE — collapsed too hard (a merge that
+    removes more than ~40% of the sub-concepts is suspicious for a rich section), a group fusing many
+    members OR multiple DISTINCT typed identifiers (a parallel field/widget/method family fused into
+    one), or a missing/invalid depth."""
     if not groups:
         return False
-    if n_subs >= 6 and len(groups) < max(2, n_subs // 3):
+    if n_subs >= 6 and len(groups) < max(3, int(n_subs * 0.6)):   # >40% of sub-concepts merged away
         return True
     for g in groups:
         if not isinstance(g, dict):
             return True
-        if len(g.get("members", []) or []) > 5:
+        members = g.get("members", []) or []
+        if len(members) > 3:                     # tightened from >5
+            return True
+        if _distinct_idents(members) >= 2:       # fused a parallel family (e.g. CharField + URLField)
             return True
         if str(g.get("depth", "")).lower() not in ("named", "mention", "moderate", "deep"):
             return True
