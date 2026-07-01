@@ -185,7 +185,12 @@ def build_final_los(state: dict, db_prereq_units: list) -> list[dict]:
     inv_by_id = {c["concept_id"]: c for c in state.get("concept_inventory", [])}
     sec_text = {s["topic_id"]: s.get("text", "") for s in state.get("sections", [])}
     sec_title = {s["topic_id"]: s.get("title", "") for s in state.get("sections", [])}
-    src = state.get("artifact", {}).get("outcomes") or state.get("outcomes", [])
+    # Derive from the LIVE working outcomes (state["outcomes"]) — the authoritative set that a gate
+    # "add more" promotion updates — rather than the archival artifact snapshot, which can lag the
+    # promotion in the finalize→lo_to_legacy re-derivation cycle and silently drop the promoted LO
+    # (the gate showed N+1 but the run kept N). sequence_outcomes re-orders after this, so the
+    # artifact's archival order is not needed here. Fall back to the artifact for older/edge states.
+    src = state.get("outcomes") or state.get("artifact", {}).get("outcomes", [])
     objective = state.get("session_objective", "") or ""
     los = [lo_to_legacy(o, inv_by_id, db_prereq_units, sec_text, sec_title) for o in src]
     if objective:
