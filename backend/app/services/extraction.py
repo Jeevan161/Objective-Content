@@ -239,6 +239,38 @@ def run_extraction_job(
             if idx % 3 == 0 or idx == total:
                 report(f"Processed {idx}/{total} learning set(s)…")
 
+        # Preserve the authoritative child order + slide links from the details fetch. The CSV
+        # (topic_order / unit_order / slide_urls) is the portal's own ordering, not the enumerated
+        # sync position — store it so the course view presents topics/units in that order and can
+        # embed each learning set's slides. Fetched once per course (reuses the extraction cache);
+        # best-effort — a CSV failure never fails the extraction.
+        report("Recording child order + slide links…")
+        for course in courses:
+            cmap = csv_maps.get(course.course_id)
+            if cmap is None:
+                try:
+                    cmap = csv_maps[course.course_id] = unit_resource_csv.fetch_unit_resource_map(
+                        course.course_id, environment=(course.environment or "PROD").upper())
+                except Exception:  # noqa: BLE001 — orders/slides are best-effort
+                    cmap = csv_maps[course.course_id] = {}
+            if not cmap:
+                continue
+            for topic in course.topics:
+                for unit in topic.units:
+                    unit_orders = []
+                    for part in unit.parts:
+                        entry = cmap.get(part.unit_id)
+                        if not entry:
+                            continue
+                        part.slide_urls = entry.get("slide_urls") or []
+                        if entry.get("unit_order") is not None:
+                            part.child_order = entry["unit_order"]
+                            unit_orders.append(entry["unit_order"])
+                        if entry.get("topic_order") is not None:
+                            topic.child_order = entry["topic_order"]
+                    if unit_orders:
+                        unit.child_order = min(unit_orders)
+
         # Mark the triggering course as having a completed extraction.
         root.content_extracted_at = _now()
 

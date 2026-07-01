@@ -180,8 +180,21 @@ def parse_csv(data: bytes) -> dict[str, dict]:
             "learning_resource_id": lrid,
             "slide_urls": _parse_slide_urls(row.get("slide_urls")),
             "unit_title": (row.get("unit_title") or "").strip(),
+            # Authoritative child order from the portal (preserved, not re-derived).
+            "topic_id": (row.get("topic_id") or "").strip(),
+            "topic_order": _parse_int(row.get("topic_order")),
+            "unit_order": _parse_int(row.get("unit_order")),
         }
     return out
+
+
+def _parse_int(raw: str | None) -> int | None:
+    """Parse an order cell → int, or None when blank/non-numeric (so 'no data' stays distinct)."""
+    text = (raw or "").strip()
+    try:
+        return int(float(text)) if text else None
+    except (ValueError, TypeError):
+        return None
 
 
 def _parse_slide_urls(raw: str | None) -> list[str]:

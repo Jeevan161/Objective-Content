@@ -466,6 +466,38 @@
   max-height: 420px;
 }
 
+/* Portal unit type (e.g. "learning set") shown next to the part label. */
+.res-type-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: capitalize;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Embedded slides for a learning set (one iframe per published deck). */
+.part-slides-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 6px 0 2px;
+}
+.part-slides-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+
 .error-text {
   display: inline-flex;
   align-items: center;

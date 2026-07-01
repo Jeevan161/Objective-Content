@@ -126,6 +126,9 @@ class Topic(Base):
     topic_name: Mapped[str] = mapped_column(String(500), default="")
     topic_link: Mapped[str] = mapped_column(String(1000), default="")
     order: Mapped[int] = mapped_column(Integer, default=0)
+    # Authoritative child order from the details fetch (GET_UNIT_RESOURCE_DETAILS `topic_order`).
+    # Nullable until extraction populates it; the view falls back to `order` when absent.
+    child_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     course: Mapped["Course"] = relationship(back_populates="topics")
     units: Mapped[list["Unit"]] = relationship(
@@ -150,6 +153,8 @@ class Unit(Base):
     kind: Mapped[str] = mapped_column(String(16), default=SINGLE)
     label: Mapped[str] = mapped_column(String(500), default="")
     order: Mapped[int] = mapped_column(Integer, default=0)
+    # Container child order = the smallest `unit_order` among its learning-set parts (details fetch).
+    child_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     topic: Mapped["Topic"] = relationship(back_populates="units")
     parts: Mapped[list["UnitPart"]] = relationship(
@@ -173,6 +178,11 @@ class UnitPart(Base):
     link: Mapped[str] = mapped_column(String(1000), default="")
     error: Mapped[str] = mapped_column(Text, default="")
     order: Mapped[int] = mapped_column(Integer, default=0)
+    # Authoritative child order from the details fetch (GET_UNIT_RESOURCE_DETAILS `unit_order`).
+    child_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Published slide-deck URLs for this learning set (from the details CSV `slide_urls`), shown as
+    # an embedded iframe in the course view. Only LEARNING_SET units carry these.
+    slide_urls: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
 
     # Extracted reading-material content (parts labelled "Reading Material").
     content: Mapped[str] = mapped_column(Text, default="")
