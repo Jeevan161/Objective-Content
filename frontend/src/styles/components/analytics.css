@@ -158,6 +158,12 @@
   padding: 2px 6px;
   white-space: nowrap;
 }
+/* Authoritative portal child order (vs the pending-extraction sync position). */
+.batch-order.portal {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 35%, transparent);
+  background: var(--brand-soft);
+}
 
 /* Loads table: whole row opens the loaded-content view. */
 .loads-row { cursor: pointer; }

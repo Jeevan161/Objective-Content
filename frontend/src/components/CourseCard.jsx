@@ -14,6 +14,7 @@ import {
   BookOpen,
   CheckCircle2,
   Users,
+  Presentation,
 } from 'lucide-react'
 import { getCourse } from '../api'
 import Pipeline from './Pipeline'
@@ -53,6 +54,29 @@ function headerTag(unit) {
   if (KIND_META[unit.kind]) return KIND_META[unit.kind]
   const firstType = unit.parts[0]?.unit_type
   return TYPE_META[firstType] || { label: firstType || 'Unit', cls: 'tag-default' }
+}
+
+// Prefer the portal's authoritative child order (from the details fetch); fall back to the
+// enumerated sync position when it hasn't been captured yet.
+const orderOf = (x) => (Number.isFinite(x?.child_order) ? x.child_order : x?.order)
+
+// The #N order badge, labelled by its source so the reviewer knows it's the portal's own order.
+function OrderBadge({ item }) {
+  const n = orderOf(item)
+  if (!Number.isFinite(n)) return null
+  const portal = Number.isFinite(item?.child_order)
+  return (
+    <span className={`batch-order ${portal ? 'portal' : ''}`}
+      title={portal ? 'Portal child order' : 'Sync position (portal order pending extraction)'}>
+      #{n}
+    </span>
+  )
+}
+
+// Turn a published Google-Slides link into its embeddable player URL (other providers pass through).
+function slidesEmbedUrl(url) {
+  if (!url) return url
+  return url.replace(/\/pubembed\b/, '/embed').replace(/\/pub\b/, '/embed')
 }
 
 // Small badge showing whether a reading material's content has been extracted.
@@ -97,6 +121,8 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
   const meta = headerTag(unit)
   // Which reading-material part (if any) is expanded inline to show its markdown.
   const [openPart, setOpenPart] = useState(null)
+  // Which learning-set part (if any) is expanded inline to show its slides iframe.
+  const [openSlides, setOpenSlides] = useState(null)
 
   // Reading materials are the only parts with extractable content. A per-unit
   // "Sync content" re-extracts just this learning set, token-free via the
@@ -114,9 +140,7 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
     <div className="unit-card" style={{ '--stagger': `${Math.min(index, 10) * 35}ms` }}>
       <div className="unit-card-head">
         <span className={`unit-tag ${meta.cls}`}>{meta.label}</span>
-        {Number.isFinite(unit.order) && (
-          <span className="batch-order" title="Batch order">#{unit.order}</span>
-        )}
+        <OrderBadge item={unit} />
         <span className="unit-title">{unit.label}</span>
         {canSync && (
           <button
@@ -141,13 +165,18 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
             part.content_status === 'EXTRACTED' &&
             Boolean(part.unit_id)
           const isOpen = openPart === key
+          const hasSlides = (part.slide_urls || []).length > 0
+          const slidesOpen = openSlides === key
           return (
           <Fragment key={key}>
           <div className={`resource-row ${flagged ? 'flagged' : ''}`}>
             <span className={`res-tag ${partTagClass(part.label)}`}>{part.label}</span>
-            {Number.isFinite(part.order) && (
-              <span className="batch-order" title="Batch order">#{part.order}</span>
+            {part.unit_type && (
+              <span className="res-type-tag" title="Portal unit type">
+                {part.unit_type.replaceAll('_', ' ').toLowerCase()}
+              </span>
             )}
+            <OrderBadge item={part} />
             {part.error ? (
               <span className="error-text">
                 <AlertTriangle size={12} /> {part.error}
@@ -184,6 +213,17 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
                 <BookOpen size={12} /> {isOpen ? 'Hide' : 'View'}
               </button>
             )}
+            {hasSlides && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm res-view"
+                aria-expanded={slidesOpen}
+                data-tip="View the slides for this learning set"
+                onClick={() => setOpenSlides(slidesOpen ? null : key)}
+              >
+                <Presentation size={12} /> {slidesOpen ? 'Hide slides' : 'Slides'}
+              </button>
+            )}
           </div>
           {canView && (
             <div className={`collapse ${isOpen ? 'open' : ''}`}>
@@ -192,6 +232,24 @@ function UnitCard({ unit, course, onSyncUnit, index = 0 }) {
                   {isOpen && (
                     <ReadingMaterialPane courseId={course.course_id} unitId={part.unit_id} />
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+          {hasSlides && (
+            <div className={`collapse ${slidesOpen ? 'open' : ''}`}>
+              <div className="collapse-inner">
+                <div className="part-slides-wrap">
+                  {slidesOpen && part.slide_urls.map((u, i) => (
+                    <iframe
+                      key={u || i}
+                      className="part-slides-frame"
+                      src={slidesEmbedUrl(u)}
+                      title={`Slides ${part.slide_urls.length > 1 ? i + 1 : ''} — ${part.name || part.unit_id}`}
+                      allowFullScreen
+                      loading="lazy"
+                    />
+                  ))}
                 </div>
               </div>
             </div>
@@ -228,9 +286,7 @@ function TopicSection({ topic, unitsSignal, course, onSyncUnit }) {
         <span className="unit-tag tag-topic">
           <BookOpen size={10} /> Topic
         </span>
-        {Number.isFinite(topic.order) && (
-          <span className="batch-order" title="Batch order">#{topic.order}</span>
-        )}
+        <OrderBadge item={topic} />
         <a className="topic-title" href={topic.topic_link} target="_blank" rel="noreferrer">
           {topic.topic_name || topic.topic_id}
           <ExternalLink size={12} />

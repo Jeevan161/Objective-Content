@@ -283,6 +283,15 @@ class ExecuteCodeRequest(BaseModel):
 # clear and rebuild chunks). Counts are passed in by the routes — keyed by
 # UnitPart.id for parts and by Course.course_id for courses — to avoid loading the
 # (large) embedding vectors just to display a status.
+# Present children in the portal's authoritative child order (from the details fetch) when we have
+# it, falling back to the enumerated sync position when we don't. Both are positions, so ordering
+# by the effective value interleaves populated + not-yet-populated children sensibly.
+def _child_order_key(obj) -> tuple:
+    co = getattr(obj, "child_order", None)
+    order = getattr(obj, "order", 0) or 0
+    return (co if co is not None else order, order)
+
+
 def serialize_unit_part(part: UnitPart, *, chunk_count: int = 0,
                         ingest_stale: bool = False) -> dict:
     return {
@@ -293,6 +302,8 @@ def serialize_unit_part(part: UnitPart, *, chunk_count: int = 0,
         "link": part.link,
         "error": part.error,
         "order": part.order,
+        "child_order": part.child_order,
+        "slide_urls": list(part.slide_urls or []),
         "content_status": part.content_status,
         "content_error": part.content_error,
         "resource_ids": part.resource_ids,
@@ -314,10 +325,11 @@ def serialize_unit(unit: Unit, *, part_counts: dict | None = None,
         "kind": unit.kind,
         "label": unit.label,
         "order": unit.order,
+        "child_order": unit.child_order,
         "parts": [
             serialize_unit_part(p, chunk_count=part_counts.get(p.id, 0),
                                 ingest_stale=p.id in stale_part_ids)
-            for p in unit.parts
+            for p in sorted(unit.parts, key=_child_order_key)
         ],
     }
 
@@ -329,8 +341,9 @@ def serialize_topic(topic: Topic, *, part_counts: dict | None = None,
         "topic_name": topic.topic_name,
         "topic_link": topic.topic_link,
         "order": topic.order,
+        "child_order": topic.child_order,
         "units": [serialize_unit(u, part_counts=part_counts, stale_part_ids=stale_part_ids)
-                  for u in topic.units],
+                  for u in sorted(topic.units, key=_child_order_key)],
     }
 
 
@@ -408,7 +421,7 @@ def serialize_course_detail(
             for p in course.prerequisites
         ],
         "topics": [serialize_topic(t, part_counts=part_counts, stale_part_ids=stale_part_ids)
-                   for t in course.topics],
+                   for t in sorted(course.topics, key=_child_order_key)],
     }
 
 
