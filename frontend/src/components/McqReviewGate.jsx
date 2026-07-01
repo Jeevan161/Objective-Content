@@ -107,6 +107,15 @@ function McqReviewGate({ review, busy, onDecide }) {
   const setComment = (id, comment) =>
     setState((p) => new Map(p).set(id, { ...get(id), comment }))
 
+  // Overflow: which distinct-uncovered outcomes the reviewer ticked to add (default none).
+  const [addSel, setAddSel] = useState(() => new Set())
+  const toggleAdd = (id) =>
+    setAddSel((p) => {
+      const next = new Set(p)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+
   if (review?.gate !== 'outcomes') return null
 
   const outcomes = review.outcomes || []
@@ -120,13 +129,18 @@ function McqReviewGate({ review, busy, onDecide }) {
   const missingReason = toRegen.some((o) => !get(o.id).comment.trim())
   const canSubmit = !busy && !missingReason
 
-  // "Add more outcomes": offered only when the set is below the target AND the run still has
-  // already-authored (reserve) outcomes to promote — no new generation happens.
   const target = review.target || 20
+
+  // Overflow = distinct concepts that couldn't fit the budget (NOT Bloom-restacks). Display-only;
+  // the reviewer opts in per-LO. `overflow` is an array on new runs (may be empty); undefined on
+  // older runs, where we fall back to the legacy count-based "Add N from reserve".
+  const overflow = Array.isArray(review.overflow) ? review.overflow : null
+  const canAddSelected = !busy && addSel.size > 0
+
+  // Legacy fallback (only when the new overflow list isn't present).
   const reserveAvailable = review.reserve_available || 0
-  const shortfall = Math.max(0, target - outcomes.length)
-  const addCount = Math.min(shortfall, reserveAvailable)
-  const canAddMore = !busy && addCount > 0
+  const legacyAddCount = Math.min(Math.max(0, target - outcomes.length), reserveAvailable)
+  const canLegacyAdd = !busy && overflow === null && legacyAddCount > 0
 
   function submit() {
     const lo_feedback = outcomes.map((o) => {
@@ -137,8 +151,12 @@ function McqReviewGate({ review, busy, onDecide }) {
     onDecide({ action: rejected.length ? 'reject' : 'approve', rejected, lo_feedback })
   }
 
-  function addMore() {
-    onDecide({ action: 'add_more', count: addCount })
+  function addSelected() {
+    onDecide({ action: 'add_more', add_ids: [...addSel] })
+  }
+
+  function legacyAddMore() {
+    onDecide({ action: 'add_more', count: legacyAddCount })
   }
 
   const listProps = { reviews, stateMap: state, onVerdict: setVerdict, onComment: setComment, busy }
@@ -181,16 +199,63 @@ function McqReviewGate({ review, busy, onDecide }) {
         </div>
       )}
 
+      {overflow && overflow.length > 0 && (
+        <div className="mcq-overflow">
+          <div className="mcq-overflow-head">
+            <span className="mcq-spec-k">
+              {overflow.length} distinct concept{overflow.length === 1 ? '' : 's'} didn’t fit the budget
+            </span>
+            <span className="mcq-overflow-sub">
+              These are taught concepts the {target}-outcome budget couldn’t cover — <b>not</b> Bloom
+              variants of ones already listed. Tick any to add as extra outcomes; adding raises the
+              question count beyond {target} (more questions = more cost). Leave all unticked to keep {target}.
+            </span>
+          </div>
+          <ul className="mcq-overflow-list">
+            {overflow.map((r) => {
+              const on = addSel.has(r.id)
+              return (
+                <li key={r.id} className={`mcq-overflow-item ${on ? 'on' : ''}`}>
+                  <label className="mcq-overflow-check">
+                    <input type="checkbox" checked={on} disabled={busy} onChange={() => toggleAdd(r.id)} />
+                  </label>
+                  <div className="mcq-overflow-main">
+                    <div className="mcq-overflow-title-row">
+                      <span className={`mcq-lo-bloom b-${r.bloom_level}`}>{r.bloom_level}</span>
+                      <span className="mcq-overflow-title">{r.title || r.sub_concept}</span>
+                    </div>
+                    <div className="mcq-lo-meta">
+                      <span className="mcq-lo-tag">concept: {(r.concept || r.concept_id || '').replace(/^C_/, '')}</span>
+                      {r.reason && <span className="mcq-lo-tag mcq-overflow-why">{r.reason}</span>}
+                    </div>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+          <div className="mcq-overflow-foot">
+            <span className={`mcq-badge ${addSel.size ? 'ok' : ''}`}>
+              {outcomes.length} + {addSel.size} = {outcomes.length + addSel.size} outcomes
+            </span>
+            <button type="button" className="btn btn-soft" disabled={!canAddSelected} onClick={addSelected}
+              title={canAddSelected ? 'Add the ticked distinct outcomes, then review the expanded set'
+                : 'Tick one or more concepts above to add them'}>
+              <Plus size={14} /> {`Add ${addSel.size} selected`}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="mcq-review-actions">
-        {canAddMore && (
+        {canLegacyAdd && (
           <button
             type="button"
             className="btn btn-ghost"
             disabled={busy}
-            onClick={addMore}
-            title={`Promote ${addCount} more already-authored outcome${addCount > 1 ? 's' : ''} toward the target of ${target}`}
+            onClick={legacyAddMore}
+            title={`Promote ${legacyAddCount} more already-authored outcome${legacyAddCount > 1 ? 's' : ''} toward the target of ${target}`}
           >
-            <Plus size={14} /> {`Add ${addCount} more outcome${addCount > 1 ? 's' : ''}`}
+            <Plus size={14} /> {`Add ${legacyAddCount} more outcome${legacyAddCount > 1 ? 's' : ''}`}
           </button>
         )}
         <button

@@ -1092,6 +1092,38 @@
 .mcq-review-note { width: 100%; resize: vertical; font-family: inherit; }
 .mcq-review-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
 
+/* --- Overflow: distinct concepts that couldn't fit the budget (opt-in to add) --- */
+.mcq-overflow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px dashed var(--border-strong, var(--border));
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+.mcq-overflow-head { display: flex; flex-direction: column; gap: 2px; }
+.mcq-overflow-sub { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.mcq-overflow-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.mcq-overflow-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.mcq-overflow-item:hover { background: var(--bg-hover); }
+.mcq-overflow-item.on { background: var(--brand-soft); border-color: var(--brand-ring, var(--brand)); }
+.mcq-overflow-check { display: flex; align-items: center; padding-top: 2px; }
+.mcq-overflow-check input[type='checkbox'] { accent-color: var(--brand); cursor: pointer; width: 15px; height: 15px; }
+.mcq-overflow-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.mcq-overflow-title-row { display: flex; align-items: center; gap: var(--sp-2); }
+.mcq-overflow-title { font-size: 13px; color: var(--text); font-weight: 500; }
+.mcq-overflow-why { color: var(--text-3); font-style: italic; }
+.mcq-overflow-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); flex-wrap: wrap; }
+
 /* Two-column review after a regeneration round: left = regenerated, right = kept. */
 .mcq-review-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
 .mcq-review-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }

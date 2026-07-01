@@ -143,6 +143,41 @@ def review_questions_node(state, config) -> dict:
 
 
 # --- human-in-the-loop gate (inert pass-through unless ctx.hitl_enabled) --- #
+_BLOOM_RANK = {"remember": 0, "understand": 1, "apply": 2, "scenario": 3}
+
+
+def _distinct_overflow(state: dict) -> list[dict]:
+    """The genuinely-uncovered concepts sitting in reserve — ONE representative outcome per
+    concept_id NOT already covered by the selected set. This is the 'additional distinct LOs' the
+    gate surfaces: the raw backfill_pool is mostly Bloom-restacks of already-covered concepts, so
+    we filter to NEW concept_ids only and keep the richest (highest Bloom, then weight) candidate
+    for each. These are the LOs that could not fit the budget — a conscious opt-in to add."""
+    covered = {o.get("concept_id") for o in (state.get("outcomes") or [])}
+    inv = state.get("concept_inventory") or []
+    name_of = {c.get("concept_id"): (c.get("canonical_name") or c.get("concept_id")) for c in inv}
+    parent_of = {c.get("concept_id"): c.get("parent_concept") for c in inv}
+    best: dict[str, tuple] = {}
+    for o in (state.get("backfill_pool") or []):
+        cid = o.get("concept_id")
+        if not cid or cid in covered:
+            continue
+        rank = (_BLOOM_RANK.get(o.get("bloom_level"), 0), o.get("weight") or 0)
+        if cid not in best or rank > best[cid][0]:
+            best[cid] = (rank, o)
+    rows = []
+    for cid, (_, o) in best.items():
+        rows.append({
+            "id": o.get("id"), "concept_id": cid,
+            "concept": parent_of.get(cid) or name_of.get(cid, cid),
+            "sub_concept": name_of.get(cid, cid),
+            "bloom_level": o.get("bloom_level"),
+            "title": o.get("title") or o.get("description") or "",
+            "weight": o.get("weight") or 0,
+        })
+    rows.sort(key=lambda r: -(r["weight"] or 0))
+    return rows
+
+
 def review_outcomes(state, config) -> dict:
     """HITL gate — pause for a human to review the final LOs. The reviewer unchecks any
     outcome and gives a per-LO reason ('why'); each reason is written to that LO's
@@ -167,11 +202,19 @@ def review_outcomes(state, config) -> dict:
     # Target outcome count (for the gate's "N of target" indicator + the add-more affordance).
     lo_budget = getattr(ctx, "lo_budget", None)
     target = int(lo_budget) if lo_budget is not None else int(getattr(ctx, "question_budget", None) or 20)
+    # Overflow = the DISTINCT uncovered concepts that couldn't fit the budget (not Bloom-restacks).
+    # Surfaced display-only; the reviewer opts in per-LO to add any/all. Each carries a why-excluded
+    # reason so the gate can explain the exclusion.
+    overflow = _distinct_overflow(state)
+    for row in overflow:
+        row["reason"] = f"Distinct concept beyond the {target}-outcome budget — not covered by the selected set."
     from langgraph.types import interrupt
     decision = interrupt({"gate": "outcomes", "outcomes": outcomes,
                           "reviews": state.get("lo_reviews", {}),
                           "regenerated_ids": list(state.get("last_regenerated_ids") or []),
                           "target": target,
+                          "overflow": overflow,
+                          "overflow_count": len(overflow),
                           "reserve_available": len(state.get("backfill_pool") or [])})
     decision = decision if isinstance(decision, dict) else {"action": "approve"}
     action = decision.get("action", "approve")
@@ -179,10 +222,14 @@ def review_outcomes(state, config) -> dict:
     # "Add more outcomes": promote already-authored (reserve) LOs toward the target, then re-pause at
     # this gate so the reviewer sees the expanded set. No new generation — handled in promote_outcomes.
     if action == "add_more":
+        add_ids = [i for i in (decision.get("add_ids") or []) if i]
         n = max(0, int(decision.get("count") or 0))
-        prog.done("review_outcomes", detail=f"add {n} more outcome(s) from reserve")
-        return {"gate_decision": {"gate": "outcomes", "action": "add_more", "add_count": n},
-                "notes": [f"Gate add_more ({n})"]}
+        detail = (f"add {len(add_ids)} chosen outcome(s)" if add_ids
+                  else f"add {n} more outcome(s) from reserve")
+        prog.done("review_outcomes", detail=detail)
+        return {"gate_decision": {"gate": "outcomes", "action": "add_more",
+                                  "add_count": n, "add_ids": add_ids},
+                "notes": [f"Gate add_more ({len(add_ids) or n})"]}
 
     # Per-LO feedback: rejected = [{"id", "feedback"}]. Accept the legacy {rejected_ids, note} too.
     rejected_items = list(decision.get("rejected") or [])
@@ -230,32 +277,56 @@ def route_after_validate(state) -> str:
 
 
 def promote_outcomes(state, config) -> dict:
-    """Promote up to `add_count` highest-weight UNSELECTED candidates (backfill_pool) into the
-    outcome set on a reviewer's "add more outcomes" request at the gate. NO LLM — these were
-    already authored; they flow through finalize → sequence → typing → the gate again for review.
+    """Promote reserve (backfill_pool) outcomes into the set on a reviewer's "add more" request at
+    the gate. NO LLM — these were already authored; they flow through finalize → sequence → typing
+    → the gate again for review. Two modes:
+      • `add_ids` present → promote EXACTLY those chosen overflow outcomes (per-LO opt-in).
+      • else `add_count` → promote up to N, DISTINCT uncovered concepts first (never a restack of an
+        already-covered concept), falling back to highest-weight only if distinct ones run out.
     Dedups on id and (concept, Bloom) so a promotion never duplicates a shown outcome."""
     prog = _prog(config)
     prog.start("promote_outcomes")
     d = state.get("gate_decision") or {}
+    add_ids = [i for i in (d.get("add_ids") or []) if i]
     n = max(0, int(d.get("add_count") or 0))
     pool = list(state.get("backfill_pool") or [])
     current = list(state.get("outcomes") or [])
-    if n <= 0 or not pool:
+    if not pool or (not add_ids and n <= 0):
         prog.done("promote_outcomes", detail="nothing to promote")
         return {}
     have_ids = {o.get("id") for o in current}
     have_pairs = {(o.get("concept_id"), o.get("bloom_level")) for o in current}
     take = []
-    for o in sorted(pool, key=lambda x: -(x.get("weight") or 0)):
-        if o.get("id") in have_ids:
-            continue
-        pair = (o.get("concept_id"), o.get("bloom_level"))
-        if pair in have_pairs:
-            continue
-        take.append(o)
-        have_pairs.add(pair)
-        if len(take) >= n:
-            break
+    if add_ids:
+        # Exactly the reviewer's chosen overflow outcomes (order preserved), deduped for safety.
+        by_id = {o.get("id"): o for o in pool}
+        for i in add_ids:
+            o = by_id.get(i)
+            if o is None or o.get("id") in have_ids:
+                continue
+            pair = (o.get("concept_id"), o.get("bloom_level"))
+            if pair in have_pairs:
+                continue
+            take.append(o)
+            have_pairs.add(pair)
+    else:
+        # Count-based: distinct uncovered concepts first, then highest-weight remainder.
+        overflow = _distinct_overflow(state)
+        overflow_ids = [r["id"] for r in overflow]
+        by_id = {o.get("id"): o for o in pool}
+        ordered = ([by_id[i] for i in overflow_ids if i in by_id]
+                   + sorted((o for o in pool if o.get("id") not in set(overflow_ids)),
+                            key=lambda x: -(x.get("weight") or 0)))
+        for o in ordered:
+            if o.get("id") in have_ids:
+                continue
+            pair = (o.get("concept_id"), o.get("bloom_level"))
+            if pair in have_pairs:
+                continue
+            take.append(o)
+            have_pairs.add(pair)
+            if len(take) >= n:
+                break
     if not take:
         prog.done("promote_outcomes", detail="no distinct reserve outcomes left")
         return {}
