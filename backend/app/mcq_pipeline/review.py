@@ -168,19 +168,30 @@ _FEEDBACK_INTENTS = {
 }
 
 _FEEDBACK_INTENT_SYS = register("review.feedback_intent_sys", (
-    "You triage a reviewer's feedback on a generated assessment question into ONE intent, so the "
-    "system can apply a TARGETED fix instead of blindly regenerating. Choose the single best intent:\n"
+    "GOAL: route a reviewer's feedback to the SMALLEST correct fix of the SAME question so it is "
+    "improved in place — preserving everything the reviewer did not complain about. The reviewer wants "
+    "THIS question fixed, not a different one; only conclude the whole outcome should be dropped when "
+    "they explicitly say the topic should not be asked. A wrong route is costly: mis-reading a content "
+    "correction as 'drop the outcome' throws away a good question and asks about something else.\n\n"
+    "You triage the feedback into ONE intent so the system can apply a TARGETED fix instead of blindly "
+    "regenerating. Choose the single best intent:\n"
     "- wrong_options: distractors/options are wrong, weak, implausible, give the answer away, or are "
     "negations/opposites of the key.\n"
-    "- wrong_answer: the marked correct answer (the key) is itself incorrect.\n"
+    "- wrong_answer: the marked correct answer is incorrect, OR the reviewer names the answer/syntax "
+    "that was actually taught ('we taught X', 'the answer/syntax should be X', 'use X not Y', 'we "
+    "haven't taught Y'). Fix the KEY (and for code questions the CODE/syntax) to X — but KEEP THE SAME "
+    "OUTCOME; this is a content correction, never a reason to drop the outcome.\n"
     "- multi_valid: more than one option is defensibly correct, options are too similar, or the "
     "'correct' choice is subjective.\n"
     "- not_self_contained: the question or its answer depends on the source/reading or on context not "
     "stated IN the question.\n"
     "- formatting: presentation only — use Markdown, code/backtick formatting, AI-looking dashes or "
     "typography, wording style.\n"
-    "- lo_misaligned: the question tests the wrong thing / is out of scope / 'should not be asked' / the "
-    "learning outcome itself is unsuitable.\n"
+    "- lo_misaligned: the reviewer wants this TOPIC/OUTCOME dropped entirely — it is out of scope or "
+    "should not be asked at all. Do NOT use this for a correction to the answer, options, syntax, code, "
+    "or wording (those keep the outcome). 'We haven't taught this syntax, use the taught one' is a "
+    "content correction (wrong_answer), NOT lo_misaligned. When unsure between lo_misaligned and a "
+    "content fix, choose the content fix.\n"
     "- new_question: the reviewer wants a completely different/new question on the same outcome.\n"
     "- other: anything else, or unclear.\n"
     'Return ONLY JSON: {"intent": "<one of the names above>"}.'
@@ -268,6 +279,10 @@ def _intent_issue(intent: str, feedback: str) -> dict:
 # A/B/C/D, code, stem, key), the READING MATERIAL (authoritative for what was taught) + RAG context,
 # and the sibling questions (to de-duplicate), then emit a precise, surgical fix directive.
 _EDIT_PLAN_SYS = register("review.edit_plan_sys", (
+    "GOAL: make the SMALLEST change that fully satisfies the reviewer while keeping the question correct, "
+    "self-contained, and grounded in what the session actually taught. Change only what was asked; keep "
+    "everything else identical. Correct the reviewer's stated fact/syntax/answer even when it contradicts "
+    "the retrieved grounding (the reviewer knows the session); never drift to a different concept.\n\n"
     "You are a senior assessment editor fixing ONE question from a reviewer's feedback. Do NOT rewrite "
     "blindly — first REASON about what the reviewer actually wants, then give a precise, surgical plan.\n\n"
     "You are given: the reviewer FEEDBACK; the CURRENT question (stem, any CODE, options labelled "
@@ -713,12 +728,25 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
 
     new_qtype = target or current_qtype
     alignment_note = None
-    plan = {}   # reasoned edit plan (set in the content-fix branches); surfaced on the new question
-    # When the OUTCOME itself is rejected and a reserve (dropped) outcome is available,
-    # swap that reserve LO into this slot instead of re-asking the misaligned outcome.
-    # A variant is bound to its base question's objective — never swap its LO (that would break the
-    # variant set); a misaligned-outcome complaint on a variant is handled as a normal regen.
-    swap_lo = _pick_reserve_lo(result, lo) if (intent == "lo_misaligned" and not is_variant) else None
+    # Reason about the edit UP-FRONT (unless it's a pure type change or there's no prior question) so
+    # routing AND the fix share ONE plan — and so the plan's change_fields can GATE the destructive
+    # LO swap below.
+    plan = {}
+    if (not target) and _lean:
+        base_ground = _ground({**lo, "question_type": new_qtype}, None)
+        plan = _plan_edit(feedback, _lean, new_qtype, lo, base_ground, _sibling_stems(result, variant_key))
+    # Swap the LO ONLY when the reviewer wants the OUTCOME itself replaced — NEVER when they gave a
+    # concrete content fix (syntax / option / answer / stem). "We didn't teach this syntax, use X" is a
+    # content correction that KEEPS the outcome; it must not silently swap in a different concept (the
+    # observed bug: a request.POST syntax fix replaced the question with a CSRF-token one).
+    # A variant is bound to its base objective — never swap its LO.
+    swap_lo = None
+    if intent == "lo_misaligned" and not is_variant and not plan.get("change_fields"):
+        swap_lo = _pick_reserve_lo(result, lo)
+    # Surgical in-place fix when we have a prior question, aren't swapping, and it isn't a fresh
+    # "new question" — this includes a lo_misaligned complaint that actually carried a content fix.
+    do_surgical = ((not target) and bool(_lean) and swap_lo is None and intent != "new_question"
+                   and not (intent == "lo_misaligned" and not plan.get("change_fields")))
 
     if swap_lo is not None:
         gen_lo = {**swap_lo, "question_type": new_qtype}
@@ -728,14 +756,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
             gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue("other", feedback)] + mem_issues)
         alignment_note = (f"Outcome swapped (the original was flagged as misaligned/out-of-scope): "
                           f"'{outcome}' -> '{swap_lo.get('outcome')}'. Please review the new question.")
-    elif (not target) and _lean and intent not in ("new_question", "lo_misaligned"):
-        # surgical fix of the existing question (content / format / alignment intents)
+    elif do_surgical:
+        # surgical fix of the existing question — reuse the up-front reasoned plan (options A/B/C/D,
+        # code, stem, RM + RAG, siblings) and apply its precise, scoped directive (not a coarse bucket).
         gen_lo = {**lo, "question_type": new_qtype,
                   "description": (lo.get("description") or "") + variant_directive}
         ctx = _ground(gen_lo, None)
-        # REASON about the exact intent with the reading material + RAG + labelled options + sibling
-        # questions in view, then apply that precise, authoritative directive (not the coarse bucket).
-        plan = _plan_edit(feedback, _lean, new_qtype, lo, ctx, _sibling_stems(result, variant_key))
         new_lean = fix_lean(gen_lo, ctx, _lean, [_reasoned_issue(intent, feedback, plan)] + mem_issues)
         gen = {"status": "generated", "question_type": current_qtype,
                "difficulty": difficulty_of(lo), "lean": new_lean}
@@ -746,8 +772,9 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         ctx = _ground(gen_lo, None)
         gen = generate_lean(gen_lo)
         if gen.get("status") == "generated" and gen.get("lean"):
-            plan = _plan_edit(feedback, _lean or gen["lean"], new_qtype, lo, ctx,
-                              _sibling_stems(result, variant_key))
+            if not plan:
+                plan = _plan_edit(feedback, _lean or gen["lean"], new_qtype, lo, ctx,
+                                  _sibling_stems(result, variant_key))
             gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"],
                                    [_reasoned_issue(intent or "other", feedback, plan)] + mem_issues)
         if intent == "lo_misaligned":
