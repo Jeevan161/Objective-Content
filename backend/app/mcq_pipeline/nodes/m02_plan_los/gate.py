@@ -23,7 +23,7 @@ from app.mcq_pipeline.config import (BUDGET_STEP, DEPTH_CATEGORIES, DROP_NAMED_O
                                      VERBS, feasible_tiers)
 from app.mcq_pipeline.utils.concept_graph import (canonical_name, description_grounded, display_name,
                                                   graph_find_prerequisites, ground_quote, slugify)
-from app.mcq_pipeline.utils._lo_helpers import _DEFAULT_VERB, _tier_of
+from app.mcq_pipeline.utils._lo_helpers import _DEFAULT_VERB, _tier_of, sane_title
 
 _RANK = {t: i for i, t in enumerate(TIER_ORDER)}
 
@@ -45,7 +45,7 @@ def proto_outcome(item: dict, topic: dict) -> dict | None:
     verb = str(item.get("learner_action", "")).lower().strip()
     if verb not in VERBS[tier]:
         verb = _DEFAULT_VERB[tier]
-    title = (item.get("title") or f"{verb.title()} {cname}").strip()
+    title = sane_title(item.get("title"), f"{verb.title()} {cname}")
     skill = item.get("skill_type")
     if skill not in SKILL_TYPES:
         skill = "practical_application" if tier in ("apply", "scenario") else "conceptual"
@@ -55,7 +55,7 @@ def proto_outcome(item: dict, topic: dict) -> dict | None:
             "title": title, "topic_id": topic["topic_id"],
             "bloom_level": tier, "scenario": tier == "scenario",
             "skill_type": skill, "learner_action": verb,
-            "description": (item.get("description") or title).strip(),
+            "description": sane_title(item.get("description"), title),
             "syntax": (item.get("syntax") or None),
             "prerequisites": [], "prerequisite_scope": None, "target_questions": 1,
             "source_evidence": {"quote": quote, "section": topic["topic_id"]},
@@ -204,23 +204,28 @@ def _quantize_budget(requested: int, capacity: int, n_concepts: int,
 
 
 def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | None = None,
-            risky_ids: frozenset = frozenset()) -> list:
+            risky_ids: frozenset = frozenset(), distinct_only: bool = False) -> list:
     """BREADTH-FIRST coverage toward `budget`. (a) one outcome per DISTINCT concept (concept_id) at
     its top non-scenario tier, heaviest concept first — so EVERY distinct in-scope concept is covered
     before any Bloom-restack, up to the budget (this is the fix for surfacing ~20 distinct concepts
     instead of restacking ~15). (a2) reserve up to SCENARIO_TARGET scenario outcomes; (b) fill any
     leftover budget (only when there are fewer distinct concepts than the budget) PREREQ-SAFE first,
     then the agent's PREFERRED order, then by weight — deduping `(concept_id, Bloom)` pairs.
-    `parent_of` is retained for signature compatibility (coverage is now per concept, not per parent)."""
+    `parent_of` is retained for signature compatibility (coverage is now per concept, not per parent).
+    `distinct_only` (Classroom Quiz): NEVER put two outcomes on the same concept — with a hard cap of
+    ~6 questions we don't want a concept repeated across Bloom tiers unless there is literally nothing
+    else to ask, so the Bloom-restack fill (b) and any scenario restack (a2) are suppressed; the set
+    is simply every distinct concept (up to the budget), which may be fewer than the budget."""
     by_concept: dict = defaultdict(list)
     for o in candidates:
         by_concept[o["concept_id"]].append(o)
-    selected, picked_ids, picked_pairs = [], set(), set()
+    selected, picked_ids, picked_pairs, picked_concepts = [], set(), set(), set()
 
     def take(o):
         selected.append(o)
         picked_ids.add(o["id"])
         picked_pairs.add((o["concept_id"], o["bloom_level"]))
+        picked_concepts.add(o["concept_id"])
 
     def _concept_weight(group):
         return max((o.get("weight", 0) for o in group), default=0)
@@ -257,7 +262,8 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
     # the material supports them instead of being crowded out. dedup + budget still apply.
     scen = sorted((o for o in candidates if o["bloom_level"] == "scenario"
                    and o["id"] not in picked_ids
-                   and (o["concept_id"], o["bloom_level"]) not in picked_pairs),
+                   and (o["concept_id"], o["bloom_level"]) not in picked_pairs
+                   and not (distinct_only and o["concept_id"] in picked_concepts)),
                   key=lambda o: (o["id"] in risky_ids, -o.get("weight", 0), o.get("dag_depth", 0), o["id"]))
     for o in scen[:max(0, SCENARIO_TARGET)]:
         if len(selected) >= budget:
@@ -274,6 +280,8 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
         if len(selected) >= budget:
             break
         if (o["concept_id"], o["bloom_level"]) in picked_pairs:        # dedup distinct sub-concept/tier
+            continue
+        if distinct_only and o["concept_id"] in picked_concepts:       # CQ: never repeat a concept
             continue
         take(o)
 
@@ -322,7 +330,10 @@ def enforce(state, inv: list, outcomes: list, concept_graph: dict, outcome_graph
         and not all(p in safe for p in graph_find_prerequisites(cg_state, o["concept_id"])))
 
     prefer = [i for i in (prefer_ids or []) if isinstance(i, str)]
-    selected = _select(candidates, final_budget, parent_of, prefer_ids=prefer, risky_ids=risky_ids)
+    # Classroom Quiz (ceiling set) selects DISTINCT concepts only — no Bloom-restacks to pad a small
+    # cap. MCQ keeps the restack fill so it can reach its larger target.
+    selected = _select(candidates, final_budget, parent_of, prefer_ids=prefer, risky_ids=risky_ids,
+                       distinct_only=(ceiling is not None))
     selected_ids = {o["id"] for o in selected}
     dropped_unselected = [o["id"] for o in candidates if o["id"] not in selected_ids]
     apply_ids = [o["id"] for o in selected if o["bloom_level"] in ("apply", "scenario")]
