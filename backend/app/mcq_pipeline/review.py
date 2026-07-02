@@ -261,6 +261,179 @@ def _intent_issue(intent: str, feedback: str) -> dict:
     }
 
 
+# --- REASONING-FIRST edit planner ------------------------------------------- #
+# The coarse intent buckets above apply a GENERIC instruction that can fight the reviewer (e.g.
+# "wrong_answer" -> "mark the correct option per the COURSE MATERIAL" reverts an explicit human
+# answer-key). Instead, first REASON about the exact intent with the question laid out (options
+# A/B/C/D, code, stem, key), the READING MATERIAL (authoritative for what was taught) + RAG context,
+# and the sibling questions (to de-duplicate), then emit a precise, surgical fix directive.
+_EDIT_PLAN_SYS = register("review.edit_plan_sys", (
+    "You are a senior assessment editor fixing ONE question from a reviewer's feedback. Do NOT rewrite "
+    "blindly — first REASON about what the reviewer actually wants, then give a precise, surgical plan.\n\n"
+    "You are given: the reviewer FEEDBACK; the CURRENT question (stem, any CODE, options labelled "
+    "A/B/C/D with the CORRECT one marked, explanation); the READING MATERIAL / course context that is "
+    "AUTHORITATIVE for what was actually taught; and the OTHER questions in this set (to avoid overlap).\n\n"
+    "Reason in steps:\n"
+    "1. INTENT — state precisely what to change: a specific option (by letter), the correct answer/key, "
+    "the stem wording, the CODE, the number of options, self-containment, or 'make it different from "
+    "question N'. Quote the reviewer's concrete ask.\n"
+    "2. VERIFY against the READING MATERIAL — when the reviewer asserts a correct answer or syntax "
+    "('we taught X', 'the answer should be X'), check the material. The reviewer + the material are "
+    "AUTHORITATIVE over any earlier grounding guess: if they say X is the taught answer and the material "
+    "is consistent, X BECOMES the correct key — do NOT keep the old key. Use the material to get exact "
+    "syntax right (e.g. request.POST.get('title') vs request.POST['title']).\n"
+    "3. PLAN — one specific fix_directive naming exactly which option letter / field / code / stem to "
+    "change and the new value, preserving everything the reviewer did NOT complain about.\n\n"
+    "HARD RULES for the fix:\n"
+    "- SELF-CONTAINED STEM: the reviewer's mention of 'the session'/'what we taught' tells YOU which "
+    "answer is correct — it must NEVER appear in the question. Do NOT write stems like 'according to the "
+    "session context...', 'as taught in the session...', 'based on the reading...'. The stem must read as "
+    "a standalone question answerable from itself.\n"
+    "- VALID DISTRACTORS: every wrong option must be a real, plausible, SYNTACTICALLY-VALID alternative in "
+    "the same domain that a learner could genuinely confuse with the key (verify option syntax against the "
+    "material) — never malformed, nonsense, or a trivially-wrong string.\n"
+    "- EXACTLY ONE correct option for single-select types; the correct option must be genuinely correct.\n\n"
+    "SCOPE — this is critical: change ONLY the field(s) the reviewer actually asked about; everything "
+    "else must stay byte-for-byte. List those fields in change_fields, drawn from: 'stem' (the question "
+    "text/description), 'code', 'options' (add/replace/remove a distractor's wording), 'correct_key' "
+    "(which option is correct), 'explanation'. E.g. 'change option B' -> ['options'] (NOT 'stem'); "
+    "'reword the question' -> ['stem']; 'the answer should be X' -> ['correct_key'] (+ 'options' only if "
+    "an option's text must change). Never include a field the reviewer did not raise.\n"
+    "- CODE-ANALYSIS questions (the answer is the OUTPUT of the shown code): a request to change 'the "
+    "correct answer', a syntax, or a model/variable/field name means editing the CODE itself — include "
+    "'code' in change_fields and put the exact literal change in fix_directive (e.g. rename Product->Book, "
+    "or request.POST['title'] -> request.POST.get('title')).\n\n"
+    'Return ONLY JSON: {"reasoning": "<intent + verification, 1-3 sentences>", '
+    '"change_fields": ["<subset of stem|code|options|correct_key|explanation>"], '
+    '"authoritative_correct_answer": "<verbatim text the correct option MUST have, or null>", '
+    '"fix_directive": "<the precise surgical instruction to apply>"}.'
+))
+
+# Fields whose keys we can deterministically preserve when they are OUT of the reviewer's scope.
+_STEM_KEYS = ("question", "statement")
+_CODE_KEYS = ("code", "code_snippet", "code_stub")
+_ANSWER_KEYS = ("options", "is_true", "correct_output", "correct_outputs", "blank_answer", "ordered_items")
+
+
+def _apply_field_scope(old_lean: dict, new_lean: dict, change_fields) -> dict:
+    """Hard-preserve the fields the reviewer did NOT ask to change, so 'change option B' can't
+    silently rewrite the stem (the #1 complaint). The reasoned plan declares change_fields; anything
+    not listed is restored verbatim from the original question. Answer fields (options + key) are only
+    restored wholesale when NEITHER 'options' nor 'correct_key' is in scope — when an option IS being
+    edited we keep the model's new options (can't safely restore a single one by identity)."""
+    cf = {str(f).strip().lower() for f in (change_fields or [])}
+    if not cf:                       # planner didn't scope it — don't over-constrain
+        return new_lean
+    merged = dict(new_lean or {})
+    if "stem" not in cf:
+        for k in _STEM_KEYS:
+            if k in (old_lean or {}):
+                merged[k] = old_lean[k]
+    if "code" not in cf:
+        for k in _CODE_KEYS:
+            if k in (old_lean or {}):
+                merged[k] = old_lean[k]
+    if "options" not in cf and "correct_key" not in cf:   # answer untouched -> restore it wholesale
+        for k in _ANSWER_KEYS:
+            if k in (old_lean or {}):
+                merged[k] = old_lean[k]
+    return merged
+
+
+def _labeled_question(lean: dict, qtype: str) -> str:
+    """Render the current question with A/B/C/D-labelled options + the marked key, code and stem —
+    so the planner can target a SPECIFIC option/field the way the reviewer refers to them."""
+    lean = lean or {}
+    parts = []
+    stem = lean.get("question") or lean.get("statement") or ""
+    if stem:
+        parts.append(f"STEM: {stem}")
+    code = lean.get("code") or lean.get("code_snippet") or lean.get("code_stub")
+    if code:
+        parts.append(f"CODE:\n{code}")
+    for i, o in enumerate(lean.get("options") or []):
+        mark = "  <-- CORRECT" if o.get("is_correct") else ""
+        parts.append(f"{chr(65 + i)}) {o.get('content', '')}{mark}")
+    if qtype == "TRUE_OR_FALSE":
+        parts.append(f"KEY: {'True' if lean.get('is_true') else 'False'}")
+    if lean.get("blank_answer"):
+        parts.append(f"BLANK ANSWER: {lean.get('blank_answer')}")
+    if lean.get("explanation"):
+        parts.append(f"EXPLANATION: {lean.get('explanation')}")
+    return "\n".join(parts)
+
+
+def _sibling_stems(result: dict, self_key: str) -> list:
+    """Stems of the OTHER questions in the run — context for 'this overlaps / make it different'."""
+    out = []
+    for q in (result.get("questions") or []):
+        if (q.get("question_key") or q.get("outcome")) == self_key or q.get("excluded"):
+            continue
+        t = _q_text(q.get("lean") or {})
+        if t:
+            out.append(t[:150])
+    return out
+
+
+def _plan_edit(feedback: str, lean: dict, qtype: str, lo: dict, grounding: str, siblings: list) -> dict:
+    """Reason about the reviewer's feedback WITH the reading material + RAG + labelled options in view,
+    and return {reasoning, authoritative_answer, fix_directive}. Best-effort: {} on failure (caller
+    falls back to the coarse intent instruction)."""
+    if not (feedback or "").strip():
+        return {}
+    from app.mcq_pipeline.utils.llm import chat, parse_json
+    rm = (lo.get("source_section_text") or lo.get("source_evidence") or "")
+    rm = rm if isinstance(rm, str) else ""
+    ground = (grounding or "")
+    sib = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(siblings[:12])) or "(none)"
+    usr = (f"REVIEWER FEEDBACK:\n{feedback}\n\n"
+           f"CURRENT QUESTION (type {qtype}):\n{_labeled_question(lean, qtype)}\n\n"
+           f"READING MATERIAL (authoritative — what the session taught):\n{(rm or '(none stored)')[:3500]}\n\n"
+           f"ADDITIONAL COURSE CONTEXT (RAG):\n{ground[:2500] or '(none)'}\n\n"
+           f"OTHER QUESTIONS IN THIS SET (do NOT overlap with these):\n{sib}")
+    try:
+        data = parse_json(chat(
+            [{"role": "system", "content": get_prompt("review.edit_plan_sys", _EDIT_PLAN_SYS)},
+             {"role": "user", "content": usr}], temperature=0)) or {}
+    except Exception:  # noqa: BLE001 — never block regeneration on the planner
+        return {}
+    auth = data.get("authoritative_correct_answer")
+    auth = "" if auth in (None, "null", "None") else str(auth).strip()
+    cf = data.get("change_fields") or []
+    cf = [str(f).strip().lower() for f in cf if str(f).strip()] if isinstance(cf, list) else []
+    return {"reasoning": str(data.get("reasoning") or "").strip(),
+            "authoritative_answer": auth,
+            "change_fields": cf,
+            "fix_directive": str(data.get("fix_directive") or "").strip()}
+
+
+def _reasoned_issue(intent: str, feedback: str, plan: dict) -> dict:
+    """Turn the reasoned plan into the high-severity fix issue for fix_lean. Falls back to the coarse
+    intent instruction when the planner produced nothing usable."""
+    directive = (plan or {}).get("fix_directive") or ""
+    if not directive:
+        return _intent_issue(intent or "other", feedback)
+    auth = (plan or {}).get("authoritative_answer") or ""
+    cf = set((plan or {}).get("change_fields") or [])
+    fix = directive
+    if auth:
+        fix += (f"\nAUTHORITATIVE ANSWER KEY: the correct option MUST be exactly \"{auth}\" — the reviewer "
+                f"confirms this is what the session teaches. Mark that option correct, make every other "
+                f"option genuinely wrong, and do NOT revert the key to a different option on grounding grounds.")
+    if "code" in cf:
+        fix += ("\nCODE EDIT IS AUTHORITATIVE: apply the reviewer's code change LITERALLY — rename the "
+                "model/variable/field or change the syntax EXACTLY as asked (e.g. Product -> Book, or "
+                "request.POST['title'] -> request.POST.get('title')) even if the grounding material still "
+                "uses the old form; the reviewer's instruction overrides the material's naming/syntax here.")
+    fix += ("\nSELF-CONTAINED: keep the stem standalone — never phrase it as 'according to the session/"
+            "reading/context' or 'as taught'; that reference is about correctness, not text for the stem. "
+            "Every distractor must be a plausible, syntactically-valid alternative (not malformed/nonsense).")
+    return {"severity": "high", "rule": "REVIEWER FEEDBACK (reasoned)",
+            "problem": (f"Reviewer feedback: {feedback}\n"
+                        f"Understood intent: {(plan or {}).get('reasoning', '')[:500]}"),
+            "suggested_fix": fix}
+
+
 # --- regeneration MEMORY: feed prior rejected attempts back in so a regen fixes ALL --- #
 # past complaints and never reproduces a version already rejected (the #1 driver of the
 # observed ~2.4-regens-to-converge tail). The data is already on the question object
@@ -475,10 +648,12 @@ def _find_idx(qs: list, ident: str) -> int:
 
 
 def regenerate_question(run_id, outcome: str, feedback: str, *,
-                        reviewer: str = "", tags: list | None = None) -> dict:
+                        reviewer: str = "", tags: list | None = None,
+                        dry_run: bool = False) -> dict:
     """Regenerate the question for `outcome`, injecting the human feedback as a
     top-priority instruction; re-review; persist (with a revision + feedback row).
-    Returns the new question dict."""
+    Returns the new question dict. `dry_run=True` runs the full reason→fix→review
+    pipeline but writes NOTHING to the DB (used for smoke tests)."""
     from app.mcq_pipeline.utils import scope
     from app.mcq_pipeline.nodes.m08_generate_questions import _ground, difficulty_of, fix_lean, generate_lean
     from app.mcq_pipeline.nodes.m08_generate_questions.enforce import _is_multi_correct_shape
@@ -538,6 +713,7 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
 
     new_qtype = target or current_qtype
     alignment_note = None
+    plan = {}   # reasoned edit plan (set in the content-fix branches); surfaced on the new question
     # When the OUTCOME itself is rejected and a reserve (dropped) outcome is available,
     # swap that reserve LO into this slot instead of re-asking the misaligned outcome.
     # A variant is bound to its base question's objective — never swap its LO (that would break the
@@ -557,7 +733,10 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         gen_lo = {**lo, "question_type": new_qtype,
                   "description": (lo.get("description") or "") + variant_directive}
         ctx = _ground(gen_lo, None)
-        new_lean = fix_lean(gen_lo, ctx, _lean, [_intent_issue(intent or "other", feedback)] + mem_issues)
+        # REASON about the exact intent with the reading material + RAG + labelled options + sibling
+        # questions in view, then apply that precise, authoritative directive (not the coarse bucket).
+        plan = _plan_edit(feedback, _lean, new_qtype, lo, ctx, _sibling_stems(result, variant_key))
+        new_lean = fix_lean(gen_lo, ctx, _lean, [_reasoned_issue(intent, feedback, plan)] + mem_issues)
         gen = {"status": "generated", "question_type": current_qtype,
                "difficulty": difficulty_of(lo), "lean": new_lean}
     else:
@@ -567,7 +746,10 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         ctx = _ground(gen_lo, None)
         gen = generate_lean(gen_lo)
         if gen.get("status") == "generated" and gen.get("lean"):
-            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"], [_intent_issue(intent or "other", feedback)] + mem_issues)
+            plan = _plan_edit(feedback, _lean or gen["lean"], new_qtype, lo, ctx,
+                              _sibling_stems(result, variant_key))
+            gen["lean"] = fix_lean(gen_lo, ctx, gen["lean"],
+                                   [_reasoned_issue(intent or "other", feedback, plan)] + mem_issues)
         if intent == "lo_misaligned":
             alignment_note = ("Reviewer flagged the learning outcome as misaligned/out-of-scope, but no "
                               "reserve (dropped) outcome is stored for this run; regenerated against the "
@@ -623,6 +805,12 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
                       "variant_angle": old_q.get("variant_angle"),
                       "objective": old_q.get("objective")})
 
+    # SCOPE the edit to the field(s) the reviewer actually raised: restore everything else verbatim so
+    # 'change option B' can't silently rewrite the stem (the reviewer's complaint). Only applies on the
+    # surgical path where the reasoned plan declared a scope; type-change / new-question rewrite freely.
+    if plan.get("change_fields") and new_q.get("lean") is not None:
+        new_q["lean"] = _apply_field_scope(_lean, new_q.get("lean") or {}, plan["change_fields"])
+
     # "WHAT CHANGED" note + no-op guard: tell the reviewer exactly what the regen altered, and if it
     # changed NOTHING (e.g. vague feedback the model couldn't act on), flag it instead of silently
     # persisting an identical question — the #1/#2 reviewer complaints ("not changing anything").
@@ -636,6 +824,9 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
         new_q["needs_human"] = True
         new_q["change_summary"] = ("No change was produced — the feedback may be too vague to act on. "
                                    "Tell me exactly what to change (which option, the stem, or the answer).")
+    # Surface what the agent understood the reviewer to want (builds trust; shown alongside the change).
+    if plan.get("reasoning"):
+        new_q["regen_reasoning"] = plan["reasoning"]
 
     # 3) carry forward revision + feedback history on the question
     prev = {k: v for k, v in old_q.items() if k != "revisions"}
@@ -645,6 +836,9 @@ def regenerate_question(run_id, outcome: str, feedback: str, *,
     result["questions"][idx] = new_q
     if swap_lo is not None:
         _apply_lo_swap(result, outcome, swap_lo)
+
+    if dry_run:                    # smoke test: skip all persistence, just return the new question
+        return new_q
 
     # 4) persist + record the feedback row. Merge THIS question into the FRESHLY-LOCKED row
     #    (not a blind overwrite of the whole result snapshot loaded ~10s ago) so a concurrent
