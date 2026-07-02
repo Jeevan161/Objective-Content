@@ -203,8 +203,16 @@ def _quantize_budget(requested: int, capacity: int, n_concepts: int,
     return final, flags
 
 
+# Practice VALUE of a taught concept: deeper-taught concepts are worth a slot before mention-level
+# ones, so when the budget is tighter than the concept count, mention/named content is dropped FIRST
+# and substantive (moderate/deep) + procedural content is protected. (The scope filter already
+# removed 'named'; it's ranked lowest here as a safety net.)
+_DEPTH_RANK = {"deep": 3, "moderate": 2, "mention": 1, "named": 0}
+
+
 def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | None = None,
-            risky_ids: frozenset = frozenset(), distinct_only: bool = False) -> list:
+            risky_ids: frozenset = frozenset(), distinct_only: bool = False,
+            depth_of: dict | None = None, proc_of: dict | None = None) -> list:
     """BREADTH-FIRST coverage toward `budget`. (a) one outcome per DISTINCT concept (concept_id) at
     its top non-scenario tier, heaviest concept first — so EVERY distinct in-scope concept is covered
     before any Bloom-restack, up to the budget (this is the fix for surfacing ~20 distinct concepts
@@ -215,7 +223,12 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
     `distinct_only` (Classroom Quiz): NEVER put two outcomes on the same concept — with a hard cap of
     ~6 questions we don't want a concept repeated across Bloom tiers unless there is literally nothing
     else to ask, so the Bloom-restack fill (b) and any scenario restack (a2) are suppressed; the set
-    is simply every distinct concept (up to the budget), which may be fewer than the budget."""
+    is simply every distinct concept (up to the budget), which may be fewer than the budget.
+    `depth_of`/`proc_of` (concept_id -> taught depth / procedural flag) VALUE-RANK the coverage: a
+    concept's slot priority is (taught-depth, procedural, weight), so substantive/procedural concepts
+    are covered before mention-level ones and mention-level content is what gets dropped at the cap."""
+    depth_of = depth_of or {}
+    proc_of = proc_of or {}
     by_concept: dict = defaultdict(list)
     for o in candidates:
         by_concept[o["concept_id"]].append(o)
@@ -227,8 +240,13 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
         picked_pairs.add((o["concept_id"], o["bloom_level"]))
         picked_concepts.add(o["concept_id"])
 
-    def _concept_weight(group):
-        return max((o.get("weight", 0) for o in group), default=0)
+    def _val(o):
+        # practice value of this outcome's concept: deeper + procedural first, then graph weight.
+        return (_DEPTH_RANK.get(depth_of.get(o["concept_id"]), 1),
+                1 if proc_of.get(o["concept_id"]) else 0, o.get("weight", 0))
+
+    def _concept_value(group):
+        return max((_val(o) for o in group), default=(0, 0, 0))
 
     def _best(group):
         non_scenario = [o for o in group if o["bloom_level"] != "scenario"] or group
@@ -242,14 +260,14 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
     by_parent: dict = defaultdict(list)
     for o in candidates:
         by_parent[parent_of.get(o["concept_id"], o["concept_id"])].append(o)
-    for parent, group in sorted(by_parent.items(), key=lambda it: _concept_weight(it[1]), reverse=True):
+    for parent, group in sorted(by_parent.items(), key=lambda it: _concept_value(it[1]), reverse=True):
         if len(selected) >= budget:
             break
         take(_best(group))
 
     # (a1) BREADTH: then one outcome per remaining distinct concept (heaviest first) — so within the
     # covered areas every distinct sub-concept is surfaced before any Bloom-restack, up to the budget.
-    for cid, group in sorted(by_concept.items(), key=lambda it: _concept_weight(it[1]), reverse=True):
+    for cid, group in sorted(by_concept.items(), key=lambda it: _concept_value(it[1]), reverse=True):
         if len(selected) >= budget:
             break
         if any(o["concept_id"] == cid for o in selected):
@@ -274,7 +292,8 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
     # downgrade), then the agent's preferred order, then weight.
     pref = {oid: i for i, oid in enumerate(prefer_ids or [])}
     rest = sorted((o for o in candidates if o["id"] not in picked_ids),
-                  key=lambda o: (o["id"] in risky_ids, pref.get(o["id"], 10**6), -o.get("weight", 0),
+                  key=lambda o: (o["id"] in risky_ids, pref.get(o["id"], 10**6),
+                                 -_DEPTH_RANK.get(depth_of.get(o["concept_id"]), 1), -o.get("weight", 0),
                                  -_RANK[o["bloom_level"]], o.get("dag_depth", 0), o["id"]))
     for o in rest:
         if len(selected) >= budget:
@@ -286,7 +305,8 @@ def _select(candidates: list, budget: int, parent_of: dict, prefer_ids: list | N
         take(o)
 
     if len(selected) > budget:
-        selected = sorted(selected, key=lambda o: (-o.get("weight", 0), -_RANK[o["bloom_level"]],
+        selected = sorted(selected, key=lambda o: (-_DEPTH_RANK.get(depth_of.get(o["concept_id"]), 1),
+                                                   -o.get("weight", 0), -_RANK[o["bloom_level"]],
                                                    o.get("dag_depth", 0), o["id"]))[:budget]
     return selected
 
@@ -330,10 +350,14 @@ def enforce(state, inv: list, outcomes: list, concept_graph: dict, outcome_graph
         and not all(p in safe for p in graph_find_prerequisites(cg_state, o["concept_id"])))
 
     prefer = [i for i in (prefer_ids or []) if isinstance(i, str)]
+    # Value-rank the coverage by how deeply each concept is TAUGHT (+ procedural), so a tight budget
+    # drops mention-level content first and keeps the substantive/flow concepts.
+    depth_of = {c["concept_id"]: c.get("depth_category") for c in inv}
+    proc_of = {c["concept_id"]: bool(c.get("procedural")) for c in inv}
     # Classroom Quiz (ceiling set) selects DISTINCT concepts only — no Bloom-restacks to pad a small
     # cap. MCQ keeps the restack fill so it can reach its larger target.
     selected = _select(candidates, final_budget, parent_of, prefer_ids=prefer, risky_ids=risky_ids,
-                       distinct_only=(ceiling is not None))
+                       distinct_only=(ceiling is not None), depth_of=depth_of, proc_of=proc_of)
     selected_ids = {o["id"] for o in selected}
     dropped_unselected = [o["id"] for o in candidates if o["id"] not in selected_ids]
     apply_ids = [o["id"] for o in selected if o["bloom_level"] in ("apply", "scenario")]
