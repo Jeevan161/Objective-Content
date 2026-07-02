@@ -24,6 +24,32 @@ _DEFAULT_VERB = {"remember": "identify", "understand": "explain",
                  "apply": "apply", "scenario": "apply"}
 
 
+def sane_title(raw, fallback: str) -> str:
+    """Guard the outcome `title`/`description` against an LLM echoing a whole outcome dict into the
+    field — seen intermittently as a title like ``{'id': ..., 'title': 'Define ...', 'bloom_level': ...}``
+    (a Python repr / JSON of the very item the model was shown). Unwrap it to the real inner title
+    when possible, else fall back to the clean generated title. A normal title passes through unchanged."""
+    import ast
+    import json as _json
+    if isinstance(raw, dict):                    # LLM returned the whole object as the title
+        inner = raw.get("title")
+        return sane_title(inner, fallback) if isinstance(inner, str) else fallback
+    s = str(raw or "").strip()
+    if not s:
+        return fallback
+    if s[0] in "{[" and "title" in s:            # a stringified dict/list leaked into the field
+        for loader in (ast.literal_eval, _json.loads):
+            try:
+                d = loader(s)
+            except Exception:  # noqa: BLE001 — not parseable; fall back below
+                continue
+            t = d.get("title") if isinstance(d, dict) else None
+            if isinstance(t, str) and t.strip() and t.strip()[0] not in "{[":
+                return t.strip()
+        return fallback                          # dict-ish but no clean inner title → drop it
+    return s
+
+
 def _tier_of(item: dict) -> str:
     """Map an LLM item's declared bloom_level to one of the 4 canonical tiers ('' if unknown)."""
     b = str(item.get("bloom_level") or item.get("tier") or "").lower()
@@ -49,7 +75,7 @@ def _coerce_outcome(item: dict, topic: dict, assignment: dict, inv: list) -> dic
     verb = str(item.get("learner_action", "")).lower().strip()
     if verb not in VERBS[tier]:
         verb = _DEFAULT_VERB[tier]
-    title = (item.get("title") or f"{verb.title()} {cname}").strip()
+    title = sane_title(item.get("title"), f"{verb.title()} {cname}")
     skill = item.get("skill_type")
     if skill not in SKILL_TYPES:
         skill = "practical_application" if tier in ("apply", "scenario") else "conceptual"
@@ -57,7 +83,7 @@ def _coerce_outcome(item: dict, topic: dict, assignment: dict, inv: list) -> dic
     return {"id": slugify(f"{verb}_{cid[2:]}"), "title": title, "topic_id": topic["topic_id"],
             "concept_id": cid, "bloom_level": tier, "scenario": tier == "scenario",
             "skill_type": skill, "learner_action": verb,
-            "description": (item.get("description") or title).strip(),
+            "description": sane_title(item.get("description"), title),
             "syntax": (item.get("syntax") or None),
             "prerequisites": [], "prerequisite_scope": None, "target_questions": 1,
             "source_evidence": {"quote": quote, "section": topic["topic_id"]},
