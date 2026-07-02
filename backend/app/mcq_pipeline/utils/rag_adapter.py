@@ -78,6 +78,10 @@ class RagAdapter:
         if not course_ids:
             raise ValueError("RagAdapter requires a non-empty course_ids scope.")
         self.course_ids = course_ids
+        # course_ids[0] is the CURRENT course being generated; the rest are prerequisite courses.
+        # Grounding retrieval stays in the current course (see `search`) so a prereq course's
+        # chunks can't pollute a question's grounding.
+        self.primary_course_id = course_ids[0]
         self._prereq_units = prereq_units
         self.reading_material = reading_material or ""
         self.ingested = ingested
@@ -102,9 +106,16 @@ class RagAdapter:
         if not query:
             return []
         if self.ingested:
+            # GROUNDING must stay in the CURRENT course. Cross-course prerequisite chunks pollute a
+            # question's grounding — e.g. a Python "Dictionaries > Accessing Items" section surfacing
+            # (and looking like "evidence") for a Django `request.POST` question, which is how a wrong,
+            # ungrounded syntax gets reinforced as the key. When the reviewer/generator explicitly
+            # chose prerequisite units (`unit_ids`), honor the full scope (that filter already narrows
+            # it); otherwise restrict grounding retrieval to the primary (current) course.
+            cids = self.course_ids if self.unit_ids else [self.primary_course_id]
             with SessionLocal() as session:
                 hits = rag_search.search(
-                    session, course_ids=self.course_ids, query=query,
+                    session, course_ids=cids, query=query,
                     unit_ids=self.unit_ids, top_k=top_k,
                 )
             return [
